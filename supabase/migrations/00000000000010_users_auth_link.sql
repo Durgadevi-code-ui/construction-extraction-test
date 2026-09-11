@@ -1,0 +1,31 @@
+-- ============================================================
+-- Phase 0 of the Supabase Auth migration (see project chat history —
+-- moving off unauthenticated "userId in the URL/body" to real login).
+-- Adds ONLY the link from an existing public.users row to a real
+-- Supabase Auth account. Nothing else about public.users changes:
+-- user_id (the primary key every other table's foreign keys already
+-- point to — user_project_roles, admin_delegations, notifications,
+-- work_item_assignments, extraction_submissions, ...) keeps its exact
+-- existing values and generation strategy; user_mail, department_id,
+-- and every other column are untouched.
+--
+-- auth_user_id is nullable by design: every existing demo user starts
+-- unlinked (null) and stays fully functional exactly as today via the
+-- current userId-in-request flow — nothing reads this column yet (see
+-- lib/session.ts getCurrentUser(), not wired into any existing route
+-- in Phase 0). Linking happens later, one user at a time, at an Admin's
+-- pace (Phase 1 — not implemented by this migration).
+--
+-- UNIQUE prevents two public.users rows ever pointing at the same
+-- Supabase Auth account. ON DELETE SET NULL means deleting an
+-- auth.users row (e.g. via the Supabase dashboard) only unlinks that
+-- login — it can NEVER cascade-delete a public.users row or anything
+-- that references it (submissions, delegations, notifications, role
+-- assignments all stay exactly as they are).
+--
+-- No RLS policy on public.users is touched here — RLS hardening is an
+-- explicitly separate, later phase.
+-- ============================================================
+
+alter table public.users
+  add column auth_user_id uuid unique references auth.users(id) on delete set null;

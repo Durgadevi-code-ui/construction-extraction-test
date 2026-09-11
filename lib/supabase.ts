@@ -1,17 +1,31 @@
 /**
- * Supabase client — anon key only, by design.
+ * Supabase client — anon key only.
  *
- * This app intentionally has NO auth/authorization (see project spec).
- * The anon key is not secret and is safe in the browser; what would
- * normally protect data is RLS, and the migration in
- * supabase/migrations/ enables RLS with a permissive open policy so
- * this test app works with zero login. That permissiveness is a
- * deliberate, documented simplification for a local accuracy-testing
- * tool — tighten the policies before using this schema for anything
- * real (see the warning comment in the migration file).
+ * STALE-COMMENT FIX (this doc previously said the app has no auth at
+ * all and no service-role client — both are now false): real Supabase
+ * Auth is wired up (see lib/session.ts getCurrentUser()/
+ * requireCurrentUser(), lib/supabaseServer.ts for the cookie-aware
+ * client behind it, and proxy.ts for session refresh), and a genuinely
+ * privileged service-role client exists at lib/supabaseAdmin.ts.
+ * Authorization itself is enforced in application code — lib/authContext.ts
+ * (getUserContext/isAdminUser/assertRole), lib/delegation.ts, and every
+ * lib/workflow.ts action — keyed off the server-verified user id
+ * getCurrentUser() returns, never a client-supplied one.
  *
- * Safe to import from both client and server code — there is no
- * service-role client anywhere in this app.
+ * What genuinely has NOT changed: every table this client (getSupabaseClient(),
+ * the plain anon-key client below) reads/writes still has a fully-open
+ * RLS policy for the anon role (see the WARNING in
+ * supabase/migrations/00000000000001_schema.sql), because this client
+ * carries no per-request Postgres identity for RLS to key on — the anon
+ * key is public (safe to ship to the browser) and RLS cannot distinguish
+ * this app's own server calling with it from anyone else doing the same.
+ * Authorization for all of those tables is therefore enforced entirely
+ * in the application code above, not by the database. Tightening that
+ * to real per-table RLS would require switching every existing route to
+ * the service-role client — a large change intentionally not done here;
+ * see lib/liveUpdates.ts / app/api/workflow/live-updates/route.ts for the
+ * one table (live_updates) that WAS given this stricter treatment, as a
+ * template for doing the same to the rest later if that's ever required.
  */
 import { createClient } from "@supabase/supabase-js";
 

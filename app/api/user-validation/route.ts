@@ -22,14 +22,14 @@ export async function POST(request: NextRequest) {
     }
 
     const { data: submission, error: fetchError } = await supabase
-      .from("submissions")
-      .select("status")
-      .eq("id", submissionId)
+      .from("extraction_submissions")
+      .select("validation_status")
+      .eq("extraction_submission_id", submissionId)
       .single();
     if (fetchError || !submission) {
       return NextResponse.json({ error: "Submission not found." }, { status: 404 });
     }
-    if (submission.status !== "VALID") {
+    if (submission.validation_status !== "VALID") {
       return NextResponse.json(
         { error: "User validation requires AI validation to be VALID first." },
         { status: 409 }
@@ -37,9 +37,11 @@ export async function POST(request: NextRequest) {
     }
 
     const { error: updateError } = await supabase
-      .from("submissions")
-      .update({ user_validation: decision })
-      .eq("id", submissionId);
+      .from("extraction_submissions")
+      .update({
+        submission_status: decision === "valid" ? "ACCEPTED" : "REJECTED",
+      })
+      .eq("extraction_submission_id", submissionId);
     if (updateError) {
       throw new Error(updateError.message);
     }

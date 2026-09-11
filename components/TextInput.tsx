@@ -5,7 +5,7 @@ import ValidationStatus from "./ValidationStatus";
 
 type Props = {
   locked: boolean;
-  onResult: (status: "VALID" | "INVALID") => void;
+  onResult: (status: "VALID" | "INVALID", normalizedText?: string) => void;
 };
 
 export default function TextInput({ locked, onResult }: Props) {
@@ -64,7 +64,10 @@ export default function TextInput({ locked, onResult }: Props) {
         return;
       }
       setUserValidation(decision);
-      onResult(decision === "valid" ? "VALID" : "INVALID");
+      onResult(
+        decision === "valid" ? "VALID" : "INVALID",
+        decision === "valid" ? normalizedText : undefined
+      );
     } catch {
       setError("User validation request failed.");
     } finally {
@@ -75,15 +78,15 @@ export default function TextInput({ locked, onResult }: Props) {
   const displayStatus = locked ? "LOCKED" : status;
 
   return (
-    <div className={`bg-white rounded-lg border p-5 space-y-3 ${locked ? "opacity-50" : ""}`}>
-      <h2 className="font-semibold text-gray-800">Normal Typed Text</h2>
+    <div className={`bg-surface rounded-lg border border-line shadow-sm p-5 space-y-3 ${locked ? "opacity-50" : ""}`}>
+      <h2 className="font-semibold text-foreground">Normal Typed Text</h2>
       <textarea
         value={text}
         disabled={locked}
         onChange={(e) => setText(e.target.value)}
         placeholder="Type a construction update, e.g. Plot 1034, wiring 4 of 7 rooms complete"
         rows={3}
-        className="w-full border rounded p-2 text-sm disabled:bg-gray-100"
+        className="w-full border border-line bg-white text-foreground placeholder:text-foreground-muted rounded p-2 text-sm disabled:bg-[#FAFAFA]"
       />
       <button
         onClick={handleSubmit}
@@ -95,16 +98,16 @@ export default function TextInput({ locked, onResult }: Props) {
       {error && <p className="text-red-600 text-sm">{error}</p>}
       {normalizedText && (
         <div className="text-sm">
-          <p className="text-xs font-medium text-gray-500">Normalized text</p>
-          <p className="bg-gray-50 border rounded p-2">{normalizedText}</p>
+          <p className="text-xs font-medium text-foreground-secondary">Normalized text</p>
+          <p className="bg-[#FAFAFA] border border-line text-foreground rounded p-2">{normalizedText}</p>
         </div>
       )}
       <ValidationStatus status={displayStatus} reason={reason} confidence={null} />
       {!locked && status === "VALID" && (
-        <div className="border-t pt-3 space-y-2">
+        <div className="border-t border-line pt-3 space-y-2">
           {userValidation === null ? (
             <>
-              <p className="text-xs font-medium text-gray-500">User Validation</p>
+              <p className="text-xs font-medium text-foreground-secondary">User Validation</p>
               <div className="flex gap-2">
                 <button
                   onClick={() => handleUserValidation("valid")}

@@ -5,7 +5,7 @@ import ValidationStatus from "./ValidationStatus";
 
 type Props = {
   locked: boolean;
-  onResult: (status: "VALID" | "INVALID") => void;
+  onResult: (status: "VALID" | "INVALID", normalizedText?: string) => void;
 };
 
 export default function VoiceUpload({ locked, onResult }: Props) {
@@ -99,7 +99,10 @@ export default function VoiceUpload({ locked, onResult }: Props) {
         return;
       }
       setUserValidation(decision);
-      onResult(decision === "valid" ? "VALID" : "INVALID");
+      onResult(
+        decision === "valid" ? "VALID" : "INVALID",
+        decision === "valid" ? normalizedText : undefined
+      );
     } catch {
       setError("User validation request failed.");
     } finally {
@@ -110,27 +113,27 @@ export default function VoiceUpload({ locked, onResult }: Props) {
   const displayStatus = locked ? "LOCKED" : status;
 
   return (
-    <div className={`bg-white rounded-lg border p-5 space-y-3 ${locked ? "opacity-50" : ""}`}>
-      <h2 className="font-semibold text-gray-800">Voice / Audio</h2>
+    <div className={`bg-surface rounded-lg border border-line shadow-sm p-5 space-y-3 ${locked ? "opacity-50" : ""}`}>
+      <h2 className="font-semibold text-foreground">Voice / Audio</h2>
       <div className="flex items-center gap-2">
         <button
           onClick={recording ? stopRecording : startRecording}
           disabled={locked}
-          className="px-3 py-2 bg-gray-700 text-white rounded text-sm font-medium disabled:opacity-50"
+          className="px-3 py-2 bg-[#FAFAFA] border border-line text-foreground rounded text-sm font-medium disabled:opacity-50 hover:bg-line-soft"
         >
           {recording ? "Stop Recording" : "Record"}
         </button>
-        <span className="text-xs text-gray-400">or</span>
+        <span className="text-xs text-foreground-muted">or</span>
         <input
           ref={inputRef}
           type="file"
           accept="audio/*"
           disabled={locked}
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          className="block text-sm text-gray-600"
+          className="block text-sm text-foreground-muted"
         />
       </div>
-      {file && <p className="text-xs text-gray-500">Ready: {file.name}</p>}
+      {file && <p className="text-xs text-foreground-secondary">Ready: {file.name}</p>}
       <button
         onClick={handleTranscribe}
         disabled={locked || status === "PROCESSING"}
@@ -142,21 +145,21 @@ export default function VoiceUpload({ locked, onResult }: Props) {
       {rawText && (
         <div className="space-y-2 text-sm">
           <div>
-            <p className="text-xs font-medium text-gray-500">Raw transcript</p>
-            <p className="bg-gray-50 border rounded p-2">{rawText}</p>
+            <p className="text-xs font-medium text-foreground-secondary">Raw transcript</p>
+            <p className="bg-[#FAFAFA] border border-line text-foreground rounded p-2">{rawText}</p>
           </div>
           <div>
-            <p className="text-xs font-medium text-gray-500">Normalized transcript</p>
-            <p className="bg-gray-50 border rounded p-2">{normalizedText}</p>
+            <p className="text-xs font-medium text-foreground-secondary">Normalized transcript</p>
+            <p className="bg-[#FAFAFA] border border-line text-foreground rounded p-2">{normalizedText}</p>
           </div>
         </div>
       )}
       <ValidationStatus status={displayStatus} reason={reason} confidence={confidence} />
       {!locked && status === "VALID" && (
-        <div className="border-t pt-3 space-y-2">
+        <div className="border-t border-line pt-3 space-y-2">
           {userValidation === null ? (
             <>
-              <p className="text-xs font-medium text-gray-500">User Validation</p>
+              <p className="text-xs font-medium text-foreground-secondary">User Validation</p>
               <div className="flex gap-2">
                 <button
                   onClick={() => handleUserValidation("valid")}

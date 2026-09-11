@@ -5,7 +5,7 @@ import ValidationStatus from "./ValidationStatus";
 
 type Props = {
   locked: boolean;
-  onResult: (status: "VALID" | "INVALID") => void;
+  onResult: (status: "VALID" | "INVALID", normalizedText?: string) => void;
 };
 
 export default function HandwritingUpload({ locked, onResult }: Props) {
@@ -71,7 +71,10 @@ export default function HandwritingUpload({ locked, onResult }: Props) {
         return;
       }
       setUserValidation(decision);
-      onResult(decision === "valid" ? "VALID" : "INVALID");
+      onResult(
+        decision === "valid" ? "VALID" : "INVALID",
+        decision === "valid" ? normalizedText : undefined
+      );
     } catch {
       setError("User validation request failed.");
     } finally {
@@ -82,15 +85,15 @@ export default function HandwritingUpload({ locked, onResult }: Props) {
   const displayStatus = locked ? "LOCKED" : status;
 
   return (
-    <div className={`bg-white rounded-lg border p-5 space-y-3 ${locked ? "opacity-50" : ""}`}>
-      <h2 className="font-semibold text-gray-800">Handwritten Image</h2>
+    <div className={`bg-surface rounded-lg border border-line shadow-sm p-5 space-y-3 ${locked ? "opacity-50" : ""}`}>
+      <h2 className="font-semibold text-foreground">Handwritten Image</h2>
       <input
         ref={inputRef}
         type="file"
         accept="image/*"
         disabled={locked}
         onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        className="block w-full text-sm text-gray-600"
+        className="block w-full text-sm text-foreground-muted"
       />
       <button
         onClick={handleExtract}
@@ -103,21 +106,21 @@ export default function HandwritingUpload({ locked, onResult }: Props) {
       {rawText && (
         <div className="space-y-2 text-sm">
           <div>
-            <p className="text-xs font-medium text-gray-500">Raw extracted text</p>
-            <p className="bg-gray-50 border rounded p-2">{rawText}</p>
+            <p className="text-xs font-medium text-foreground-secondary">Raw extracted text</p>
+            <p className="bg-[#FAFAFA] border border-line text-foreground rounded p-2">{rawText}</p>
           </div>
           <div>
-            <p className="text-xs font-medium text-gray-500">Normalized text</p>
-            <p className="bg-gray-50 border rounded p-2">{normalizedText}</p>
+            <p className="text-xs font-medium text-foreground-secondary">Normalized text</p>
+            <p className="bg-[#FAFAFA] border border-line text-foreground rounded p-2">{normalizedText}</p>
           </div>
         </div>
       )}
       <ValidationStatus status={displayStatus} reason={reason} confidence={confidence} />
       {!locked && status === "VALID" && (
-        <div className="border-t pt-3 space-y-2">
+        <div className="border-t border-line pt-3 space-y-2">
           {userValidation === null ? (
             <>
-              <p className="text-xs font-medium text-gray-500">User Validation</p>
+              <p className="text-xs font-medium text-foreground-secondary">User Validation</p>
               <div className="flex gap-2">
                 <button
                   onClick={() => handleUserValidation("valid")}

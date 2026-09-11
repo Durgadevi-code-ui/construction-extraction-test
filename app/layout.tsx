@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import TopNav from "@/components/workflow/TopNav";
+import BackgroundFX from "@/components/BackgroundFX";
 
 export const metadata: Metadata = {
   title: "Extraction Accuracy Test",
@@ -9,7 +11,13 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className="h-full antialiased">
-      <body className="min-h-full font-sans bg-gray-50">{children}</body>
+      <body className="min-h-full font-sans bg-background text-foreground">
+        <BackgroundFX />
+        <div className="relative z-10">
+          <TopNav />
+          {children}
+        </div>
+      </body>
     </html>
   );
 }
