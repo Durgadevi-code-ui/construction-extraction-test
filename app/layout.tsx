@@ -11,7 +11,12 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className="h-full antialiased">
-      <body className="min-h-full font-sans bg-background text-foreground">
+      {/* overflow-x-hidden is a defensive backstop only — every legitimate
+          horizontal scroll area (TopNav, TabNav, data tables) has its own
+          explicit overflow-x-auto container, which still scrolls normally
+          nested inside this; this just stops any missed/future overflow
+          from widening the whole page. */}
+      <body className="min-h-full overflow-x-hidden font-sans bg-background text-foreground">
         <BackgroundFX />
         <div className="relative z-10">
           <TopNav />

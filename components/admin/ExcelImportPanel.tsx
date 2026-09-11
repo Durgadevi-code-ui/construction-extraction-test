@@ -175,8 +175,8 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
                 </p>
               </div>
 
-              <div className="max-h-56 overflow-y-auto border border-line rounded bg-white">
-                <table className="w-full text-xs">
+              <div className="max-h-56 overflow-x-auto overflow-y-auto border border-line rounded bg-white">
+                <table className="w-full min-w-[560px] text-xs">
                   <thead className="bg-gray-100 sticky top-0">
                     <tr>
                       <th className="text-left px-2 py-1">Dept</th>
