@@ -13,7 +13,7 @@ const LOGO_SRC = "/agentic-atoms-logo.png";
 
 export default function TopNav() {
   const pathname = usePathname();
-  const onExtractionTest = pathname === "/";
+  const onExtractionTest = pathname.startsWith("/dev/extraction-test");
   const [logoAvailable, setLogoAvailable] = useState(true);
 
   return (
@@ -69,7 +69,7 @@ export default function TopNav() {
             Admin Setup
           </Link>
           <Link
-            href="/"
+            href="/dev/extraction-test"
             title="Developer/testing tool for the extraction pipeline"
             className={
               onExtractionTest
