@@ -5,6 +5,9 @@ import { useState } from "react";
 import { extractCompletedQuantity, extractProgressPercentage } from "@/lib/progressParsing";
 import { calculateProgressPercentage } from "@/lib/calculations";
 import { formatPercent, formatQuantity } from "@/lib/format";
+import Button from "@/components/ui/Button";
+import Input from "@/components/ui/Input";
+import Badge from "@/components/ui/Badge";
 
 type Props = {
   workerId: string;
@@ -89,7 +92,7 @@ export default function WorkerSubmitForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-3 bg-surface rounded-lg border border-line shadow-sm p-4">
+    <form onSubmit={handleSubmit} className="space-y-3 bg-surface rounded-xl border border-line shadow-sm p-4">
       <h3 className="text-sm font-semibold text-foreground">
         Review &amp; Submit to Progress Workflow
       </h3>
@@ -100,7 +103,7 @@ export default function WorkerSubmitForm({
             <label className="block text-sm font-medium text-foreground-secondary mb-1">
               Completed Quantity today ({unitOfMeasure ?? "units"})
             </label>
-            <input
+            <Input
               type="number"
               min={0}
               step="any"
@@ -108,7 +111,6 @@ export default function WorkerSubmitForm({
               onChange={(e) =>
                 setCompletedQuantity(e.target.value === "" ? null : Number(e.target.value))
               }
-              className="w-full rounded border border-line bg-white text-foreground px-3 py-2 text-sm placeholder:text-foreground-muted"
             />
             {detectedQuantity !== null ? (
               <p className="text-xs text-foreground-secondary mt-1">
@@ -126,12 +128,10 @@ export default function WorkerSubmitForm({
               Progress Today (%)
             </label>
             <div className="flex items-center gap-2">
-              <span className="text-lg font-semibold text-foreground">
+              <span className="text-lg font-semibold text-foreground tabular-nums">
                 {formatPercent(calculatedProgress)}
               </span>
-              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">
-                Calculated
-              </span>
+              <Badge variant="info">Calculated</Badge>
             </div>
             <p className="text-xs text-foreground-secondary mt-1">
               Automatically calculated as Completed Quantity ÷ Planned Quantity × 100.
@@ -143,13 +143,12 @@ export default function WorkerSubmitForm({
           <label className="block text-sm font-medium text-foreground-secondary mb-1">
             Progress today (%)
           </label>
-          <input
+          <Input
             type="number"
             min={0}
             max={100}
             value={progress ?? ""}
             onChange={(e) => setProgress(e.target.value === "" ? null : Number(e.target.value))}
-            className="w-full rounded border border-line bg-white text-foreground px-3 py-2 text-sm placeholder:text-foreground-muted"
           />
           {detectedPercentage !== null ? (
             <p className="text-xs text-foreground-secondary mt-1">
@@ -173,17 +172,15 @@ export default function WorkerSubmitForm({
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           rows={2}
-          className="w-full rounded border border-line bg-white text-foreground px-3 py-2 text-sm placeholder:text-foreground-muted"
+          className="w-full rounded-lg border border-line bg-white text-foreground px-3 py-2.5 text-sm placeholder:text-foreground-placeholder transition-colors duration-150 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
         />
       </div>
-      <button
-        type="submit"
-        disabled={submitting || effectiveProgress === null}
-        className="rounded bg-brand text-white text-sm font-medium px-4 py-2 transition-colors hover:bg-orange-600 disabled:opacity-50"
-      >
+      <Button type="submit" disabled={submitting || effectiveProgress === null}>
         {submitting ? "Submitting…" : "Submit Progress"}
-      </button>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      </Button>
+      {error && (
+        <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
+      )}
     </form>
   );
 }

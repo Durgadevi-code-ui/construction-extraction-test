@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import TabNav from "@/components/workflow/TabNav";
+import { LayoutDashboard, ListChecks, ClipboardCheck, Radio, MessageSquare } from "lucide-react";
+import DashboardShell from "@/components/workflow/DashboardShell";
 import AssignmentManager, {
   type AssignmentWorkerOption,
   type AssignmentWorkItemOption,
@@ -9,7 +10,9 @@ import AssignmentManager, {
 } from "@/components/workflow/AssignmentManager";
 import ForemanQueue, { type ForemanQueueItem } from "@/components/workflow/ForemanQueue";
 import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
+import ChatPanel from "@/components/workflow/ChatPanel";
 import { formatPercent } from "@/lib/format";
+import Card from "@/components/ui/Card";
 
 type Kpis = {
   totalWorkItems: number;
@@ -31,6 +34,7 @@ type AwaitingContractorItem = {
 
 type Props = {
   foremanUserId: string;
+  departmentName: string;
   kpis: Kpis | null;
   board: {
     departmentName: string;
@@ -43,11 +47,20 @@ type Props = {
 };
 
 const TABS = [
-  { key: "dashboard", label: "Dashboard" },
-  { key: "assignments", label: "Work Item Assignments" },
-  { key: "reviews", label: "Reviews" },
-  { key: "liveUpdates", label: "Live Updates" },
+  { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { key: "assignments", label: "Work Item Assignments", icon: ListChecks },
+  { key: "reviews", label: "Reviews", icon: ClipboardCheck },
+  { key: "liveUpdates", label: "Live Updates", icon: Radio },
+  { key: "communication", label: "Communication", icon: MessageSquare },
 ];
+
+const HEADINGS: Record<string, string> = {
+  dashboard: "Subcontractor Dashboard",
+  assignments: "Work Item Assignments",
+  reviews: "Reviews",
+  liveUpdates: "Live Updates",
+  communication: "Communication",
+};
 
 function KpiCard({
   label,
@@ -63,11 +76,11 @@ function KpiCard({
   return (
     <div
       className={`rounded-lg border p-3 ${
-        highlight ? "bg-amber-50 border-amber-200" : "bg-white border-line"
+        highlight ? "bg-warning-soft border-warning-border" : "bg-white border-line"
       }`}
       title={hint}
     >
-      <p className={`text-lg font-bold ${highlight ? "text-amber-700" : "text-foreground"}`}>
+      <p className={`text-lg font-bold tabular-nums ${highlight ? "text-warning" : "text-foreground"}`}>
         {value}
       </p>
       <p className="text-xs text-foreground-secondary">{label}</p>
@@ -76,21 +89,32 @@ function KpiCard({
 }
 
 /**
- * Subcontractor's persistent top-level navigation — locked to Dashboard /
- * Work Item Assignments / Reviews (operational department/workforce
- * management, distinct from the Contractor's project-level tabs; see
- * app/workflow/foreman/page.tsx). Every section here is the exact same
- * data/component app/workflow/foreman/page.tsx already fetched and
- * previously rendered inline on one long scrolling page — only tabbed
- * visibility is added, no calculation or assignment/review logic changed.
+ * Subcontractor's persistent top-level navigation — same visual shell
+ * as the Worker Dashboard (see components/workflow/DashboardShell.tsx),
+ * same tab set as before (Dashboard / Work Item Assignments / Reviews /
+ * Live Updates), plus a new Communication tab. Every section is the
+ * exact same data/component app/workflow/foreman/page.tsx already
+ * fetched — only the chrome around them changed.
  */
-export default function ForemanTabs({ foremanUserId, kpis, board, queue, awaitingContractorReview }: Props) {
+export default function ForemanTabs({
+  foremanUserId,
+  departmentName,
+  kpis,
+  board,
+  queue,
+  awaitingContractorReview,
+}: Props) {
   const [tab, setTab] = useState("dashboard");
 
   return (
-    <div className="space-y-4">
-      <TabNav tabs={TABS} active={tab} onChange={setTab} />
-
+    <DashboardShell
+      tabs={TABS}
+      activeTab={tab}
+      onTabChange={setTab}
+      heading={HEADINGS[tab]}
+      subheading={`My Department: ${departmentName}`}
+      userId={foremanUserId}
+    >
       {tab === "dashboard" && kpis && (
         <section className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           <KpiCard label="Assigned Work" value={`${kpis.totalWorkItems}`} />
@@ -117,6 +141,7 @@ export default function ForemanTabs({ foremanUserId, kpis, board, queue, awaitin
           workers={board.workers}
           workItems={board.workItems}
           assignments={board.assignments}
+          onViewLiveUpdates={() => setTab("liveUpdates")}
         />
       )}
 
@@ -127,10 +152,10 @@ export default function ForemanTabs({ foremanUserId, kpis, board, queue, awaitin
           {/* Visibility only — a Subcontractor cannot act on these, they
               already forwarded them; shown so they know what's still
               waiting on the Contractor rather than assuming it was lost. */}
-          <section className="bg-white rounded-lg border border-line p-4 space-y-2 text-sm">
+          <Card className="space-y-2 text-sm">
             <div className="flex items-center justify-between">
               <h2 className="font-semibold text-foreground">Awaiting Contractor Review</h2>
-              <span className="text-xs text-foreground-muted">
+              <span className="text-xs text-foreground-muted tabular-nums">
                 {awaitingContractorReview.length} item{awaitingContractorReview.length === 1 ? "" : "s"}
               </span>
             </div>
@@ -145,18 +170,20 @@ export default function ForemanTabs({ foremanUserId, kpis, board, queue, awaitin
                       {item.workItemDescription}
                       <span className="text-foreground-muted"> — {item.workerName}</span>
                     </span>
-                    <span className="text-xs font-medium text-foreground-secondary shrink-0">
+                    <span className="text-xs font-medium text-foreground-secondary shrink-0 tabular-nums">
                       {formatPercent(item.correctedProgress ?? item.submittedProgress)}
                     </span>
                   </li>
                 ))}
               </ul>
             )}
-          </section>
+          </Card>
         </div>
       )}
 
       {tab === "liveUpdates" && <LiveUpdateFeed />}
-    </div>
+
+      {tab === "communication" && <ChatPanel />}
+    </DashboardShell>
   );
 }

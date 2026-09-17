@@ -4,6 +4,10 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import StatusFlow from "@/components/workflow/StatusFlow";
 import { formatPercent } from "@/lib/format";
+import Card from "@/components/ui/Card";
+import Button from "@/components/ui/Button";
+import Badge from "@/components/ui/Badge";
+import Input from "@/components/ui/Input";
 
 export type ForemanQueueItem = {
   submissionId: string;
@@ -79,7 +83,11 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
   if (items.length === 0) {
     return (
       <div className="space-y-2">
-        {successMessage && <p className="text-sm text-green-600">{successMessage}</p>}
+        {successMessage && (
+          <p className="rounded-lg border border-success-border bg-success-soft px-3 py-2 text-sm text-success">
+            {successMessage}
+          </p>
+        )}
         <p className="text-sm text-foreground-muted">No submissions waiting for review.</p>
       </div>
     );
@@ -87,8 +95,14 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
 
   return (
     <div className="space-y-4">
-      {successMessage && <p className="text-sm text-green-600">{successMessage}</p>}
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {successMessage && (
+        <p className="rounded-lg border border-success-border bg-success-soft px-3 py-2 text-sm text-success">
+          {successMessage}
+        </p>
+      )}
+      {error && (
+        <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
+      )}
       {items.map((item) => {
         const draft = drafts[item.submissionId];
         const isEditing = editingId === item.submissionId;
@@ -97,10 +111,7 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
         const displayedProgress = isEditing ? progressDraft : currentProgress;
 
         return (
-          <section
-            key={item.submissionId}
-            className="bg-white rounded-lg border border-line p-4 space-y-2 text-sm"
-          >
+          <Card key={item.submissionId} className="space-y-2 text-sm">
             <p>
               <span className="text-foreground-secondary">Worker:</span>{" "}
               <span className="font-medium">{item.workerName}</span>
@@ -126,20 +137,22 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
             {isEditing ? (
               <div>
                 <label className="block text-foreground-secondary mb-1">Submitted Progress:</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={progressDraft}
-                  onChange={(e) => setProgressDraft(Number(e.target.value))}
-                  className="w-24 rounded border border-line px-2 py-1"
-                />
-                %
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={progressDraft}
+                    onChange={(e) => setProgressDraft(Number(e.target.value))}
+                    className="w-24 tabular-nums"
+                  />
+                  %
+                </div>
               </div>
             ) : (
               <p>
                 <span className="text-foreground-secondary">Submitted Progress:</span>{" "}
-                <span className="font-medium">{formatPercent(displayedProgress)}</span>
+                <span className="font-medium tabular-nums">{formatPercent(displayedProgress)}</span>
               </p>
             )}
 
@@ -149,7 +162,7 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
                 onChange={(e) => setCommentDraft(e.target.value)}
                 rows={2}
                 placeholder="Add a comment…"
-                className="w-full rounded border border-line px-2 py-1"
+                className="w-full rounded-lg border border-line px-3 py-2 text-sm transition-colors duration-150 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
               />
             ) : (
               draft?.comment && (
@@ -162,32 +175,27 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
             {item.scheduledValue !== null && (
               <p>
                 <span className="text-foreground-secondary">Estimated Amount:</span>{" "}
-                <span className="font-medium">
+                <span className="font-medium tabular-nums">
                   {item.estimatedAmount !== null
                     ? `$${item.estimatedAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
                     : "—"}
                 </span>
               </p>
             )}
-            <p>
+            <p className="flex flex-wrap items-center gap-1.5">
               <span className="text-foreground-secondary">Status:</span>{" "}
-              <span className="font-medium">Awaiting Subcontractor Review</span>{" "}
-              <span
-                className={`text-xs px-2 py-0.5 rounded-full ${
-                  item.isCompleted
-                    ? "bg-green-100 text-green-700"
-                    : "bg-gray-100 text-foreground-secondary"
-                }`}
-              >
+              <span className="font-medium">Awaiting Subcontractor Review</span>
+              <Badge variant={item.isCompleted ? "success" : "neutral"}>
                 {item.isCompleted ? "Completed" : "Not Completed"}
-              </span>
+              </Badge>
             </p>
             <StatusFlow statusCode="AWAITING_FOREMAN_REVIEW" />
 
             <div className="flex gap-2 pt-1 flex-wrap">
               {isEditing ? (
                 <>
-                  <button
+                  <Button
+                    size="sm"
                     onClick={() => {
                       setDrafts((prev) => ({
                         ...prev,
@@ -195,32 +203,30 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
                       }));
                       setEditingId(null);
                     }}
-                    className="text-xs px-3 py-1.5 rounded bg-brand text-white"
                   >
                     Save
-                  </button>
-                  <button
-                    onClick={() => setEditingId(null)}
-                    className="text-xs px-3 py-1.5 rounded border border-line text-foreground-secondary hover:bg-surface-soft"
-                  >
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => setEditingId(null)}>
                     Cancel
-                  </button>
+                  </Button>
                 </>
               ) : (
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => {
                     setEditingId(item.submissionId);
                     setProgressDraft(currentProgress);
                   }}
-                  className="text-xs px-3 py-1.5 rounded border border-line text-foreground-secondary hover:bg-surface-soft"
                 >
                   Edit
-                </button>
+                </Button>
               )}
 
               {isCommenting ? (
                 <>
-                  <button
+                  <Button
+                    size="sm"
                     onClick={() => {
                       setDrafts((prev) => ({
                         ...prev,
@@ -228,38 +234,31 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
                       }));
                       setCommentingId(null);
                     }}
-                    className="text-xs px-3 py-1.5 rounded bg-brand text-white"
                   >
                     Save Comment
-                  </button>
-                  <button
-                    onClick={() => setCommentingId(null)}
-                    className="text-xs px-3 py-1.5 rounded border border-line text-foreground-secondary hover:bg-surface-soft"
-                  >
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => setCommentingId(null)}>
                     Cancel
-                  </button>
+                  </Button>
                 </>
               ) : (
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => {
                     setCommentingId(item.submissionId);
                     setCommentDraft(draft?.comment ?? "");
                   }}
-                  className="text-xs px-3 py-1.5 rounded border border-line text-foreground-secondary hover:bg-surface-soft"
                 >
                   Add Comment
-                </button>
+                </Button>
               )}
 
-              <button
-                onClick={() => handleForward(item)}
-                disabled={busyId === item.submissionId}
-                className="text-xs px-3 py-1.5 rounded bg-green-600 text-white disabled:opacity-50"
-              >
+              <Button size="sm" onClick={() => handleForward(item)} disabled={busyId === item.submissionId}>
                 {busyId === item.submissionId ? "Forwarding…" : "Forward to Contractor"}
-              </button>
+              </Button>
             </div>
-          </section>
+          </Card>
         );
       })}
     </div>

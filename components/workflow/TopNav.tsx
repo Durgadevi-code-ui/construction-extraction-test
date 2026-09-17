@@ -11,13 +11,13 @@ import { usePathname } from "next/navigation";
 // missing/renamed) — it is not currently expected to fire.
 const LOGO_SRC = "/agentic-atoms-logo.png";
 
-export default function TopNav() {
+export default function TopNav({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname();
   const onExtractionTest = pathname.startsWith("/dev/extraction-test");
   const [logoAvailable, setLogoAvailable] = useState(true);
 
   return (
-    <nav className="bg-surface border-b border-line px-4 sm:px-6 lg:px-10 py-2.5">
+    <nav className="bg-surface border-b border-line px-4 sm:px-6 lg:px-10 py-3">
       {/* overflow-x-auto + shrink-0 on both groups: at desktop widths
           everything fits and ml-auto on the right group reproduces the
           old justify-between split exactly (no visual change). Below
@@ -25,14 +25,14 @@ export default function TopNav() {
           itself instead of overflowing the whole page — every page uses
           this shared TopNav, so this is the one place that fix has to
           live. */}
-      <div className="mx-auto flex max-w-[1600px] items-center gap-4 overflow-x-auto text-sm">
-        <div className="flex shrink-0 items-center gap-4">
+      <div className="mx-auto flex max-w-[1600px] items-center gap-6 overflow-x-auto text-sm">
+        <div className="flex shrink-0 items-center gap-1">
           {logoAvailable && (
             // eslint-disable-next-line @next/next/no-img-element -- small static brand mark, not worth next/image's overhead here
             <img
               src={LOGO_SRC}
               alt="Agentic Atoms"
-              className="h-8 w-8 shrink-0 rounded-full object-contain"
+              className="h-8 w-8 shrink-0 rounded-full object-contain mr-3"
               onError={() => setLogoAvailable(false)}
             />
           )}
@@ -40,8 +40,8 @@ export default function TopNav() {
             href="/workflow"
             className={
               pathname.startsWith("/workflow") && !pathname.startsWith("/workflow/dashboard")
-                ? "text-base font-bold text-foreground whitespace-nowrap"
-                : "text-base font-bold text-foreground-secondary transition-colors hover:text-foreground whitespace-nowrap"
+                ? "rounded-lg bg-brand-soft px-3 py-1.5 text-sm font-semibold text-brand whitespace-nowrap"
+                : "rounded-lg px-3 py-1.5 text-sm font-medium text-foreground-secondary transition-colors duration-150 hover:bg-surface-hover hover:text-foreground whitespace-nowrap"
             }
           >
             Progress Workflow
@@ -50,36 +50,38 @@ export default function TopNav() {
             href="/workflow/dashboard"
             className={
               pathname.startsWith("/workflow/dashboard")
-                ? "text-sm font-semibold text-brand whitespace-nowrap"
-                : "text-sm font-medium text-foreground-secondary transition-colors hover:text-foreground whitespace-nowrap"
+                ? "rounded-lg bg-brand-soft px-3 py-1.5 text-sm font-semibold text-brand whitespace-nowrap"
+                : "rounded-lg px-3 py-1.5 text-sm font-medium text-foreground-secondary transition-colors duration-150 hover:bg-surface-hover hover:text-foreground whitespace-nowrap"
             }
           >
             Dashboard
           </Link>
         </div>
-        <div className="ml-auto flex shrink-0 items-center gap-3">
-          <Link
-            href="/admin"
-            className={
-              pathname.startsWith("/admin")
-                ? "text-xs font-medium text-brand underline whitespace-nowrap"
-                : "text-xs text-foreground-muted hover:text-foreground-secondary whitespace-nowrap"
-            }
-          >
-            Admin Setup
-          </Link>
-          <Link
-            href="/dev/extraction-test"
-            title="Developer/testing tool for the extraction pipeline"
-            className={
-              onExtractionTest
-                ? "text-xs font-medium text-brand underline whitespace-nowrap"
-                : "text-xs text-foreground-muted hover:text-foreground-secondary whitespace-nowrap"
-            }
-          >
-            Extraction Test (Dev)
-          </Link>
-        </div>
+        {isAdmin && (
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <Link
+              href="/admin"
+              className={
+                pathname.startsWith("/admin")
+                  ? "rounded-lg bg-brand-soft px-2.5 py-1 text-xs font-semibold text-brand whitespace-nowrap"
+                  : "rounded-lg px-2.5 py-1 text-xs font-medium text-foreground-muted transition-colors duration-150 hover:bg-surface-hover hover:text-foreground-secondary whitespace-nowrap"
+              }
+            >
+              Admin Setup
+            </Link>
+            <Link
+              href="/dev/extraction-test"
+              title="Developer/testing tool for the extraction pipeline"
+              className={
+                onExtractionTest
+                  ? "rounded-lg bg-brand-soft px-2.5 py-1 text-xs font-semibold text-brand whitespace-nowrap"
+                  : "rounded-lg px-2.5 py-1 text-xs font-medium text-foreground-muted transition-colors duration-150 hover:bg-surface-hover hover:text-foreground-secondary whitespace-nowrap"
+              }
+            >
+              Extraction Test (Dev)
+            </Link>
+          </div>
+        )}
       </div>
     </nav>
   );

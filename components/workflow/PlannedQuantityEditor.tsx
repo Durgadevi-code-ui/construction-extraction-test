@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { formatQuantity } from "@/lib/format";
+import Button from "@/components/ui/Button";
+import Input from "@/components/ui/Input";
 
 type Props = {
   actorUserId: string;
@@ -61,55 +63,59 @@ export default function PlannedQuantityEditor({
   if (!editing) {
     return (
       <span className="inline-flex items-center gap-1.5">
-        <span>
+        <span className="tabular-nums">
           {plannedQuantity !== null ? formatQuantity(plannedQuantity) : "Not set"} {unitOfMeasure ?? ""}
         </span>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          className="!px-1.5 !py-0.5 !text-xs"
           onClick={() => {
             setQuantity(plannedQuantity?.toString() ?? "");
             setUnit(unitOfMeasure ?? "");
             setEditing(true);
           }}
-          className="text-xs px-1.5 py-0.5 rounded border border-line text-foreground-secondary hover:bg-surface-soft"
         >
           Edit
-        </button>
+        </Button>
       </span>
     );
   }
 
   return (
-    <span className="inline-flex items-center gap-1.5 flex-wrap">
-      <input
+    <span className="inline-flex items-center gap-1.5 flex-wrap rounded-lg border border-brand-border bg-brand-soft px-2 py-1.5">
+      <Input
         type="number"
         min={0}
         step="any"
         value={quantity}
         onChange={(e) => setQuantity(e.target.value)}
-        className="w-20 rounded border border-line px-1.5 py-0.5 text-xs"
+        className="w-20 !py-1 !text-xs tabular-nums"
       />
-      <input
+      <Input
         type="text"
         value={unit}
         onChange={(e) => setUnit(e.target.value)}
         placeholder="unit"
-        className="w-16 rounded border border-line px-1.5 py-0.5 text-xs"
+        className="w-16 !py-1 !text-xs"
       />
-      <button
-        onClick={handleSave}
-        disabled={submitting}
-        className="text-xs px-1.5 py-0.5 rounded bg-brand text-white disabled:opacity-50"
-      >
+      <Button size="sm" className="!px-2 !py-1 !text-xs" onClick={handleSave} disabled={submitting}>
         {submitting ? "Saving…" : "Save"}
-      </button>
-      <button
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        className="!px-2 !py-1 !text-xs"
         onClick={() => setEditing(false)}
         disabled={submitting}
-        className="text-xs px-1.5 py-0.5 rounded border border-line text-foreground-secondary hover:bg-surface-soft"
       >
         Cancel
-      </button>
-      {error && <span className="text-xs text-red-600 basis-full">{error}</span>}
+      </Button>
+      {error && (
+        <span className="basis-full rounded border border-error-border bg-error-soft px-1.5 py-1 text-xs text-error">
+          {error}
+        </span>
+      )}
     </span>
   );
 }

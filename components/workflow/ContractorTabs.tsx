@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import TabNav from "@/components/workflow/TabNav";
+import { ClipboardList, BarChart3, LayoutDashboard, ListChecks, Building2, Radio, MessageSquare } from "lucide-react";
+import DashboardShell from "@/components/workflow/DashboardShell";
 import DashboardPanel, { type DashboardSection } from "@/components/workflow/DashboardPanel";
 import SupervisorPanel, {
   type SupervisorQueueItem,
@@ -12,6 +13,7 @@ import DelegatedAdminPanel, {
   type DelegatedDepartmentScope,
 } from "@/components/workflow/DelegatedAdminPanel";
 import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
+import ChatPanel from "@/components/workflow/ChatPanel";
 import type { DashboardData } from "@/lib/dashboard";
 
 type Props = {
@@ -26,13 +28,34 @@ type Props = {
 };
 
 const TABS = [
-  { key: "today", label: "Today's Progress" },
-  { key: "mtd", label: "MTD Summary" },
-  { key: "dashboard", label: "Dashboard" },
-  { key: "workItems", label: "Work Items" },
-  { key: "departments", label: "Department Progress" },
-  { key: "liveUpdates", label: "Live Updates" },
+  { key: "today", label: "Today's Progress", icon: ClipboardList },
+  { key: "mtd", label: "MTD Summary", icon: BarChart3 },
+  { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { key: "workItems", label: "Work Items", icon: ListChecks },
+  { key: "departments", label: "Department Progress", icon: Building2 },
+  { key: "liveUpdates", label: "Live Updates", icon: Radio },
+  { key: "communication", label: "Communication", icon: MessageSquare },
 ];
+
+const HEADINGS: Record<string, string> = {
+  today: "Contractor Dashboard",
+  mtd: "MTD Summary",
+  dashboard: "Dashboard",
+  workItems: "Work Items",
+  departments: "Department Progress",
+  liveUpdates: "Live Updates",
+  communication: "Communication",
+};
+
+const SUBHEADINGS: Record<string, string> = {
+  today: "Review today's submissions and approve or return progress.",
+  mtd: "Month-to-date progress across your project.",
+  dashboard: "Overall progress, project value, and department breakdown.",
+  workItems: "Every work item in scope, with current status.",
+  departments: "Progress by department across the project.",
+  liveUpdates: "Recent field photos and voice notes from workers.",
+  communication: "Project-wide messages for your team.",
+};
 
 const DASHBOARD_PANEL_SECTIONS: Record<string, DashboardSection[]> = {
   dashboard: ["overview"],
@@ -41,20 +64,15 @@ const DASHBOARD_PANEL_SECTIONS: Record<string, DashboardSection[]> = {
 };
 
 /**
- * Contractor's persistent top-level navigation — locked to Today's
- * Progress / MTD Summary / Dashboard / Work Items / Department Progress
- * (project-level oversight, distinct from the Subcontractor's
- * operational tabs; see app/workflow/supervisor/page.tsx). No new data
- * or calculation here: "Today's Progress" and "MTD Summary" are
- * SupervisorPanel's own two existing views (previously nested behind
- * its own internal tab switcher — see forcedTab on SupervisorPanel),
- * now promoted to top-level tabs since the Contractor's approve/reject
- * queue lives inside "Today's Progress" (its "Today's Work Summary"
- * section) exactly like before — no separate "Reviews" tab is added.
- * DashboardPanel is mounted once, shared by Dashboard/Work Items/
- * Department Progress, so switching between those three never
- * re-fetches — only which of its already-loaded sections is visible
- * changes; its own Filters stay available across all three.
+ * Contractor's persistent top-level navigation — same visual shell as
+ * the Worker Dashboard (see components/workflow/DashboardShell.tsx),
+ * same tab set as before (Today's Progress / MTD Summary / Dashboard /
+ * Work Items / Department Progress / Live Updates), plus a new
+ * Communication tab. No data or calculation here changed: "Today's
+ * Progress" and "MTD Summary" are SupervisorPanel's own two existing
+ * views, DashboardPanel is mounted once and shared by Dashboard/Work
+ * Items/Department Progress exactly as before — only the chrome around
+ * them changed.
  */
 export default function ContractorTabs({
   userId,
@@ -67,13 +85,19 @@ export default function ContractorTabs({
   delegatedScopes,
 }: Props) {
   const [tab, setTab] = useState("today");
+  const [liveUpdatesFilter, setLiveUpdatesFilter] = useState<string | null>(null);
 
   const showDashboardPanel = tab === "dashboard" || tab === "workItems" || tab === "departments";
 
   return (
-    <div className="space-y-4">
-      <TabNav tabs={TABS} active={tab} onChange={setTab} />
-
+    <DashboardShell
+      tabs={TABS}
+      activeTab={tab}
+      onTabChange={setTab}
+      heading={HEADINGS[tab]}
+      subheading={SUBHEADINGS[tab]}
+      userId={userId}
+    >
       {tab === "today" && (
         <SupervisorPanel
           supervisorUserId={userId}
@@ -103,6 +127,14 @@ export default function ContractorTabs({
           userId={userId}
           initialData={dashboardData}
           sections={DASHBOARD_PANEL_SECTIONS[tab]}
+          onViewLiveUpdates={
+            tab === "workItems"
+              ? (code) => {
+                  setLiveUpdatesFilter(code);
+                  setTab("liveUpdates");
+                }
+              : undefined
+          }
         />
       )}
 
@@ -110,7 +142,9 @@ export default function ContractorTabs({
         <DelegatedAdminPanel contractorUserId={userId} scopes={delegatedScopes} />
       )}
 
-      {tab === "liveUpdates" && <LiveUpdateFeed />}
-    </div>
+      {tab === "liveUpdates" && <LiveUpdateFeed initialFilterCode={liveUpdatesFilter} />}
+
+      {tab === "communication" && <ChatPanel />}
+    </DashboardShell>
   );
 }

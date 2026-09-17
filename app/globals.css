@@ -1,19 +1,47 @@
 @import "tailwindcss";
 
-/* Light, warm construction-SaaS theme — see AGENTS.md. Reverted from an
-   earlier dark pass: the page background is warm white, cards are white,
-   and orange is a strategic ACCENT only (primary actions, active states,
-   progress emphasis) — never a general fill or the page background. */
+/* "Fieldwork Precision" — premium cool-neutral enterprise construction
+   theme (Stripe/Attio/Procore/Vercel/Autodesk-inspired). Steel Blue is
+   the primary/professional accent (primary actions, active nav state,
+   selected states); Teal and Green are supporting accents (secondary
+   status, approved/completed progress) — never a page background or a
+   general fill. Amber/sunset is a small, deliberately muted accent
+   reserved for in-progress/attention status only. */
 :root {
-  --background: #fdf9f5;
-  --foreground: #222222;
-  --foreground-secondary: #666666;
-  --foreground-muted: #888888;
+  --background: #eef3f5;
+  --foreground: #111827;
+  --foreground-secondary: #4b5563;
+  --foreground-muted: #6b7280;
+  --foreground-placeholder: #9ca3af;
+
   --surface: #ffffff;
-  --surface-soft: #fff8f2;
-  --brand-soft: #fff3e8;
-  --line: #eaeaea;
-  --line-soft: #f1e7df;
+  --surface-soft: #f6f9fa;
+  --surface-hover: #eef2f4;
+
+  --line: #dde5e9;
+  --line-strong: #c7d3d9;
+  --line-soft: #eef1f3;
+
+  --brand: #2e5c7e;
+  --brand-hover: #24485f;
+  --brand-soft: #e7eff4;
+  --brand-border: #c3d6e2;
+
+  --success: #2f8f5a;
+  --success-soft: #e7f4ec;
+  --success-border: #c2e5cf;
+
+  --warning: #c96a1f;
+  --warning-soft: #fbeee1;
+  --warning-border: #f0d2b3;
+
+  --error: #b91c1c;
+  --error-soft: #fef2f2;
+  --error-border: #fecaca;
+
+  --info: #0d8f8a;
+  --info-soft: #e2f4f2;
+  --info-border: #bfe6e2;
 }
 
 @theme inline {
@@ -21,18 +49,67 @@
   --color-foreground: var(--foreground);
   --color-foreground-secondary: var(--foreground-secondary);
   --color-foreground-muted: var(--foreground-muted);
+  --color-foreground-placeholder: var(--foreground-placeholder);
+
   --color-surface: var(--surface);
   --color-surface-soft: var(--surface-soft);
-  --color-brand: #ff6b00;
-  --color-brand-soft: var(--brand-soft);
+  --color-surface-hover: var(--surface-hover);
+
   --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
   --color-line-soft: var(--line-soft);
-  --font-sans: var(--font-geist-sans);
+
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-border: var(--brand-border);
+
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-success-border: var(--success-border);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-border: var(--warning-border);
+  --color-error: var(--error);
+  --color-error-soft: var(--error-soft);
+  --color-error-border: var(--error-border);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-info-border: var(--info-border);
+
+  --font-sans: var(--font-geist-sans), Arial, Helvetica, sans-serif;
   --font-mono: var(--font-geist-mono);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+}
+
+/* Shared, minimal entrance motion for dropdowns/popovers/toasts — plain
+   CSS (no animation plugin installed), 150ms, subtle fade+lift only. */
+@keyframes dropdown-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-dropdown-in {
+  animation: dropdown-in 150ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-dropdown-in {
+    animation: none;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

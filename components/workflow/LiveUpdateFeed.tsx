@@ -1,8 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { ImageOff } from "lucide-react";
 import TabNav from "@/components/workflow/TabNav";
 import { formatDateTimeUS, formatDateUS } from "@/lib/format";
+import EmptyState from "@/components/ui/EmptyState";
+import { SkeletonRows } from "@/components/ui/Skeleton";
+import Card from "@/components/ui/Card";
 
 type LiveUpdateItem = {
   liveUpdateId: string;
@@ -54,11 +58,26 @@ function localDayKey(date: Date): string {
  * listLiveUpdatesForReviewer), newest first — this component only
  * partitions that same array by day for display.
  */
-export default function LiveUpdateFeed() {
+export default function LiveUpdateFeed({
+  initialFilterCode = null,
+}: {
+  /** When set, restricts the feed to this one work item's updates
+   * (e.g. Contractor clicking "View Live Updates" on a specific Work
+   * Items row) — pure client-side filter of the same reviewer-scoped
+   * payload this component already fetches, no API/schema change.
+   * Clearable from the UI; defaults to showing everything in scope. */
+  initialFilterCode?: string | null;
+}) {
   const [items, setItems] = useState<LiveUpdateItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<"today" | "history">("today");
+  // No effect needed to keep this in sync with a later prop change: this
+  // component only exists while its parent's "liveUpdates" tab is
+  // active, so a new initialFilterCode (from clicking a different Work
+  // Item's "View Live Updates") always arrives via a fresh mount, never
+  // a re-render of an already-mounted instance.
+  const [filterCode, setFilterCode] = useState<string | null>(initialFilterCode);
 
   useEffect(() => {
     let ignore = false;
@@ -103,7 +122,9 @@ export default function LiveUpdateFeed() {
     // newest-day-first order; no separate re-sort of groups needed.
     const groups = new Map<string, LiveUpdateItem[]>();
 
-    for (const item of items) {
+    const scoped = filterCode ? items.filter((item) => item.workItemCode === filterCode) : items;
+
+    for (const item of scoped) {
       const day = localDayKey(new Date(item.createdAt));
       if (day === todayKey) {
         today.push(item);
@@ -115,19 +136,35 @@ export default function LiveUpdateFeed() {
     }
 
     return { todayItems: today, historyGroups: groups };
-  }, [items]);
+  }, [items, filterCode]);
 
   const historyCount = items.length - todayItems.length;
 
   if (loading) {
-    return <p className="text-sm text-foreground-muted">Loading live updates…</p>;
+    return <SkeletonRows count={3} rowHeight="h-24" />;
   }
   if (error) {
-    return <p className="text-sm text-red-600">{error}</p>;
+    return (
+      <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
+    );
   }
 
   return (
     <div className="space-y-3">
+      {filterCode && (
+        <div className="flex items-center gap-2 rounded-lg border border-brand-border bg-brand-soft px-3 py-1.5 text-xs text-foreground-secondary w-fit">
+          <span>
+            Filtered: <span className="font-medium text-foreground">{filterCode}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setFilterCode(null)}
+            className="font-medium text-brand transition-colors duration-150 hover:underline"
+          >
+            Show all
+          </button>
+        </div>
+      )}
       <TabNav
         tabs={[
           { key: "today", label: `Today's Updates (${todayItems.length})` },
@@ -139,7 +176,7 @@ export default function LiveUpdateFeed() {
 
       {view === "today" ? (
         todayItems.length === 0 ? (
-          <EmptyState message="No live updates for today." />
+          <EmptyState icon={ImageOff} title="No live updates for today" />
         ) : (
           <div className="space-y-3">
             {todayItems.map((item) => (
@@ -148,7 +185,7 @@ export default function LiveUpdateFeed() {
           </div>
         )
       ) : historyGroups.size === 0 ? (
-        <EmptyState message="No older live updates yet." />
+        <EmptyState icon={ImageOff} title="No older live updates yet" />
       ) : (
         <div className="space-y-5">
           {Array.from(historyGroups.entries()).map(([day, dayItems]) => (
@@ -169,17 +206,9 @@ export default function LiveUpdateFeed() {
   );
 }
 
-function EmptyState({ message }: { message: string }) {
-  return (
-    <p className="text-sm text-foreground-muted bg-surface rounded-lg border border-line p-4">
-      {message}
-    </p>
-  );
-}
-
 function LiveUpdateCard({ item }: { item: LiveUpdateItem }) {
   return (
-    <div className="bg-surface rounded-lg border border-line shadow-sm p-3 space-y-2">
+    <Card className="!p-3 space-y-2">
       <div className="flex items-center justify-between gap-2 text-sm">
         <span className="font-medium text-foreground">
           {item.workerName}
@@ -187,7 +216,9 @@ function LiveUpdateCard({ item }: { item: LiveUpdateItem }) {
             <span className="font-normal text-foreground-muted"> — {item.workItemDescription}</span>
           )}
         </span>
-        <span className="shrink-0 text-xs text-foreground-muted">{formatDateTimeUS(item.createdAt)}</span>
+        <span className="shrink-0 text-xs text-foreground-muted tabular-nums">
+          {formatDateTimeUS(item.createdAt)}
+        </span>
       </div>
 
       {item.updateType === "PHOTO" && item.mediaUrl && (
@@ -202,6 +233,6 @@ function LiveUpdateCard({ item }: { item: LiveUpdateItem }) {
         <audio controls src={item.mediaUrl} className="w-full" />
       )}
       {item.caption && <p className="text-sm text-foreground-secondary">{item.caption}</p>}
-    </div>
+    </Card>
   );
 }

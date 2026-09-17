@@ -1,6 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import Card from "@/components/ui/Card";
+import { Select } from "@/components/ui/Input";
 
 export type WorkItemOptionView = {
   workItemId: string;
@@ -40,14 +42,13 @@ export default function WorkItemSelector({
   const router = useRouter();
 
   return (
-    <section className="bg-surface rounded-lg border border-line shadow-sm p-4 space-y-2 text-sm">
+    <Card className="space-y-2 text-sm">
       <label className="block font-medium text-foreground-secondary mb-1">Work Item</label>
-      <select
+      <Select
         value={activeWorkItemId}
         onChange={(e) => {
           router.push(`/workflow/worker?workItemId=${e.target.value}`);
         }}
-        className="w-full rounded border border-line bg-white text-foreground px-3 py-2 text-sm"
       >
         {workItems.map((item) => (
           <option key={item.workItemId} value={item.workItemId}>
@@ -59,10 +60,10 @@ export default function WorkItemSelector({
                 : " (Waiting on prerequisites)"}
           </option>
         ))}
-      </select>
+      </Select>
       {isAutoSuggested && suggestionNote && (
         <p className="text-xs text-foreground-secondary">{suggestionNote}</p>
       )}
-    </section>
+    </Card>
   );
 }

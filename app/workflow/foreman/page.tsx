@@ -7,22 +7,10 @@ import {
   listForemanQueue,
 } from "@/lib/workflow";
 import { requireCurrentUser } from "@/lib/session";
-import { logout } from "@/app/login/actions";
 import ForemanTabs from "@/components/workflow/ForemanTabs";
-import NotificationBell from "@/components/workflow/NotificationBell";
 import { calculateEstimatedAmount } from "@/lib/calculations";
 
 export const dynamic = "force-dynamic";
-
-function SignOutLink() {
-  return (
-    <form action={logout} className="inline">
-      <button type="submit" className="text-sm text-brand hover:underline">
-        Sign out
-      </button>
-    </form>
-  );
-}
 
 /**
  * Subcontractor Dashboard — "work progress + payment/earnings"
@@ -87,21 +75,10 @@ export default async function ForemanPage() {
     : null;
 
   return (
-    <main className="min-h-screen py-8 px-4 sm:px-6 lg:px-10">
-      <div className="max-w-[1600px] mx-auto space-y-6">
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">Subcontractor Dashboard</h1>
-            <p className="text-sm text-foreground-secondary">
-              My Department: <span className="font-medium text-foreground-secondary">{ctx.departmentName}</span>
-            </p>
-            <SignOutLink />
-          </div>
-          <NotificationBell userId={userId} />
-        </div>
-
-        <ForemanTabs
+    <main className="flex-1 flex flex-col">
+      <ForemanTabs
           foremanUserId={userId}
+          departmentName={ctx.departmentName}
           kpis={kpis}
           board={
             board
@@ -129,7 +106,6 @@ export default async function ForemanPage() {
             submittedProgress: item.submittedProgress,
           }))}
         />
-      </div>
     </main>
   );
 }

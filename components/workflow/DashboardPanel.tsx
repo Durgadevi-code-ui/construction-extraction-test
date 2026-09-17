@@ -4,6 +4,9 @@ import { useEffect, useState } from "react";
 import ProgressBar from "@/components/workflow/charts/ProgressBar";
 import ProgressRing from "@/components/workflow/charts/ProgressRing";
 import { formatDateUS, formatPercent } from "@/lib/format";
+import Card from "@/components/ui/Card";
+import Badge, { type BadgeVariant } from "@/components/ui/Badge";
+import { Select } from "@/components/ui/Input";
 
 type DashboardScopeOption = { projectId: string; projectName: string };
 type DashboardDepartmentOption = { departmentId: string; departmentName: string; projectId: string };
@@ -73,11 +76,11 @@ function money(v: number): string {
   return `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 
-function statusBadge(item: DashboardWorkItemRow) {
-  if (item.isCompleted) return { label: "Completed", cls: "bg-green-100 text-green-700" };
-  if (item.isStuck) return { label: "Stuck", cls: "bg-red-100 text-red-700" };
-  if (item.progressPercentage === null) return { label: "Pending", cls: "bg-gray-100 text-foreground-secondary" };
-  return { label: "In Progress", cls: "bg-amber-100 text-amber-700" };
+function statusBadge(item: DashboardWorkItemRow): { label: string; variant: BadgeVariant } {
+  if (item.isCompleted) return { label: "Completed", variant: "success" };
+  if (item.isStuck) return { label: "Stuck", variant: "error" };
+  if (item.progressPercentage === null) return { label: "Pending", variant: "neutral" };
+  return { label: "In Progress", variant: "warning" };
 }
 
 /**
@@ -101,6 +104,7 @@ export default function DashboardPanel({
   userId,
   initialData,
   sections = ALL_SECTIONS,
+  onViewLiveUpdates,
 }: {
   userId: string;
   initialData: DashboardData;
@@ -112,6 +116,11 @@ export default function DashboardPanel({
    * once and just narrow `sections` per active tab — same fetch, same
    * filters, same calculations, only which part is visible changes. */
   sections?: DashboardSection[];
+  /** When provided, adds a "View Live Updates" action per Work Items
+   * row, called with that row's work item code. Omitted entirely (no
+   * extra column) for callers — like the standalone /workflow/dashboard
+   * page — that have nowhere to route this. */
+  onViewLiveUpdates?: (workItemCode: string) => void;
 }) {
   // Default scope = the caller's own data, not "All" (see design
   // brief section 8): when the server has already resolved exactly one
@@ -180,7 +189,7 @@ export default function DashboardPanel({
     <div className="space-y-6">
       {/* Level 1 — who/what this dashboard is scoped to, in plain
           words, before any number. */}
-      <section className="bg-white rounded-lg border border-line p-4 text-sm flex flex-wrap items-center gap-x-6 gap-y-1">
+      <Card className="text-sm flex flex-wrap items-center gap-x-6 gap-y-1">
         <p>
           <span className="text-foreground-secondary">Project: </span>
           <span className="font-medium text-foreground">
@@ -207,23 +216,21 @@ export default function DashboardPanel({
               : "In Progress"}
           </span>
         </p>
-      </section>
+      </Card>
 
-      {/* Simple filters — collapsed by default expectation is already
-          met by the auto-selected scope above; these just let the user
-          narrow further when they need to. */}
-      <details className="bg-white rounded-lg border border-line p-4 text-sm">
-        <summary className="cursor-pointer text-foreground-secondary select-none">Filters</summary>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-3">
+      {/* Always visible — filtering options must be immediately visible,
+          not hidden behind a click-to-expand dropdown. */}
+      <div className="rounded-xl border border-line bg-surface p-4 text-sm shadow-sm">
+        <p className="text-foreground-secondary font-medium mb-2">Filters</p>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           <div>
             <label className="block text-xs font-medium text-foreground-secondary mb-1">Project</label>
-            <select
+            <Select
               value={projectId}
               onChange={(e) => {
                 setProjectId(e.target.value);
                 setDepartmentId("");
               }}
-              className="w-full rounded border border-line px-2 py-1.5 text-sm"
             >
               <option value="">All Projects</option>
               {data.scopeProjects.map((p) => (
@@ -231,36 +238,28 @@ export default function DashboardPanel({
                   {p.projectName}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground-secondary mb-1">Department</label>
-            <select
-              value={departmentId}
-              onChange={(e) => setDepartmentId(e.target.value)}
-              className="w-full rounded border border-line px-2 py-1.5 text-sm"
-            >
+            <Select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
               <option value="">All Departments</option>
               {availableDepartments.map((d) => (
                 <option key={d.departmentId} value={d.departmentId}>
                   {d.departmentName}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground-secondary mb-1">Status</label>
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value as StatusFilter)}
-              className="w-full rounded border border-line px-2 py-1.5 text-sm"
-            >
+            <Select value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
               {STATUS_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           <div>
             {/* Native date input — its VALUE must stay ISO (yyyy-mm-dd,
@@ -279,7 +278,7 @@ export default function DashboardPanel({
               type="date"
               value={from}
               onChange={(e) => setFrom(e.target.value)}
-              className="w-full rounded border border-line px-2 py-1.5 text-sm"
+              className="w-full rounded-lg border border-line px-2.5 py-2 text-sm transition-colors duration-150 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
             />
             {from && <p className="text-[11px] text-foreground-muted mt-0.5">{formatDateUS(from)}</p>}
           </div>
@@ -289,7 +288,7 @@ export default function DashboardPanel({
               type="date"
               value={to}
               onChange={(e) => setTo(e.target.value)}
-              className="w-full rounded border border-line px-2 py-1.5 text-sm"
+              className="w-full rounded-lg border border-line px-2.5 py-2 text-sm transition-colors duration-150 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
             />
             {to && <p className="text-[11px] text-foreground-muted mt-0.5">{formatDateUS(to)}</p>}
           </div>
@@ -303,65 +302,67 @@ export default function DashboardPanel({
               setFrom("");
               setTo("");
             }}
-            className="mt-2 text-xs text-brand hover:underline"
+            className="mt-2 text-xs text-brand transition-colors duration-150 hover:underline"
           >
             Clear filters
           </button>
         )}
-      </details>
+      </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && (
+        <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
+      )}
 
       <div className={loading ? "opacity-60 pointer-events-none transition-opacity" : "transition-opacity"}>
         {sections.includes("overview") && (
           <>
             {/* Level 1 — overall result, the one number that matters most. */}
-            <section className="bg-white rounded-lg border border-line p-5 flex flex-col sm:flex-row items-center gap-6">
+            <Card className="flex flex-col sm:flex-row items-center gap-6">
               <ProgressRing percent={data.kpis.overallProgressPercent} label="Overall Progress" size={112} />
               <div className="flex-1 w-full space-y-2">
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-green-50 rounded-lg py-4 text-center">
-                    <p className="text-2xl font-bold text-green-700">{completedCount}</p>
+                  <div className="bg-success-soft rounded-lg py-4 text-center">
+                    <p className="text-2xl font-bold text-success tabular-nums">{completedCount}</p>
                     <p className="text-xs text-foreground-secondary">Completed</p>
                   </div>
-                  <div className="bg-amber-50 rounded-lg py-4 text-center">
-                    <p className="text-2xl font-bold text-amber-700">{remainingCount}</p>
+                  <div className="bg-warning-soft rounded-lg py-4 text-center">
+                    <p className="text-2xl font-bold text-warning tabular-nums">{remainingCount}</p>
                     <p className="text-xs text-foreground-secondary">Remaining</p>
                   </div>
                 </div>
                 {stuckCount > 0 && (
-                  <p className="text-xs text-red-600 text-center sm:text-left">
+                  <p className="text-xs text-error text-center sm:text-left">
                     {stuckCount} work item{stuckCount === 1 ? "" : "s"} need{stuckCount === 1 ? "s" : ""} attention
                   </p>
                 )}
               </div>
-            </section>
+            </Card>
 
             {/* Project Value — three numbers, no chart. */}
             {data.includeFinancials && (
-              <section className="bg-white rounded-lg border border-line p-4 mt-6">
+              <Card className="mt-6">
                 <h2 className="font-semibold text-foreground text-sm mb-3">Project Value</h2>
                 <div className="grid grid-cols-3 gap-3 text-center">
                   <div>
-                    <p className="text-lg font-bold text-foreground">
+                    <p className="text-lg font-bold text-foreground tabular-nums">
                       {data.kpis.totalEstimatedAmount !== null ? money(data.kpis.totalEstimatedAmount) : "—"}
                     </p>
                     <p className="text-xs text-foreground-secondary">Estimated</p>
                   </div>
                   <div>
-                    <p className="text-lg font-bold text-orange-700">
+                    <p className="text-lg font-bold text-brand tabular-nums">
                       {data.kpis.totalApprovedValue !== null ? money(data.kpis.totalApprovedValue) : "—"}
                     </p>
                     <p className="text-xs text-foreground-secondary">Approved</p>
                   </div>
                   <div>
-                    <p className="text-lg font-bold text-amber-700">
+                    <p className="text-lg font-bold text-warning tabular-nums">
                       {data.kpis.remainingValue !== null ? money(data.kpis.remainingValue) : "—"}
                     </p>
                     <p className="text-xs text-foreground-secondary">Remaining</p>
                   </div>
                 </div>
-              </section>
+              </Card>
             )}
           </>
         )}
@@ -373,14 +374,14 @@ export default function DashboardPanel({
               No departments in scope for the current filters.
             </p>
           ) : (
-            <section className="bg-white rounded-lg border border-line p-4 mt-6 space-y-3">
+            <Card className="mt-6 space-y-3">
               <h2 className="font-semibold text-foreground text-sm">Department Progress</h2>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {data.departments.map((d) => (
                   <div key={d.departmentId} className="text-sm">
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-foreground-secondary">{d.departmentName}</span>
-                      <span className="text-xs text-foreground-secondary">
+                      <span className="text-xs text-foreground-secondary tabular-nums">
                         {formatPercent(d.overallProgressPercent)}
                         {d.stuckCount > 0 ? ` · ${d.stuckCount} needs attention` : ""}
                       </span>
@@ -388,12 +389,12 @@ export default function DashboardPanel({
                     <ProgressBar
                       percent={d.overallProgressPercent}
                       tooltip={`${d.departmentName}: ${d.completedCount} completed, ${d.pendingCount} pending, ${d.stuckCount} stuck (of ${d.totalWorkItems})`}
-                      colorClass={d.stuckCount > 0 ? "bg-amber-500" : "bg-brand"}
+                      colorClass={d.stuckCount > 0 ? "bg-warning" : "bg-brand"}
                     />
                   </div>
                 ))}
               </div>
-            </section>
+            </Card>
           )
         )}
 
@@ -401,47 +402,62 @@ export default function DashboardPanel({
         /* Level 3/4 — actionable + detail: work items, simple columns
             only. Capped at 8 rows by default (Level 4 detail, not the
             first thing a Contractor should have to scroll through). */
-        <section className="bg-white rounded-lg border border-line p-4 mt-6">
-          <h2 className="font-semibold text-foreground text-sm mb-3">Work Items</h2>
+        <Card className="mt-6 !p-0 overflow-hidden">
+          <h2 className="font-semibold text-foreground text-sm px-5 py-3 border-b border-line">Work Items</h2>
           {data.workItems.length === 0 ? (
-            <p className="text-sm text-foreground-muted">No work items match the current filters.</p>
+            <p className="text-sm text-foreground-muted px-5 py-4">No work items match the current filters.</p>
           ) : (
             <>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-xs text-foreground-secondary border-b border-line">
-                      <th className="py-1.5 pr-2 font-medium">Work Item</th>
-                      <th className="py-1.5 pr-2 font-medium">Progress</th>
-                      <th className="py-1.5 pr-2 font-medium">Status</th>
+                  <thead className="bg-surface-soft text-[11px] uppercase tracking-wide text-foreground-muted">
+                    <tr>
+                      <th className="text-left px-5 py-2.5 font-medium">Work Item</th>
+                      <th className="text-left px-5 py-2.5 font-medium">Progress</th>
+                      <th className="text-left px-5 py-2.5 font-medium">Status</th>
+                      {onViewLiveUpdates && (
+                        <th className="text-left px-5 py-2.5 font-medium">Live Updates</th>
+                      )}
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="divide-y divide-line">
                     {visibleWorkItems.map((item) => {
                       const badge = statusBadge(item);
                       return (
-                        <tr key={item.workItemId} className="border-b border-gray-50 last:border-0">
-                          <td className="py-2 pr-2">
+                        <tr
+                          key={item.workItemId}
+                          className="min-h-[46px] transition-colors duration-150 hover:bg-surface-hover"
+                        >
+                          <td className="px-5 py-3">
                             <span className="text-foreground-secondary">{item.code}</span> {item.description}
                             {data.scopeDepartments.length > 1 && !departmentId && (
                               <span className="text-foreground-muted text-xs"> · {item.departmentName}</span>
                             )}
                           </td>
-                          <td className="py-2 pr-2 w-40">
+                          <td className="px-5 py-3 w-40">
                             <div className="flex items-center gap-2">
                               <div className="w-24">
                                 <ProgressBar percent={item.progressPercentage} />
                               </div>
-                              <span className="text-xs text-foreground-secondary whitespace-nowrap">
+                              <span className="text-xs text-foreground-secondary whitespace-nowrap tabular-nums">
                                 {formatPercent(item.progressPercentage)}
                               </span>
                             </div>
                           </td>
-                          <td className="py-2 pr-2">
-                            <span className={`text-xs px-2 py-0.5 rounded-full ${badge.cls}`}>
-                              {badge.label}
-                            </span>
+                          <td className="px-5 py-3">
+                            <Badge variant={badge.variant}>{badge.label}</Badge>
                           </td>
+                          {onViewLiveUpdates && (
+                            <td className="px-5 py-3">
+                              <button
+                                type="button"
+                                onClick={() => onViewLiveUpdates(item.code)}
+                                className="rounded-md border border-line bg-surface-soft px-2.5 py-1 text-xs font-medium text-foreground-secondary transition-colors duration-150 hover:border-brand-border hover:bg-brand-soft whitespace-nowrap"
+                              >
+                                View Live Updates
+                              </button>
+                            </td>
+                          )}
                         </tr>
                       );
                     })}
@@ -451,14 +467,14 @@ export default function DashboardPanel({
               {data.workItems.length > 8 && (
                 <button
                   onClick={() => setShowAllWorkItems((v) => !v)}
-                  className="mt-2 text-xs text-brand hover:underline"
+                  className="block px-5 py-3 text-xs text-brand transition-colors duration-150 hover:underline"
                 >
                   {showAllWorkItems ? "Show fewer" : `Show all ${data.workItems.length} work items`}
                 </button>
               )}
             </>
           )}
-        </section>
+        </Card>
         )}
       </div>
     </div>

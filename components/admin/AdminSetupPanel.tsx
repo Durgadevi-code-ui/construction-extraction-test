@@ -15,6 +15,14 @@ import type { Delegation, DelegationPermission } from "@/lib/delegationTypes";
 import DelegationManager, { type ContractorOption } from "./DelegationManager";
 import ExcelImportPanel from "./ExcelImportPanel";
 import { formatPercent, formatQuantity } from "@/lib/format";
+import { Inbox, Building2, FolderKanban, ListChecks, Users as UsersIcon, ShieldCheck, MessageSquare } from "lucide-react";
+import Card from "@/components/ui/Card";
+import Button from "@/components/ui/Button";
+import Input from "@/components/ui/Input";
+import Badge, { type BadgeVariant } from "@/components/ui/Badge";
+import EmptyState from "@/components/ui/EmptyState";
+import DashboardShell, { type ShellTab } from "@/components/workflow/DashboardShell";
+import ChatPanel from "@/components/workflow/ChatPanel";
 
 type Props = {
   adminUserId: string;
@@ -42,7 +50,7 @@ type Props = {
   standardDepartments: StandardDepartment[];
 };
 
-type Tab = "companies" | "projects" | "departments" | "workItems" | "users" | "delegations";
+type Tab = "companies" | "projects" | "departments" | "workItems" | "users" | "delegations" | "communication";
 
 const ALL_TABS: { id: Tab; label: string; adminOnly?: boolean; permission?: DelegationPermission }[] = [
   { id: "companies", label: "Companies", adminOnly: true },
@@ -52,6 +60,26 @@ const ALL_TABS: { id: Tab; label: string; adminOnly?: boolean; permission?: Dele
   { id: "users", label: "Users", permission: "USER_MANAGEMENT" },
   { id: "delegations", label: "Delegations", adminOnly: true },
 ];
+
+const TAB_ICON: Record<Tab, ShellTab["icon"]> = {
+  companies: Building2,
+  projects: FolderKanban,
+  departments: Building2,
+  workItems: ListChecks,
+  users: UsersIcon,
+  delegations: ShieldCheck,
+  communication: MessageSquare,
+};
+
+const TAB_HEADING: Record<Tab, string> = {
+  companies: "Companies",
+  projects: "Projects",
+  departments: "Departments",
+  workItems: "Work Items",
+  users: "Users",
+  delegations: "Delegations",
+  communication: "Communication",
+};
 
 /** Every tab is always available to a real Admin. For a delegated
  * caller, a tab shows only when its module was actually granted — a
@@ -121,26 +149,31 @@ export default function AdminSetupPanel({
     );
   }
 
-  const activeTab = shownTabs.includes(tab) ? tab : shownTabs[0];
+  // Communication is available to every caller who can reach Admin
+  // Setup at all (real Admin or any delegate) — it's not one of the
+  // gated data-management modules ALL_TABS/visibleTabs governs, so it's
+  // appended here rather than folded into that permission system.
+  const allowedTabs: Tab[] = [...shownTabs, "communication"];
+  const activeTab = allowedTabs.includes(tab) ? tab : shownTabs[0];
+
+  const shellTabs: ShellTab[] = [
+    ...ALL_TABS.filter((t) => shownTabs.includes(t.id)).map((t) => ({
+      key: t.id,
+      label: t.label,
+      icon: TAB_ICON[t.id],
+    })),
+    { key: "communication", label: "Communication", icon: TAB_ICON.communication },
+  ];
 
   return (
-    <div className="space-y-6">
-      <div className="flex gap-2 flex-wrap">
-        {ALL_TABS.filter((t) => shownTabs.includes(t.id)).map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`text-sm px-3 py-1.5 rounded ${
-              activeTab === t.id
-                ? "bg-brand text-white"
-                : "bg-white border border-line text-foreground-secondary"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
+    <DashboardShell
+      tabs={shellTabs}
+      activeTab={activeTab}
+      onTabChange={(key) => setTab(key as Tab)}
+      heading={TAB_HEADING[activeTab]}
+      subheading={isRealAdmin ? undefined : "Viewing under a temporary administrative delegation."}
+      userId={adminUserId}
+    >
       {activeTab === "companies" && <CompaniesTab adminUserId={adminUserId} companies={companies} />}
       {activeTab === "projects" && (
         <ProjectsTab
@@ -185,7 +218,11 @@ export default function AdminSetupPanel({
           departments={departments}
         />
       )}
-    </div>
+
+      {activeTab === "communication" && (
+        <ChatPanel projects={projects.map((p) => ({ projectId: p.projectId, projectName: p.projectName }))} />
+      )}
+    </DashboardShell>
   );
 }
 
@@ -242,7 +279,9 @@ function CompaniesTab({ adminUserId, companies }: { adminUserId: string; compani
         <Field label="Company Code" value={code} onChange={setCode} required />
         <Field label="Address" value={address} onChange={setAddress} />
         <SubmitButton submitting={submitting} label="Create Company" />
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && (
+          <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
+        )}
       </form>
 
       <ListSection title="Existing Companies" empty={companies.length === 0}>
@@ -292,7 +331,7 @@ function ProjectsTab({
   if (!isRealAdmin) {
     return (
       <div className="space-y-4">
-        <p className="text-xs text-foreground-secondary bg-amber-50 border border-amber-200 rounded p-2.5">
+        <p className="text-xs text-warning bg-warning-soft border border-warning-border rounded-lg p-2.5">
           Creating a new project is Admin-only. You can edit the details of your delegated
           project(s) below.
         </p>
@@ -323,7 +362,9 @@ function ProjectsTab({
         <Field label="Project Code" value={projectCode} onChange={setProjectCode} required />
         <Field label="Location" value={projectLocation} onChange={setProjectLocation} />
         <SubmitButton submitting={submitting} label="Create Project" />
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && (
+            <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
+          )}
       </form>
 
       <ListSection title="Existing Projects" empty={projects.length === 0}>
@@ -357,23 +398,20 @@ function ProjectRow({ adminUserId, project }: { adminUserId: string; project: Pr
   }
 
   return (
-    <div className="py-2 border-b border-line last:border-0 text-sm">
+    <div className="px-4 py-3 border-b border-line last:border-0 text-sm transition-colors duration-150 hover:bg-surface-hover">
       <div className="flex items-start justify-between gap-2">
-        <div>
+        <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium">{project.projectName}</span>
-          <span className="text-foreground-secondary ml-2">
+          <span className="text-foreground-secondary">
             ({project.projectCode}) — {project.companyName}
           </span>
           <StatusBadge status={project.status} />
         </div>
         <div className="flex gap-2 shrink-0">
           {!editing && (
-            <button
-              onClick={() => setEditing(true)}
-              className="text-xs px-2 py-1 rounded border border-line text-foreground-secondary hover:bg-surface-soft"
-            >
+            <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
               Edit
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -381,25 +419,20 @@ function ProjectRow({ adminUserId, project }: { adminUserId: string; project: Pr
       <ExcelImportPanel projectId={project.projectId} />
 
       {editing && (
-        <div className="mt-2 space-y-2 bg-surface-soft rounded p-3">
+        <div className="mt-2 space-y-2 bg-surface-soft rounded-lg p-3">
           <Field label="Project Name" value={projectName} onChange={setProjectName} required />
           <Field label="Location" value={projectLocation} onChange={setProjectLocation} />
           <div className="flex gap-2">
-            <button
-              onClick={handleSave}
-              disabled={submitting}
-              className="text-xs px-3 py-1.5 rounded bg-brand text-white disabled:opacity-50"
-            >
+            <Button size="sm" onClick={handleSave} disabled={submitting}>
               {submitting ? "Saving…" : "Save"}
-            </button>
-            <button
-              onClick={() => setEditing(false)}
-              className="text-xs px-3 py-1.5 rounded border border-line text-foreground-secondary hover:bg-surface-soft"
-            >
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => setEditing(false)}>
               Cancel
-            </button>
+            </Button>
           </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && (
+            <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
+          )}
         </div>
       )}
     </div>
@@ -452,7 +485,7 @@ function DepartmentsTab({
       <form onSubmit={handleSubmit} className="bg-white rounded-lg border border-line p-4 space-y-3">
         <h2 className="font-semibold text-foreground text-sm">New Department</h2>
         {!isRealAdmin && (
-          <p className="text-xs text-foreground-secondary bg-amber-50 border border-amber-200 rounded p-2.5">
+          <p className="text-xs text-warning bg-warning-soft border border-warning-border rounded-lg p-2.5">
             Creating a department requires a whole-project Department Management delegation for
             the selected project — a delegation restricted to specific departments can edit them
             but can&apos;t create new ones (the server will reject the attempt otherwise).
@@ -478,7 +511,9 @@ function DepartmentsTab({
         <Field label="Department Name" value={departmentName} onChange={setDepartmentName} required />
         <Field label="Department Code" value={departmentCode} onChange={setDepartmentCode} required />
         <SubmitButton submitting={submitting} label="Create Department" />
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && (
+            <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
+          )}
       </form>
 
       <ListSection title={isRealAdmin ? "Existing Departments" : "Delegated Departments"} empty={departments.length === 0}>
@@ -508,44 +543,36 @@ function DepartmentRow({ adminUserId, department }: { adminUserId: string; depar
   }
 
   return (
-    <div className="py-2 border-b border-line last:border-0 text-sm">
+    <div className="px-4 py-3 border-b border-line last:border-0 text-sm transition-colors duration-150 hover:bg-surface-hover">
       <div className="flex items-start justify-between gap-2">
-        <div>
+        <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium">{department.departmentName}</span>
-          <span className="text-foreground-secondary ml-2">
+          <span className="text-foreground-secondary">
             ({department.departmentCode}) — {department.projectName}
           </span>
           <StatusBadge status={department.status} />
         </div>
         {!editing && (
-          <button
-            onClick={() => setEditing(true)}
-            className="text-xs px-2 py-1 rounded border border-line text-foreground-secondary hover:bg-surface-soft shrink-0"
-          >
+          <Button variant="secondary" size="sm" onClick={() => setEditing(true)} className="shrink-0">
             Edit
-          </button>
+          </Button>
         )}
       </div>
 
       {editing && (
-        <div className="mt-2 space-y-2 bg-surface-soft rounded p-3">
+        <div className="mt-2 space-y-2 bg-surface-soft rounded-lg p-3">
           <Field label="Department Name" value={departmentName} onChange={setDepartmentName} required />
           <div className="flex gap-2">
-            <button
-              onClick={handleSave}
-              disabled={submitting}
-              className="text-xs px-3 py-1.5 rounded bg-brand text-white disabled:opacity-50"
-            >
+            <Button size="sm" onClick={handleSave} disabled={submitting}>
               {submitting ? "Saving…" : "Save"}
-            </button>
-            <button
-              onClick={() => setEditing(false)}
-              className="text-xs px-3 py-1.5 rounded border border-line text-foreground-secondary hover:bg-surface-soft"
-            >
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => setEditing(false)}>
               Cancel
-            </button>
+            </Button>
           </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && (
+            <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
+          )}
         </div>
       )}
     </div>
@@ -662,7 +689,9 @@ function WorkItemsTab({
           onChange={setDependsOnWorkItemIds}
         />
         <SubmitButton submitting={submitting} label="Create Work Item" />
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && (
+            <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
+          )}
       </form>
 
       <ListSection title="Existing Work Items" empty={workItems.length === 0}>
@@ -727,26 +756,23 @@ function WorkItemRow({
   }
 
   return (
-    <div className="py-2 border-b border-line last:border-0 text-sm">
+    <div className="px-4 py-3 border-b border-line last:border-0 text-sm transition-colors duration-150 hover:bg-surface-hover">
       <div className="flex items-start justify-between gap-2">
-        <div>
+        <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium">{item.lineItemNo}</span>
-          <span className="text-foreground-secondary ml-2">{item.descriptionOfWork}</span>
-          <span className="text-foreground-muted ml-2">({item.departmentName})</span>
+          <span className="text-foreground-secondary">{item.descriptionOfWork}</span>
+          <span className="text-foreground-muted">({item.departmentName})</span>
           <StatusBadge status={item.status} />
         </div>
         {!editing && (
-          <button
-            onClick={() => setEditing(true)}
-            className="text-xs px-2 py-1 rounded border border-line text-foreground-secondary hover:bg-surface-soft shrink-0"
-          >
+          <Button variant="secondary" size="sm" onClick={() => setEditing(true)} className="shrink-0">
             Edit
-          </button>
+          </Button>
         )}
       </div>
 
       {editing ? (
-        <div className="mt-2 space-y-2 bg-surface-soft rounded p-3">
+        <div className="mt-2 space-y-2 bg-surface-soft rounded-lg p-3">
           <QuantityUomFields
             plannedQuantity={plannedQuantity}
             onPlannedQuantityChange={setPlannedQuantity}
@@ -773,24 +799,19 @@ function WorkItemRow({
             onChange={setDependsOnWorkItemIds}
           />
           <div className="flex gap-2">
-            <button
-              onClick={handleSave}
-              disabled={submitting}
-              className="text-xs px-3 py-1.5 rounded bg-brand text-white disabled:opacity-50"
-            >
+            <Button size="sm" onClick={handleSave} disabled={submitting}>
               {submitting ? "Saving…" : "Save"}
-            </button>
-            <button
-              onClick={() => setEditing(false)}
-              className="text-xs px-3 py-1.5 rounded border border-line text-foreground-secondary hover:bg-surface-soft"
-            >
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => setEditing(false)}>
               Cancel
-            </button>
+            </Button>
           </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && (
+            <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
+          )}
         </div>
       ) : (
-        <p className="text-foreground-secondary mt-1">
+        <p className="text-foreground-secondary mt-1 tabular-nums">
           Scheduled Value:{" "}
           {item.scheduledValue !== null
             ? `$${item.scheduledValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
@@ -869,7 +890,7 @@ function UsersTab({
       <form onSubmit={handleSubmit} className="bg-white rounded-lg border border-line p-4 space-y-3">
         <h2 className="font-semibold text-foreground text-sm">New User</h2>
         {!isRealAdmin && (
-          <p className="text-xs text-foreground-secondary bg-amber-50 border border-amber-200 rounded p-2.5">
+          <p className="text-xs text-warning bg-warning-soft border border-warning-border rounded-lg p-2.5">
             Operational users only (Worker / Subcontractor / Contractor) — creating or promoting
             an Admin account is always Admin-only.
           </p>
@@ -895,27 +916,28 @@ function UsersTab({
           options={roleOptions.map((r) => ({ value: r, label: ROLE_OPTION_LABEL[r] ?? r }))}
         />
         <SubmitButton submitting={submitting} label="Create User" />
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && (
+            <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
+          )}
       </form>
 
       <ListSection title={isRealAdmin ? "Existing Users" : "Users in Delegated Scope"} empty={users.length === 0}>
         {users.map((u) => (
-          <div key={u.userId} className="py-2 border-b border-line last:border-0 text-sm">
+          <div
+            key={u.userId}
+            className="px-4 py-3 border-b border-line last:border-0 text-sm transition-colors duration-150 hover:bg-surface-hover"
+          >
             <div className="flex items-start justify-between gap-2">
-              <div>
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">
                   {u.firstName || u.lastName ? `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim() : u.email}
                 </span>
-                <span className="text-foreground-secondary ml-2">({u.email})</span>
-                <span className="text-foreground-muted ml-2">{u.role}</span>
+                <span className="text-foreground-secondary">({u.email})</span>
+                <span className="text-foreground-muted">{u.role}</span>
                 <StatusBadge status={u.status} />
-                <span
-                  className={`ml-2 text-xs px-2 py-0.5 rounded-full ${
-                    u.isLinked ? "bg-green-100 text-green-700" : "bg-gray-100 text-foreground-secondary"
-                  }`}
-                >
+                <Badge variant={u.isLinked ? "success" : "neutral"}>
                   {u.isLinked ? "Can log in" : "No login yet"}
-                </span>
+                </Badge>
               </div>
               {/* Linking is the same "no delegation can touch an Admin"
                * boundary as removing an assignment above — hidden here
@@ -975,14 +997,10 @@ function RemoveAssignmentButton({
 
   return (
     <div className="flex items-center gap-2 shrink-0">
-      <button
-        onClick={handleRemove}
-        disabled={submitting}
-        className="text-xs px-2 py-1 rounded border border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-50"
-      >
+      <Button variant="danger" size="sm" onClick={handleRemove} disabled={submitting}>
         {submitting ? "Removing…" : "Remove"}
-      </button>
-      {error && <span className="text-xs text-red-600">{error}</span>}
+      </Button>
+      {error && <span className="text-xs text-error">{error}</span>}
     </div>
   );
 }
@@ -1028,8 +1046,8 @@ function LinkLoginButton({
 
   if (createdPassword) {
     return (
-      <div className="text-xs bg-green-50 border border-green-200 rounded p-2 max-w-xs">
-        <p className="text-green-800 font-medium">Login created for {email}.</p>
+      <div className="text-xs bg-success-soft border border-success-border rounded-lg p-2 max-w-xs">
+        <p className="text-success font-medium">Login created for {email}.</p>
         <p className="text-foreground-secondary mt-1">
           Temporary password (shown once — share it securely):{" "}
           <span className="font-mono select-all">{createdPassword}</span>
@@ -1040,44 +1058,37 @@ function LinkLoginButton({
 
   if (!open) {
     return (
-      <button
+      <Button
+        variant="secondary"
+        size="sm"
         onClick={() => {
           setPassword(generateTempPassword());
           setOpen(true);
         }}
-        className="text-xs px-2 py-1 rounded border border-line text-foreground-secondary hover:bg-surface-soft shrink-0"
+        className="shrink-0"
       >
         Link Login
-      </button>
+      </Button>
     );
   }
 
   return (
     <form onSubmit={handleSubmit} className="flex items-center gap-1.5 shrink-0">
-      <input
+      <Input
         type="text"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
         minLength={8}
         required
-        className="w-32 rounded border border-line px-1.5 py-1 text-xs font-mono"
+        className="w-32 py-1.5 text-xs font-mono"
       />
-      <button
-        type="submit"
-        disabled={submitting}
-        className="text-xs px-2 py-1 rounded bg-brand text-white disabled:opacity-50"
-      >
+      <Button type="submit" size="sm" disabled={submitting}>
         {submitting ? "Creating…" : "Create"}
-      </button>
-      <button
-        type="button"
-        onClick={() => setOpen(false)}
-        disabled={submitting}
-        className="text-xs px-2 py-1 rounded border border-line text-foreground-secondary hover:bg-surface-soft"
-      >
+      </Button>
+      <Button type="button" variant="secondary" size="sm" onClick={() => setOpen(false)} disabled={submitting}>
         Cancel
-      </button>
-      {error && <span className="text-xs text-red-600">{error}</span>}
+      </Button>
+      {error && <span className="text-xs text-error">{error}</span>}
     </form>
   );
 }
@@ -1142,14 +1153,7 @@ function Field({
   return (
     <div>
       <label className="block text-sm font-medium text-foreground-secondary mb-1">{label}</label>
-      <input
-        type={type}
-        required={required}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        list={list}
-        className="w-full rounded border border-line px-3 py-2 text-sm"
-      />
+      <Input type={type} required={required} value={value} onChange={(e) => onChange(e.target.value)} list={list} />
     </div>
   );
 }
@@ -1183,23 +1187,22 @@ function QuantityUomFields({
         Planned Quantity &amp; Unit of Measure
       </label>
       <div className="grid grid-cols-2 gap-3">
-        <input
+        <Input
           type="number"
           step="any"
           value={plannedQuantity}
           onChange={(e) => onPlannedQuantityChange(e.target.value)}
           placeholder="e.g. 100.00"
           aria-label="Planned Quantity"
-          className="w-full rounded border border-line px-3 py-2 text-sm"
+          className="tabular-nums"
         />
-        <input
+        <Input
           type="text"
           value={unitOfMeasure}
           onChange={(e) => onUnitOfMeasureChange(e.target.value)}
           list={UOM_DATALIST_ID}
           placeholder="e.g. m², LF, Nos, EA"
           aria-label="Unit of Measure"
-          className="w-full rounded border border-line px-3 py-2 text-sm"
         />
       </div>
       <p className="text-xs text-foreground-muted mt-1">
@@ -1226,7 +1229,7 @@ function SelectField({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded border border-line px-3 py-2 text-sm"
+        className="w-full rounded-lg border border-line bg-white px-3 py-2.5 text-sm text-foreground transition-colors duration-150 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>
@@ -1240,13 +1243,9 @@ function SelectField({
 
 function SubmitButton({ submitting, label }: { submitting: boolean; label: string }) {
   return (
-    <button
-      type="submit"
-      disabled={submitting}
-      className="rounded bg-brand text-white text-sm font-medium px-4 py-2 disabled:opacity-50"
-    >
+    <Button type="submit" disabled={submitting}>
       {submitting ? "Saving…" : label}
-    </button>
+    </Button>
   );
 }
 
@@ -1260,23 +1259,31 @@ function ListSection({
   children: React.ReactNode;
 }) {
   return (
-    <section className="bg-white rounded-lg border border-line p-4">
-      <h2 className="font-semibold text-foreground text-sm mb-2">{title}</h2>
-      {empty ? <p className="text-sm text-foreground-muted">None yet.</p> : <div>{children}</div>}
-    </section>
+    <Card className="p-0 overflow-hidden">
+      <h2 className="font-semibold text-foreground text-sm px-4 py-3 border-b border-line">{title}</h2>
+      {empty ? (
+        <EmptyState icon={Inbox} title="None yet" />
+      ) : (
+        <div className="divide-y divide-line">{children}</div>
+      )}
+    </Card>
   );
 }
 
+/** One list row — Stripe-inspired: generous height (44-48px), no zebra
+ * striping (whitespace/border does the separating), a subtle hover
+ * highlight. */
 function Row({ children }: { children: React.ReactNode }) {
-  return <div className="py-1.5 border-b border-line last:border-0 text-sm">{children}</div>;
+  return (
+    <div className="flex min-h-[46px] items-center gap-2 px-4 py-2.5 text-sm transition-colors duration-150 hover:bg-surface-hover">
+      {children}
+    </div>
+  );
 }
 
 function StatusBadge({ status }: { status: string }) {
-  return (
-    <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-100 text-foreground-secondary">
-      {status}
-    </span>
-  );
+  const variant: BadgeVariant = status === "Active" ? "success" : status === "Removed" ? "error" : "neutral";
+  return <Badge variant={variant}>{status}</Badge>;
 }
 
 function EmptyPrereq({ message }: { message: string }) {

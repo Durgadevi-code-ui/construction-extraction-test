@@ -12,20 +12,9 @@ import {
 import { listDelegations, resolveAdminSetupAccess } from "@/lib/delegation";
 import { listSelectableUsers } from "@/lib/workflow";
 import { requireCurrentUser } from "@/lib/session";
-import { logout } from "@/app/login/actions";
 import AdminSetupPanel from "@/components/admin/AdminSetupPanel";
 
 export const dynamic = "force-dynamic";
-
-function SignOutLink() {
-  return (
-    <form action={logout} className="inline">
-      <button type="submit" className="text-sm text-brand hover:underline">
-        Sign out
-      </button>
-    </form>
-  );
-}
 
 export default async function AdminSetupPage() {
   const currentUser = await requireCurrentUser("/admin/setup");
@@ -154,20 +143,8 @@ export default async function AdminSetupPage() {
       : users.filter((u) => u.projectRoles.some((r) => inDepartmentScope(r.departmentId)));
 
   return (
-    <main className="min-h-screen py-8 px-4 sm:px-6 lg:px-10">
-      <div className="max-w-[1600px] mx-auto space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Admin Setup</h1>
-          <SignOutLink />
-          {!access.isRealAdmin && (
-            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2 inline-block">
-              Viewing under a temporary administrative delegation — scope is limited to what was
-              explicitly granted.
-            </p>
-          )}
-        </div>
-
-        <AdminSetupPanel
+    <main className="flex-1 flex flex-col">
+      <AdminSetupPanel
           adminUserId={userId}
           isRealAdmin={access.isRealAdmin}
           delegatedPermissions={Array.from(access.permissions)}
@@ -181,7 +158,6 @@ export default async function AdminSetupPage() {
           contractors={contractors}
           standardDepartments={standardDepartments}
         />
-      </div>
     </main>
   );
 }

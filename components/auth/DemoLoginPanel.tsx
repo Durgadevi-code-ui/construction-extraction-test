@@ -1,15 +1,16 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { demoLogin, type DemoLoginState } from "@/app/login/demoActions";
 import type { DemoRoleOption } from "@/lib/demoAuth";
 
 /**
  * Renders only the roles the server says are actually configured (see
  * lib/demoAuth.ts getAvailableDemoRoles) — never a client-side list the
- * browser could edit to add a role that isn't really available. Each
- * button submits only its fixed role key; the server resolves the
- * email (see app/login/demoActions.ts).
+ * browser could edit to add a role that isn't really available. Two
+ * compact selects (Role, then Demo User within that role) replace the
+ * old one-button-per-account grid; the resolved DemoRoleKey still goes
+ * through the same `demoLogin` server action unchanged.
  */
 export default function DemoLoginPanel({ roles }: { roles: DemoRoleOption[] }) {
   const [state, formAction, pending] = useActionState<DemoLoginState, FormData>(
@@ -17,15 +18,9 @@ export default function DemoLoginPanel({ roles }: { roles: DemoRoleOption[] }) {
     undefined
   );
 
-  if (roles.length === 0) return null;
-
-  // Grouped under a heading per role section (Admin / Contractor /
-  // Subcontractor / Worker) rather than one flat list — with 11 accounts,
-  // department alone in the button label isn't enough to scan quickly;
-  // the group heading narrows it to "which role" at a glance, the
-  // button label itself narrows it to "which department" (see
-  // lib/demoAuth.ts DEMO_ROLE_GROUPS/DEMO_ROLE_ORDER for where the
-  // grouping/order comes from — never reordered client-side).
+  // Groups in the order the server already provides them (see
+  // lib/demoAuth.ts DEMO_ROLE_ORDER/DEMO_ROLE_GROUPS: Admin, Contractor,
+  // Subcontractor, Worker) — never reordered client-side.
   const groups: { name: string; roles: typeof roles }[] = [];
   for (const role of roles) {
     const existing = groups.find((g) => g.name === role.group);
@@ -33,39 +28,85 @@ export default function DemoLoginPanel({ roles }: { roles: DemoRoleOption[] }) {
     else groups.push({ name: role.group, roles: [role] });
   }
 
+  const [groupName, setGroupName] = useState(groups[0]?.name ?? "");
+  const activeGroup = groups.find((g) => g.name === groupName) ?? groups[0];
+  const [selectedKey, setSelectedKey] = useState<string>(activeGroup?.roles[0]?.key ?? "");
+
+  // Re-select the first account in the newly chosen role right away, so
+  // "Demo User" never shows a stale option from the previous group.
+  function handleGroupChange(name: string) {
+    setGroupName(name);
+    const nextGroup = groups.find((g) => g.name === name);
+    setSelectedKey(nextGroup?.roles[0]?.key ?? "");
+  }
+
+  if (roles.length === 0) return null;
+
   return (
-    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3">
+    <div className="bg-brand-soft border border-brand-border rounded-xl p-4 space-y-3">
       <div>
-        <h2 className="text-sm font-semibold text-amber-900">Demo Mode</h2>
-        <p className="text-xs text-amber-700">
+        <h2 className="text-sm font-semibold text-foreground">Demo Mode</h2>
+        <p className="text-xs text-foreground-secondary">
           Enter as a predefined demo identity — no password needed. For development/demo
           environments only.
         </p>
       </div>
-      <div className="space-y-3">
-        {groups.map((group) => (
-          <div key={group.name}>
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-700 mb-1">
-              {group.name}
-            </p>
-            <div className="grid grid-cols-2 gap-2">
-              {group.roles.map((role) => (
-                <form key={role.key} action={formAction}>
-                  <input type="hidden" name="role" value={role.key} />
-                  <button
-                    type="submit"
-                    disabled={pending}
-                    className="w-full rounded border border-amber-300 bg-white text-amber-900 text-sm font-medium px-3 py-2 hover:bg-amber-100 disabled:opacity-50"
-                  >
-                    {role.label}
-                  </button>
-                </form>
+
+      <form action={formAction} className="space-y-3">
+        <input type="hidden" name="role" value={selectedKey} />
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-foreground-muted mb-1">
+              Role
+            </label>
+            <select
+              value={groupName}
+              onChange={(e) => handleGroupChange(e.target.value)}
+              className="w-full rounded-lg border border-brand-border bg-white text-foreground text-sm px-2.5 py-2 transition-colors duration-150 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+            >
+              {groups.map((g) => (
+                <option key={g.name} value={g.name}>
+                  {g.name}
+                </option>
               ))}
-            </div>
+            </select>
           </div>
-        ))}
-      </div>
-      {state?.error && <p className="text-xs text-red-600">{state.error}</p>}
+
+          {activeGroup && activeGroup.roles.length > 1 && (
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wide text-foreground-muted mb-1">
+                Demo User
+              </label>
+              <select
+                value={selectedKey}
+                onChange={(e) => setSelectedKey(e.target.value)}
+                className="w-full rounded-lg border border-brand-border bg-white text-foreground text-sm px-2.5 py-2 transition-colors duration-150 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+              >
+                {activeGroup.roles.map((role) => (
+                  <option key={role.key} value={role.key}>
+                    {role.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+
+        <button
+          type="submit"
+          disabled={pending || !selectedKey}
+          className="w-full rounded-lg bg-brand text-white text-sm font-semibold px-3 py-2 transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
+        >
+          {pending ? "Entering…" : "Enter Demo"}
+        </button>
+      </form>
+
+      {state?.error && (
+        <p className="rounded-lg border border-error-border bg-error-soft px-2.5 py-1.5 text-xs text-error">
+          {state.error}
+        </p>
+      )}
     </div>
   );
 }

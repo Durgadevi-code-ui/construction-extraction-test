@@ -11,7 +11,6 @@ import {
 } from "@/lib/workflow";
 import { requireCurrentUser } from "@/lib/session";
 import { logout } from "@/app/login/actions";
-import NotificationBell from "@/components/workflow/NotificationBell";
 import WorkerTabs from "@/components/workflow/WorkerTabs";
 
 export const dynamic = "force-dynamic";
@@ -157,18 +156,9 @@ export default async function WorkerPage({
       : null;
 
   return (
-    <main className="min-h-screen py-8 px-4 sm:px-6 lg:px-10">
-      <div className="mx-auto max-w-[1600px] space-y-6">
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">Worker Dashboard</h1>
-            <SignOutLink />
-          </div>
-          <NotificationBell userId={userId} />
-        </div>
-
-        <WorkerTabs
-          workerId={userId}
+    <main className="flex-1 flex flex-col">
+      <WorkerTabs
+        workerId={userId}
           projectName={dashboard.projectName}
           departmentName={dashboard.departmentName}
           activeWorkItem={dashboard.workItem}
@@ -193,7 +183,6 @@ export default async function WorkerPage({
           history={history}
           approvedWork={approvedWork}
         />
-      </div>
     </main>
   );
 }

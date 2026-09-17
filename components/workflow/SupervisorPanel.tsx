@@ -6,6 +6,10 @@ import { useState } from "react";
 import { formatPercent, formatQuantity, humanizeApprovalStatus } from "@/lib/format";
 import StatusFlow from "@/components/workflow/StatusFlow";
 import PlannedQuantityEditor from "@/components/workflow/PlannedQuantityEditor";
+import Card from "@/components/ui/Card";
+import Button from "@/components/ui/Button";
+import Badge from "@/components/ui/Badge";
+import Input from "@/components/ui/Input";
 
 export type SupervisorQueueItem = {
   submissionId: string;
@@ -81,28 +85,28 @@ type Props = {
  * (MTD / Work Summary tab only). */
 function ProgressListCard({ title, items }: { title: string; items: WorkItemProgressView[] }) {
   return (
-    <section className="bg-white rounded-lg border border-line p-4 space-y-2 text-sm">
+    <Card className="space-y-2 text-sm">
       <h2 className="font-semibold text-foreground">{title}</h2>
       {items.length === 0 ? (
         <p className="text-foreground-muted">No work items.</p>
       ) : (
-        <div className="space-y-1.5">
+        <div className="divide-y divide-line">
           {items.map((item) => (
-            <p key={item.workItemId}>
+            <p key={item.workItemId} className="py-2 first:pt-0 last:pb-0">
               <span className="text-foreground-secondary">{item.workItemCode}</span>{" "}
               <span>{item.workItemDescription}:</span>{" "}
               {item.approvedQuantity !== null && (
-                <span className="font-medium">
+                <span className="font-medium tabular-nums">
                   {formatQuantity(item.approvedQuantity)} of {formatQuantity(item.plannedQuantity)}{" "}
                   {item.unitOfMeasure ?? ""} ·{" "}
                 </span>
               )}
-              <span className="font-medium">{formatPercent(item.progress)}</span>
+              <span className="font-medium tabular-nums">{formatPercent(item.progress)}</span>
             </p>
           ))}
         </div>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -130,10 +134,10 @@ function SubmissionActivityCard({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <section className="bg-white rounded-lg border border-line p-4 space-y-2 text-sm">
+    <Card className="space-y-2 text-sm">
       <div className="flex items-center justify-between">
         <h2 className="font-semibold text-foreground">{title}</h2>
-        <span className="text-xs text-foreground-muted">
+        <span className="text-xs text-foreground-muted tabular-nums">
           {items.length} submission{items.length === 1 ? "" : "s"}
         </span>
       </div>
@@ -143,7 +147,7 @@ function SubmissionActivityCard({
       ) : !expanded ? (
         <button
           onClick={() => setExpanded(true)}
-          className="text-sm text-brand hover:underline"
+          className="text-sm text-brand transition-colors duration-150 hover:underline"
         >
           {detailsLabel}
         </button>
@@ -151,16 +155,13 @@ function SubmissionActivityCard({
         <>
           <button
             onClick={() => setExpanded(false)}
-            className="text-sm text-brand hover:underline"
+            className="text-sm text-brand transition-colors duration-150 hover:underline"
           >
             Hide Details
           </button>
-          <div className="space-y-3">
+          <div className="divide-y divide-line">
             {items.map((item) => (
-              <div
-                key={item.submissionId}
-                className="border border-line rounded p-2 space-y-0.5"
-              >
+              <div key={item.submissionId} className="py-2.5 first:pt-0 last:pb-0 space-y-0.5">
                 <p>
                   <span className="text-foreground-secondary">Worker:</span>{" "}
                   <span className="font-medium">{item.workerName}</span>{" "}
@@ -172,7 +173,7 @@ function SubmissionActivityCard({
                 </p>
                 <p>
                   <span className="text-foreground-secondary">Submitted:</span>{" "}
-                  <span className="font-medium">
+                  <span className="font-medium tabular-nums">
                     {item.submittedQuantity !== null
                       ? `${formatQuantity(item.submittedQuantity)} ${item.unit ?? ""}`.trim()
                       : formatPercent(item.submittedProgress)}
@@ -187,14 +188,14 @@ function SubmissionActivityCard({
           </div>
         </>
       )}
-    </section>
+    </Card>
   );
 }
 
 function StatCard({ label, value }: { label: string; value: number | string }) {
   return (
-    <div className="bg-white rounded-lg border border-line p-3 text-center">
-      <p className="text-xl font-semibold text-foreground">{value}</p>
+    <div className="rounded-lg border border-line bg-white p-3 text-center">
+      <p className="text-xl font-semibold text-foreground tabular-nums">{value}</p>
       <p className="text-xs text-foreground-secondary">{label}</p>
     </div>
   );
@@ -284,10 +285,7 @@ export default function SupervisorPanel({
     const displayedProgress = isEditing ? progressDraft : currentProgress;
 
     return (
-      <section
-        key={validationId}
-        className="bg-white rounded-lg border border-line p-4 space-y-2 text-sm"
-      >
+      <Card key={validationId} className="space-y-2 text-sm">
         <p>
           <span className="text-foreground-secondary">Worker:</span>{" "}
           <span className="font-medium">{item.workerName}</span>
@@ -315,54 +313,52 @@ export default function SupervisorPanel({
             <label className="block text-foreground-secondary mb-1">
               {item.correctedProgress !== null ? "Corrected Progress:" : "Submitted Progress:"}
             </label>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={progressDraft}
-              onChange={(e) => setProgressDraft(Number(e.target.value))}
-              className="w-24 rounded border border-line px-2 py-1"
-            />
-            %
+            <div className="flex items-center gap-1.5">
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                value={progressDraft}
+                onChange={(e) => setProgressDraft(Number(e.target.value))}
+                className="w-24 tabular-nums"
+              />
+              %
+            </div>
           </div>
         ) : item.correctedProgress !== null ? (
           <>
             <p>
               <span className="text-foreground-secondary">Corrected Progress:</span>{" "}
-              <span className="font-medium">{formatPercent(displayedProgress)}</span>
+              <span className="font-medium tabular-nums">{formatPercent(displayedProgress)}</span>
             </p>
             <p>
               <span className="text-foreground-secondary">Originally Submitted:</span>{" "}
-              {formatPercent(item.submittedProgress)}
+              <span className="tabular-nums">{formatPercent(item.submittedProgress)}</span>
             </p>
           </>
         ) : (
           <p>
             <span className="text-foreground-secondary">Submitted Progress:</span>{" "}
-            <span className="font-medium">{formatPercent(displayedProgress)}</span>
+            <span className="font-medium tabular-nums">{formatPercent(displayedProgress)}</span>
           </p>
         )}
 
         {item.scheduledValue !== null && (
           <p>
             <span className="text-foreground-secondary">Estimated Amount:</span>{" "}
-            <span className="font-medium">
+            <span className="font-medium tabular-nums">
               {item.estimatedAmount !== null
                 ? `$${item.estimatedAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
                 : "—"}
             </span>
           </p>
         )}
-        <p>
+        <p className="flex flex-wrap items-center gap-1.5">
           <span className="text-foreground-secondary">Status:</span>{" "}
-          <span className="font-medium">{humanizeApprovalStatus(item.approvalStatus)}</span>{" "}
-          <span
-            className={`text-xs px-2 py-0.5 rounded-full ${
-              item.isCompleted ? "bg-green-100 text-green-700" : "bg-gray-100 text-foreground-secondary"
-            }`}
-          >
+          <span className="font-medium">{humanizeApprovalStatus(item.approvalStatus)}</span>
+          <Badge variant={item.isCompleted ? "success" : "neutral"}>
             {item.isCompleted ? "Completed" : "Not Completed"}
-          </span>
+          </Badge>
         </p>
         <StatusFlow statusCode={approvalStatusFlowCode(item.approvalStatus)} />
 
@@ -372,85 +368,86 @@ export default function SupervisorPanel({
             onChange={(e) => setCommentDraft(e.target.value)}
             rows={2}
             placeholder="Add a comment…"
-            className="w-full rounded border border-line px-2 py-1"
+            className="w-full rounded-lg border border-line px-3 py-2 text-sm transition-colors duration-150 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
           />
         )}
 
         <div className="flex gap-2 pt-1 flex-wrap">
-          <button
-            onClick={() => run(validationId, "approve")}
-            disabled={busyId === validationId}
-            className="text-xs px-3 py-1.5 rounded bg-green-600 text-white disabled:opacity-50"
-          >
+          <Button size="sm" onClick={() => run(validationId, "approve")} disabled={busyId === validationId}>
             Approve
-          </button>
+          </Button>
           {!isEditing ? (
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => {
                 setEditingId(validationId);
                 setProgressDraft(currentProgress);
               }}
-              className="text-xs px-3 py-1.5 rounded border border-line text-foreground-secondary hover:bg-surface-soft"
             >
               Edit
-            </button>
+            </Button>
           ) : (
             <>
-              <button
+              <Button
+                size="sm"
                 onClick={() => run(validationId, "edit", { progressPercentage: progressDraft })}
                 disabled={busyId === validationId}
-                className="text-xs px-3 py-1.5 rounded bg-brand text-white disabled:opacity-50"
               >
                 Save
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => setEditingId(null)}
                 disabled={busyId === validationId}
-                className="text-xs px-3 py-1.5 rounded border border-line text-foreground-secondary hover:bg-surface-soft disabled:opacity-50"
               >
                 Cancel
-              </button>
+              </Button>
             </>
           )}
           {!isCommenting ? (
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => {
                 setCommentingId(validationId);
                 setCommentDraft("");
               }}
-              className="text-xs px-3 py-1.5 rounded border border-line text-foreground-secondary hover:bg-surface-soft"
             >
               Add Comment
-            </button>
+            </Button>
           ) : (
             <>
-              <button
+              <Button
+                size="sm"
                 onClick={() => run(validationId, "comment", { comment: commentDraft })}
                 disabled={busyId === validationId}
-                className="text-xs px-3 py-1.5 rounded bg-brand text-white disabled:opacity-50"
               >
                 Save Comment
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => setCommentingId(null)}
                 disabled={busyId === validationId}
-                className="text-xs px-3 py-1.5 rounded border border-line text-foreground-secondary hover:bg-surface-soft disabled:opacity-50"
               >
                 Cancel
-              </button>
+              </Button>
             </>
           )}
           {item.approvalStatus === "APPROVED" && (
-            <button
+            <Button
+              variant="danger"
+              size="sm"
               onClick={() => run(validationId, "rollback")}
               disabled={busyId === validationId}
-              className="text-xs px-3 py-1.5 rounded border border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-50"
             >
               Rollback
-            </button>
+            </Button>
           )}
         </div>
-      </section>
+      </Card>
     );
   }
 
@@ -458,22 +455,12 @@ export default function SupervisorPanel({
     <div className="space-y-6">
       {!forcedTab && (
         <div className="flex gap-2">
-          <button
-            onClick={() => setTab("today")}
-            className={`text-sm px-3 py-1.5 rounded ${
-              tab === "today" ? "bg-brand text-white" : "bg-white border border-line text-foreground-secondary"
-            }`}
-          >
+          <Button variant={tab === "today" ? "primary" : "secondary"} size="sm" onClick={() => setTab("today")}>
             Today&apos;s Progress
-          </button>
-          <button
-            onClick={() => setTab("mtd")}
-            className={`text-sm px-3 py-1.5 rounded ${
-              tab === "mtd" ? "bg-brand text-white" : "bg-white border border-line text-foreground-secondary"
-            }`}
-          >
+          </Button>
+          <Button variant={tab === "mtd" ? "primary" : "secondary"} size="sm" onClick={() => setTab("mtd")}>
             MTD / Work Summary
-          </button>
+          </Button>
         </div>
       )}
 
@@ -494,14 +481,18 @@ export default function SupervisorPanel({
 
           <Link
             href="/workflow/supervisor/history"
-            className="inline-block text-sm text-brand hover:underline"
+            className="inline-block text-sm text-brand transition-colors duration-150 hover:underline"
           >
             View Submission History
           </Link>
 
           <div>
             <h2 className="font-semibold text-foreground mb-3">Today&apos;s Work Summary</h2>
-            {error && <p className="text-sm text-red-600 mb-2">{error}</p>}
+            {error && (
+              <p className="mb-2 rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">
+                {error}
+              </p>
+            )}
             {queue.length === 0 ? (
               <p className="text-sm text-foreground-muted">No submissions to review.</p>
             ) : currentItems.length === 0 ? (
@@ -514,7 +505,7 @@ export default function SupervisorPanel({
               <div className="mt-4">
                 <button
                   onClick={() => setShowHistory((v) => !v)}
-                  className="text-sm text-brand hover:underline"
+                  className="text-sm text-brand transition-colors duration-150 hover:underline"
                 >
                   {showHistory ? "Hide History" : "View History"}
                 </button>
@@ -534,7 +525,7 @@ export default function SupervisorPanel({
         <div className="space-y-6">
           <ProgressListCard title="MTD Progress" items={mtdProgress} />
 
-          <section className="bg-white rounded-lg border border-line p-4 space-y-3 text-sm">
+          <Card className="space-y-3 text-sm">
             <h2 className="font-semibold text-foreground">Work Summary</h2>
             <p>
               <span className="text-foreground-secondary">Project:</span> {workSummary.projectName}
@@ -549,21 +540,20 @@ export default function SupervisorPanel({
               </p>
             )}
 
-            <div className="pt-2 space-y-3">
+            <div className="pt-2 divide-y divide-line">
               {workSummary.workItems.map((item) => (
-                <div
-                  key={item.workItemId}
-                  className="border border-line rounded p-3 space-y-1"
-                >
+                <div key={item.workItemId} className="py-3 first:pt-0 last:pb-0 space-y-1">
                   <p>
                     <span className="text-foreground-secondary">{item.workItemCode}</span>{" "}
                     <span className="font-medium">{item.workItemDescription}</span>
                   </p>
                   <p>
                     <span className="text-foreground-secondary">Estimated Amount (Scheduled Value):</span>{" "}
-                    {item.scheduledValue !== null
-                      ? `$${item.scheduledValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-                      : "Not set for this work item"}
+                    <span className="tabular-nums">
+                      {item.scheduledValue !== null
+                        ? `$${item.scheduledValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                        : "Not set for this work item"}
+                    </span>
                   </p>
                   <p>
                     <span className="text-foreground-secondary">Planned Quantity:</span>{" "}
@@ -575,35 +565,28 @@ export default function SupervisorPanel({
                     />
                   </p>
                   {(item.progress !== null || item.approvedQuantity !== null) && (
-                    <p>
+                    <p className="flex flex-wrap items-center gap-1.5">
                       <span className="text-foreground-secondary">MTD Progress:</span>{" "}
                       {item.approvedQuantity !== null && (
-                        <span className="font-medium">
+                        <span className="font-medium tabular-nums">
                           {formatQuantity(item.approvedQuantity)} of {formatQuantity(item.plannedQuantity)}{" "}
                           {item.unitOfMeasure ?? ""} ·{" "}
                         </span>
                       )}
-                      <span className="font-medium">{formatPercent(item.progress)}</span>
+                      <span className="font-medium tabular-nums">{formatPercent(item.progress)}</span>
                       {item.scheduledValue !== null && (
                         <>
-                          {" "}
                           <span className="text-foreground-secondary">· Estimated Amount:</span>{" "}
-                          <span className="font-medium">
+                          <span className="font-medium tabular-nums">
                             {item.estimatedAmount !== null
                               ? `$${item.estimatedAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
                               : "—"}
                           </span>
                         </>
-                      )}{" "}
-                      <span
-                        className={`text-xs px-2 py-0.5 rounded-full ${
-                          item.isCompleted
-                            ? "bg-green-100 text-green-700"
-                            : "bg-gray-100 text-foreground-secondary"
-                        }`}
-                      >
+                      )}
+                      <Badge variant={item.isCompleted ? "success" : "neutral"}>
                         {item.isCompleted ? "Completed" : "Not Completed"}
-                      </span>
+                      </Badge>
                     </p>
                   )}
                 </div>
@@ -627,7 +610,7 @@ export default function SupervisorPanel({
                 <StatCard label="Rolled Back" value={workSummary.rolledBackCount} />
               </div>
             </div>
-          </section>
+          </Card>
         </div>
       )}
     </div>

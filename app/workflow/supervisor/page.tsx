@@ -16,23 +16,11 @@ import { getActiveDelegationsForUser } from "@/lib/delegation";
 import { listDepartments } from "@/lib/admin";
 import { getDashboardData } from "@/lib/dashboard";
 import { requireCurrentUser } from "@/lib/session";
-import { logout } from "@/app/login/actions";
 import ContractorTabs from "@/components/workflow/ContractorTabs";
 import { type DelegatedDepartmentScope } from "@/components/workflow/DelegatedAdminPanel";
-import NotificationBell from "@/components/workflow/NotificationBell";
 import { formatDateUS } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
-
-function SignOutLink() {
-  return (
-    <form action={logout} className="inline">
-      <button type="submit" className="text-sm text-brand hover:underline">
-        Sign out
-      </button>
-    </form>
-  );
-}
 
 export default async function SupervisorPage() {
   const currentUser = await requireCurrentUser("/workflow/supervisor");
@@ -168,16 +156,7 @@ export default async function SupervisorPage() {
   );
 
   return (
-    <main className="min-h-screen py-8 px-4 sm:px-6 lg:px-10">
-      <div className="max-w-[1600px] mx-auto space-y-6">
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">Contractor Dashboard</h1>
-            <SignOutLink />
-          </div>
-          <NotificationBell userId={userId} />
-        </div>
-
+    <main className="flex-1 flex flex-col space-y-6">
         {activeDelegations.length > 0 && (
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 space-y-1">
             <p className="font-medium">Active delegated Admin access:</p>
@@ -204,7 +183,6 @@ export default async function SupervisorPage() {
           workSummary={workSummary}
           delegatedScopes={delegatedScopes}
         />
-      </div>
     </main>
   );
 }

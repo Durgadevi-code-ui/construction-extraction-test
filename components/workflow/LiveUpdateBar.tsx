@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { Camera, Mic, Square } from "lucide-react";
 
 type Props = {
   /** Optional — associates the live update with the worker's current
@@ -91,12 +92,12 @@ export default function LiveUpdateBar({ workItemId }: Props) {
   const busy = status === "uploading";
 
   return (
-    <div className="rounded-xl border border-orange-200 bg-gradient-to-br from-brand-soft to-surface-soft p-3.5">
+    <div className="rounded-xl border border-line bg-surface p-3.5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
         <div className="flex items-center gap-2">
           <span className="relative flex h-2 w-2" aria-hidden="true">
-            <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-60" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-brand" />
+            <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full bg-info opacity-60" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-info" />
           </span>
           <h3 className="text-sm font-semibold tracking-wide text-foreground">Live Update</h3>
           <span className="text-xs text-foreground-muted">(optional)</span>
@@ -120,9 +121,12 @@ export default function LiveUpdateBar({ workItemId }: Props) {
           type="button"
           onClick={() => photoInputRef.current?.click()}
           disabled={busy}
-          className="inline-flex items-center gap-1.5 rounded-full border border-orange-200 bg-white px-3.5 py-1.5 text-sm font-medium text-foreground-secondary shadow-sm transition-colors hover:border-brand hover:bg-brand hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-lg border border-line bg-surface-soft pl-2 pr-3.5 py-1.5 text-sm font-medium text-foreground-secondary transition-colors duration-150 hover:border-brand-border hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:opacity-50"
         >
-          📷 Photo
+          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-brand text-white">
+            <Camera className="h-3.5 w-3.5" strokeWidth={2} />
+          </span>
+          Photo
         </button>
 
         <div className="relative">
@@ -130,21 +134,28 @@ export default function LiveUpdateBar({ workItemId }: Props) {
             type="button"
             onClick={() => (recording ? stopRecording() : setVoiceMenuOpen((v) => !v))}
             disabled={busy}
-            className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-medium shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:opacity-50 ${
+            className={`inline-flex items-center gap-2 rounded-lg border pl-2 pr-3.5 py-1.5 text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:opacity-50 ${
               recording
-                ? "border-red-300 bg-red-50 text-red-700"
-                : "border-orange-200 bg-white text-foreground-secondary hover:border-brand hover:bg-brand hover:text-white"
+                ? "border-error-border bg-error-soft text-error"
+                : "border-line bg-surface-soft text-foreground-secondary hover:border-info-border hover:bg-info-soft"
             }`}
           >
-            🎤 {recording ? "Stop" : "Voice"}
+            <span
+              className={`flex h-6 w-6 items-center justify-center rounded-md text-white ${
+                recording ? "bg-error" : "bg-info"
+              }`}
+            >
+              {recording ? <Square className="h-3.5 w-3.5" strokeWidth={2} /> : <Mic className="h-3.5 w-3.5" strokeWidth={2} />}
+            </span>
+            {recording ? "Stop" : "Voice"}
           </button>
 
           {voiceMenuOpen && !recording && (
-            <div className="absolute z-10 mt-1 w-36 rounded-lg border border-line bg-surface p-1 shadow-lg">
+            <div className="absolute z-10 mt-1 w-36 animate-dropdown-in rounded-lg border border-line bg-surface p-1 shadow-lg">
               <button
                 type="button"
                 onClick={startRecording}
-                className="block w-full rounded px-2 py-1.5 text-left text-sm text-foreground hover:bg-gray-50"
+                className="block w-full rounded px-2 py-1.5 text-left text-sm text-foreground transition-colors duration-150 hover:bg-surface-hover"
               >
                 Start recording
               </button>
@@ -153,7 +164,7 @@ export default function LiveUpdateBar({ workItemId }: Props) {
         </div>
 
         {message && status !== "uploading" && (
-          <span className={`text-xs ${status === "error" ? "text-red-600" : "text-green-700"}`}>
+          <span className={`text-xs ${status === "error" ? "text-error" : "text-success"}`}>
             {message}
           </span>
         )}

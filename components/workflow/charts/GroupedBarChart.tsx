@@ -74,7 +74,7 @@ export default function GroupedBarChart({
                       <text
                         x={0}
                         y={rowY + (ROW_HEIGHT * rowsPerGroup) / 2 + 4}
-                        className="fill-gray-700 text-[10px] font-medium"
+                        className="fill-[#111827] text-[10px] font-medium"
                       >
                         <title>{group.label}</title>
                         {truncate(group.label, 20)}
@@ -85,8 +85,8 @@ export default function GroupedBarChart({
                       y={rowY}
                       width={barAreaWidth}
                       height={ROW_HEIGHT}
-                      className="fill-gray-50"
-                      rx={2}
+                      className="fill-[#f0f1f3]"
+                      rx={3}
                     />
                     <rect
                       x={LABEL_WIDTH}
@@ -94,7 +94,8 @@ export default function GroupedBarChart({
                       width={barWidth}
                       height={ROW_HEIGHT}
                       fill={s.fill}
-                      rx={2}
+                      rx={3}
+                      style={{ transition: "width 500ms ease-out" }}
                     >
                       <title>
                         {group.label} · {s.label}:{" "}
@@ -104,7 +105,7 @@ export default function GroupedBarChart({
                     <text
                       x={LABEL_WIDTH + barAreaWidth + 8}
                       y={rowY + ROW_HEIGHT / 2 + 4}
-                      className="fill-gray-500 text-[10px]"
+                      className="fill-[#4b5563] text-[10px] tabular-nums"
                     >
                       {value !== null && value !== undefined ? valueFormatter(value) : "—"}
                     </text>

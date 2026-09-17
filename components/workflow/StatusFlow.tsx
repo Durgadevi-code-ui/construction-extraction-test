@@ -1,4 +1,5 @@
 import type { WorkerSubmissionStatusCode } from "@/lib/format";
+import Badge, { type BadgeVariant } from "@/components/ui/Badge";
 
 type Props = {
   statusCode: WorkerSubmissionStatusCode;
@@ -59,15 +60,11 @@ function FlowConnector({ active }: { active: boolean }) {
 }
 
 function FlowNode({ label, state }: { label: string; state: NodeState }) {
-  const styles: Record<NodeState, string> = {
-    done: "bg-green-50 text-green-700 border-green-200",
-    current: "bg-brand-soft text-brand border-orange-200 font-semibold",
-    upcoming: "bg-gray-50 text-gray-400 border-line",
-    "rolled-back": "bg-red-50 text-red-700 border-red-200 font-semibold",
+  const variants: Record<NodeState, BadgeVariant> = {
+    done: "success",
+    current: "brand",
+    upcoming: "neutral",
+    "rolled-back": "error",
   };
-  return (
-    <span className={`px-2 py-1 rounded-full border whitespace-nowrap ${styles[state]}`}>
-      {state === "rolled-back" ? "Rolled Back" : label}
-    </span>
-  );
+  return <Badge variant={variants[state]}>{state === "rolled-back" ? "Rolled Back" : label}</Badge>;
 }

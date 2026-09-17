@@ -26,7 +26,7 @@ export default function TabNav({
           type="button"
           onClick={() => onChange(tab.key)}
           aria-current={active === tab.key ? "page" : undefined}
-          className={`px-3.5 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition-colors ${
+          className={`px-3.5 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition-colors duration-150 ${
             active === tab.key
               ? "bg-brand text-white shadow-sm"
               : "text-foreground-secondary hover:text-foreground"

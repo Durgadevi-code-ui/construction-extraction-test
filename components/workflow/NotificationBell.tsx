@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Bell } from "lucide-react";
 import { formatDateTimeUS } from "@/lib/format";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 
 // Mirrors NotificationRecord (lib/notifications.ts) — the API already
 // returns every one of these fields (see app/api/workflow/notifications/
@@ -244,24 +246,24 @@ export default function NotificationBell({ userId }: { userId: string }) {
       <button
         onClick={() => setOpen((v) => !v)}
         aria-label="Notifications"
-        className="relative rounded-full p-2 text-foreground-secondary hover:bg-gray-100 hover:text-foreground"
+        className="relative rounded-full p-2 text-foreground-secondary transition-colors duration-150 hover:bg-surface-hover hover:text-foreground"
       >
-        <BellIcon />
+        <Bell className="h-5 w-5" strokeWidth={1.75} />
         {unreadCount > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold text-white">
+          <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-error px-1 text-[10px] font-semibold text-white tabular-nums">
             {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         )}
       </button>
 
       {open && (
-        <div className="absolute right-0 z-20 mt-2 w-80 max-w-[90vw] rounded-lg border border-line bg-surface shadow-lg">
+        <div className="absolute right-0 z-20 mt-2 w-80 max-w-[90vw] animate-dropdown-in rounded-lg border border-line bg-surface shadow-lg">
           <div className="flex items-center justify-between border-b border-line px-3 py-2">
             <h3 className="text-sm font-semibold text-foreground">Notifications</h3>
             {unreadCount > 0 && (
               <button
                 onClick={markAllRead}
-                className="text-xs text-brand hover:underline"
+                className="text-xs text-brand transition-colors duration-150 hover:underline"
               >
                 Mark all as read
               </button>
@@ -270,9 +272,11 @@ export default function NotificationBell({ userId }: { userId: string }) {
 
           <div className="max-h-96 overflow-y-auto">
             {loading ? (
-              <p className="px-3 py-6 text-center text-sm text-foreground-muted">Loading…</p>
+              <div className="p-3">
+                <SkeletonRows count={3} rowHeight="h-16" />
+              </div>
             ) : error ? (
-              <p className="px-3 py-6 text-center text-sm text-red-600">{error}</p>
+              <p className="px-3 py-6 text-center text-sm text-error">{error}</p>
             ) : notifications.length === 0 ? (
               <p className="px-3 py-6 text-center text-sm text-foreground-muted">
                 No notifications yet.
@@ -285,13 +289,12 @@ export default function NotificationBell({ userId }: { userId: string }) {
                     <li key={n.notificationId}>
                       <button
                         onClick={() => handleClick(n)}
-                        className={`block w-full px-3 py-2.5 text-left transition-colors hover:bg-gray-50 ${
+                        className={`block w-full px-3 py-2.5 text-left transition-colors duration-150 hover:bg-surface-hover ${
                           n.isRead ? "" : "bg-brand-soft"
                         }`}
                       >
                         <div className="flex items-center gap-1.5">
                           {!n.isRead && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand" />}
-                          <span aria-hidden="true">🔔</span>
                           <span className="text-sm font-semibold text-foreground">{cardTitle(n.type)}</span>
                         </div>
                         {n.workItemDescription && (
@@ -299,7 +302,9 @@ export default function NotificationBell({ userId }: { userId: string }) {
                         )}
                         <p className="mt-0.5 text-sm font-medium text-foreground">{cardHighlight(n)}</p>
                         {subline && <p className="mt-0.5 text-xs text-foreground-secondary">{subline}</p>}
-                        <p className="mt-1 text-[11px] text-foreground-muted">{formatDateTimeUS(n.createdAt)}</p>
+                        <p className="mt-1 text-[11px] text-foreground-muted tabular-nums">
+                          {formatDateTimeUS(n.createdAt)}
+                        </p>
                       </button>
                     </li>
                   );
@@ -310,18 +315,5 @@ export default function NotificationBell({ userId }: { userId: string }) {
         </div>
       )}
     </div>
-  );
-}
-
-function BellIcon() {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      className="h-5 w-5"
-    >
-      <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4a1.5 1.5 0 0 0-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z" />
-    </svg>
   );
 }

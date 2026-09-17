@@ -73,15 +73,15 @@ export default function DailyWorkUpdate({
       </div>
 
       {submittedMessage && (
-        <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg p-3 font-medium">
+        <p className="text-sm text-success bg-success-soft border border-success-border rounded-lg p-3 font-medium">
           {submittedMessage}
         </p>
       )}
 
       {lockState.acceptedType && !reviewedText && (
-        <div className="bg-green-50 border border-green-200 text-green-800 rounded-lg p-4 text-sm font-medium">
+        <div className="bg-success-soft border border-success-border text-success rounded-lg p-4 text-sm font-medium">
           One valid input has been accepted. Other input methods are now locked.
-          <button onClick={handleReset} className="ml-3 underline text-green-700">
+          <button onClick={handleReset} className="ml-3 underline text-success transition-colors duration-150">
             Start Over
           </button>
         </div>

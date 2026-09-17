@@ -1,0 +1,129 @@
+"use client";
+
+import { useState } from "react";
+import { LogOut } from "lucide-react";
+import NotificationBell from "@/components/workflow/NotificationBell";
+import { logout } from "@/app/login/actions";
+
+export type ShellTab = {
+  key: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+};
+
+type Props = {
+  tabs: ShellTab[];
+  activeTab: string;
+  onTabChange: (key: string) => void;
+  heading: string;
+  subheading?: string;
+  /** Renders NotificationBell for this user — omit for a page with no
+   * caller identity yet (there isn't one currently, but keeps the shell
+   * safe to reuse). */
+  userId?: string;
+  children: React.ReactNode;
+};
+
+/**
+ * Shared page shell — sidebar (logo/brand, vertical nav, Sign out) +
+ * main content header (heading/subheading, date chip, notification
+ * bell), extracted so every role's dashboard uses the exact same
+ * visual system as the Worker Dashboard (components/workflow/
+ * WorkerTabs.tsx, the approved visual reference) instead of a
+ * re-implementation that could visually drift from it. Purely
+ * presentational — callers own their own tab state and every bit of
+ * data/business logic; this component renders nothing but chrome.
+ */
+export default function DashboardShell({
+  tabs,
+  activeTab,
+  onTabChange,
+  heading,
+  subheading,
+  userId,
+  children,
+}: Props) {
+  const [logoAvailable, setLogoAvailable] = useState(true);
+
+  return (
+    // No rounded corners/border/shadow/page padding around this shell —
+    // it IS the single application surface directly below TopNav, not a
+    // card floating over a differently-colored page background.
+    <div className="flex flex-col lg:flex-row bg-surface min-h-[calc(100vh-64px)]">
+      <aside className="lg:w-60 shrink-0 bg-gradient-to-b from-brand via-[#173c52] to-info text-white flex flex-col">
+        <div className="px-5 py-5 border-b border-white/10 flex items-center gap-2.5">
+          {logoAvailable && (
+            // eslint-disable-next-line @next/next/no-img-element -- small static brand mark, matches TopNav's own use of the same asset
+            <img
+              src="/agentic-atoms-logo.png"
+              alt="Agentic Atoms"
+              className="h-8 w-8 shrink-0 rounded-full object-contain bg-white/10"
+              onError={() => setLogoAvailable(false)}
+            />
+          )}
+          <div className="min-w-0">
+            <p className="text-sm font-bold tracking-tight truncate">Agentic Atoms</p>
+            <p className="text-[11px] text-white/60 truncate">Construction Automation</p>
+          </div>
+        </div>
+
+        <nav className="flex-1 px-3 py-4 space-y-1 overflow-x-auto lg:overflow-visible">
+          <div className="flex lg:flex-col gap-1">
+            {tabs.map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => onTabChange(key)}
+                aria-current={activeTab === key ? "page" : undefined}
+                className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors duration-150 ${
+                  activeTab === key
+                    ? "bg-info text-white shadow-sm"
+                    : "text-white/70 hover:bg-white/10 hover:text-white"
+                }`}
+              >
+                <Icon className="h-4 w-4 shrink-0" strokeWidth={1.8} />
+                {label}
+              </button>
+            ))}
+          </div>
+        </nav>
+
+        <div className="px-3 py-4 border-t border-white/10">
+          <form action={logout}>
+            <button
+              type="submit"
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-white/70 transition-colors duration-150 hover:bg-white/10 hover:text-white"
+            >
+              <LogOut className="h-4 w-4" strokeWidth={1.8} />
+              Sign out
+            </button>
+          </form>
+        </div>
+      </aside>
+
+      <div className="flex-1 min-w-0 p-5 sm:p-6 space-y-5">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-xl sm:text-2xl font-extrabold text-foreground tracking-tight">{heading}</h2>
+            {subheading && <p className="text-sm text-foreground-secondary">{subheading}</p>}
+          </div>
+          <div className="flex items-center gap-3">
+            <span
+              suppressHydrationWarning
+              className="hidden sm:inline text-xs text-foreground-secondary bg-surface-soft border border-line rounded-full px-3 py-1.5"
+            >
+              {new Date().toLocaleDateString("en-US", {
+                weekday: "long",
+                month: "short",
+                day: "numeric",
+              })}
+            </span>
+            {userId && <NotificationBell userId={userId} />}
+          </div>
+        </div>
+
+        {children}
+      </div>
+    </div>
+  );
+}

@@ -91,7 +91,7 @@ export default function TextInput({ locked, onResult }: Props) {
       <button
         onClick={handleSubmit}
         disabled={locked || status === "PROCESSING"}
-        className="px-4 py-2 bg-blue-600 text-white rounded text-sm font-medium disabled:opacity-50"
+        className="px-4 py-2 bg-success hover:bg-success/90 text-white rounded-lg text-sm font-semibold transition-colors duration-150 disabled:opacity-50"
       >
         {status === "PROCESSING" ? "Validating…" : "Validate & Normalize"}
       </button>

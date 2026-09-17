@@ -9,6 +9,11 @@ import {
 } from "@/lib/delegationTypes";
 import type { Project, Department } from "@/lib/admin";
 import { formatDateUS } from "@/lib/format";
+import Card from "@/components/ui/Card";
+import Button from "@/components/ui/Button";
+import Badge, { type BadgeVariant } from "@/components/ui/Badge";
+import Input from "@/components/ui/Input";
+import { Select } from "@/components/ui/Input";
 
 export type ContractorOption = {
   userId: string;
@@ -100,7 +105,7 @@ function MultiSelectList({
                 key={o.id}
                 type="button"
                 onClick={() => onToggle(o.id)}
-                className="text-xs bg-brand-soft text-orange-700 border border-orange-200 rounded-full px-2 py-0.5 hover:bg-orange-100"
+                className="text-xs bg-brand-soft text-brand border border-brand-border rounded-full px-2 py-0.5 transition-colors duration-150 hover:bg-brand/10"
                 title="Remove"
               >
                 {o.label} ×
@@ -109,15 +114,15 @@ function MultiSelectList({
         </div>
       )}
 
-      <input
+      <Input
         type="text"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         placeholder={searchPlaceholder}
-        className="w-full rounded border border-line px-3 py-1.5 text-sm mb-1"
+        className="mb-1"
       />
 
-      <div className="max-h-40 overflow-y-auto rounded border border-line divide-y divide-line">
+      <div className="max-h-40 overflow-y-auto rounded-lg border border-line divide-y divide-line">
         {options.length === 0 ? (
           <p className="px-3 py-2 text-sm text-foreground-muted">{emptyMessage}</p>
         ) : filtered.length === 0 ? (
@@ -272,7 +277,7 @@ export default function DelegationManager({
 
   return (
     <div className="space-y-4">
-      <div className="bg-brand-soft border border-orange-200 rounded-lg p-3 text-xs text-orange-900">
+      <div className="bg-brand-soft border border-brand-border rounded-xl p-3 text-xs text-foreground">
         Temporarily hand off selected administrative capabilities to a Contractor — e.g. while
         Admin is on leave. Access is scoped to exactly the project(s), department(s) and
         permission(s) selected below and expires automatically at the end time. Leaving
@@ -285,23 +290,19 @@ export default function DelegationManager({
       ) : (
         <form
           onSubmit={handleSubmit}
-          className="bg-white rounded-lg border border-line p-4 space-y-3"
+          className="rounded-xl border border-line bg-surface p-5 shadow-sm space-y-3"
         >
           <h2 className="font-semibold text-foreground text-sm">New Delegation</h2>
 
           <div>
             <label className="block text-sm font-medium text-foreground-secondary mb-1">Contractor</label>
-            <select
-              value={delegateUserId}
-              onChange={(e) => setDelegateUserId(e.target.value)}
-              className="w-full rounded border border-line px-3 py-2 text-sm"
-            >
+            <Select value={delegateUserId} onChange={(e) => setDelegateUserId(e.target.value)}>
               {contractors.map((c) => (
                 <option key={c.userId} value={c.userId}>
                   {c.email} — {c.projectName} / {c.departmentName}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
 
           <MultiSelectList
@@ -401,7 +402,7 @@ export default function DelegationManager({
                     ))}
                   </div>
                 </div>
-                <div className="bg-surface-soft border border-line rounded p-2.5 text-xs text-foreground-secondary">
+                <div className="bg-surface-soft border border-line rounded-lg p-2.5 text-xs text-foreground-secondary">
                   <p className="font-medium text-foreground-secondary mb-1">Always Admin-only (never delegable):</p>
                   <ul className="list-disc list-inside space-y-0.5">
                     {ALWAYS_ADMIN_ONLY.map((item) => (
@@ -416,23 +417,13 @@ export default function DelegationManager({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-foreground-secondary mb-1">Start</label>
-              <input
-                type="datetime-local"
-                value={startsAt}
-                onChange={(e) => setStartsAt(e.target.value)}
-                className="w-full rounded border border-line px-3 py-2 text-sm"
-              />
+              <Input type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
             </div>
             <div>
               <label className="block text-sm font-medium text-foreground-secondary mb-1">End</label>
-              <input
-                type="datetime-local"
-                value={endsAt}
-                onChange={(e) => setEndsAt(e.target.value)}
-                className="w-full rounded border border-line px-3 py-2 text-sm"
-              />
+              <Input type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
               {new Date(endsAt) <= new Date(startsAt) && (
-                <p className="text-xs text-red-600 mt-1">End must be after Start.</p>
+                <p className="text-xs text-error mt-1">End must be after Start.</p>
               )}
             </div>
           </div>
@@ -446,20 +437,20 @@ export default function DelegationManager({
               onChange={(e) => setReason(e.target.value)}
               rows={2}
               placeholder="e.g. Admin on leave Mar 5–7"
-              className="w-full rounded border border-line px-3 py-2 text-sm"
+              className="w-full rounded-lg border border-line px-3 py-2.5 text-sm transition-colors duration-150 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
             />
           </div>
 
           <div className="flex gap-2">
-            <button
+            <Button
               type="submit"
               disabled={submitting || !canSubmit || new Date(endsAt) <= new Date(startsAt)}
-              className="rounded bg-brand text-white text-sm font-medium px-4 py-2 disabled:opacity-50"
             >
               {submitting ? "Creating…" : "Create Delegation"}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="secondary"
               onClick={() => {
                 setProjectIds([]);
                 setDepartmentIds([]);
@@ -467,83 +458,80 @@ export default function DelegationManager({
                 setReason("");
               }}
               disabled={submitting}
-              className="rounded border border-line text-foreground-secondary text-sm font-medium px-4 py-2 disabled:opacity-50"
             >
               Cancel
-            </button>
+            </Button>
           </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && (
+            <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
+          )}
         </form>
       )}
 
-      <section className="bg-white rounded-lg border border-line p-4">
+      <Card>
         <h2 className="font-semibold text-foreground text-sm mb-2">Existing Delegations</h2>
         {delegations.length === 0 ? (
           <p className="text-sm text-foreground-muted">None yet.</p>
         ) : (
-          <div className="space-y-2">
-            {delegations.map((d) => (
-              <div
-                key={d.delegationId}
-                className="py-2 border-b border-line last:border-0 text-sm"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <span className="font-medium">{d.delegateEmail}</span>
-                    <span
-                      className={`ml-2 text-xs px-2 py-0.5 rounded-full ${
-                        d.isCurrentlyActive
-                          ? "bg-green-100 text-green-700"
-                          : "bg-gray-100 text-foreground-secondary"
-                      }`}
-                    >
-                      {d.status === "Revoked"
-                        ? "Revoked"
-                        : d.isCurrentlyActive
-                          ? "Active now"
-                          : new Date(d.startsAt) > new Date()
-                            ? "Scheduled"
-                            : "Expired"}
-                    </span>
+          <div className="divide-y divide-line">
+            {delegations.map((d) => {
+              const statusLabel = d.status === "Revoked"
+                ? "Revoked"
+                : d.isCurrentlyActive
+                  ? "Active now"
+                  : new Date(d.startsAt) > new Date()
+                    ? "Scheduled"
+                    : "Expired";
+              const statusVariant: BadgeVariant =
+                statusLabel === "Active now" ? "success" : statusLabel === "Scheduled" ? "info" : statusLabel === "Revoked" ? "error" : "neutral";
+
+              return (
+                <div key={d.delegationId} className="py-3 first:pt-0 last:pb-0 text-sm">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{d.delegateEmail}</span>
+                      <Badge variant={statusVariant}>{statusLabel}</Badge>
+                    </div>
+                    {d.status === "Active" && d.isCurrentlyActive && (
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        onClick={() => handleRevoke(d.delegationId)}
+                        disabled={busyId === d.delegationId}
+                        className="shrink-0"
+                      >
+                        {busyId === d.delegationId ? "Revoking…" : "Revoke"}
+                      </Button>
+                    )}
                   </div>
-                  {d.status === "Active" && d.isCurrentlyActive && (
-                    <button
-                      onClick={() => handleRevoke(d.delegationId)}
-                      disabled={busyId === d.delegationId}
-                      className="text-xs px-2 py-1 rounded border border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-50 shrink-0"
-                    >
-                      {busyId === d.delegationId ? "Revoking…" : "Revoke"}
-                    </button>
-                  )}
-                </div>
-                <p className="text-foreground-secondary mt-1">
-                  <span className="text-foreground-muted">Projects:</span>{" "}
-                  {d.projects.map((p) => p.projectName).join(", ") || "(none)"}
-                </p>
-                <p className="text-foreground-secondary mt-0.5">
-                  <span className="text-foreground-muted">Departments:</span>{" "}
-                  {d.departments.length > 0
-                    ? d.departments.map((dep) => dep.departmentName).join(", ")
-                    : "Every department of each selected project"}
-                </p>
-                <p className="text-foreground-secondary mt-0.5">
-                  <span className="text-foreground-muted">Permissions:</span>{" "}
-                  {d.permissions.map((p) => PERMISSION_LABEL[p] ?? p).join(" · ")}
-                </p>
-                {d.reason && (
-                  <p className="text-foreground-secondary mt-0.5">
-                    <span className="text-foreground-muted">Reason:</span> {d.reason}
+                  <p className="text-foreground-secondary mt-1">
+                    <span className="text-foreground-muted">Projects:</span>{" "}
+                    {d.projects.map((p) => p.projectName).join(", ") || "(none)"}
                   </p>
-                )}
-                <p className="text-foreground-muted mt-0.5">
-                  {formatDateUS(d.startsAt)} → {formatDateUS(d.endsAt)}{" "}
-                  · granted by {d.adminEmail}
-                </p>
-              </div>
-            ))}
+                  <p className="text-foreground-secondary mt-0.5">
+                    <span className="text-foreground-muted">Departments:</span>{" "}
+                    {d.departments.length > 0
+                      ? d.departments.map((dep) => dep.departmentName).join(", ")
+                      : "Every department of each selected project"}
+                  </p>
+                  <p className="text-foreground-secondary mt-0.5">
+                    <span className="text-foreground-muted">Permissions:</span>{" "}
+                    {d.permissions.map((p) => PERMISSION_LABEL[p] ?? p).join(" · ")}
+                  </p>
+                  {d.reason && (
+                    <p className="text-foreground-secondary mt-0.5">
+                      <span className="text-foreground-muted">Reason:</span> {d.reason}
+                    </p>
+                  )}
+                  <p className="text-foreground-muted mt-0.5 tabular-nums">
+                    {formatDateUS(d.startsAt)} → {formatDateUS(d.endsAt)} · granted by {d.adminEmail}
+                  </p>
+                </div>
+              );
+            })}
           </div>
         )}
-      </section>
+      </Card>
     </div>
   );
 }

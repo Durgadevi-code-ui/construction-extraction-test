@@ -1,4 +1,5 @@
 import { formatPercent, formatQuantity } from "@/lib/format";
+import Card from "@/components/ui/Card";
 
 /**
  * The primary Worker screen — "what work is assigned to me, what's the
@@ -60,20 +61,20 @@ export default function WorkerHeroCard({
           : null;
 
   return (
-    <section className="bg-surface rounded-xl border border-line shadow-sm p-5 space-y-4">
+    <Card className="space-y-4">
       <div>
         <p className="text-xs uppercase tracking-wide text-foreground-muted font-medium">My Work</p>
-        <h2 className="text-xl font-bold text-foreground">{workItemDescription}</h2>
+        <h2 className="text-xl font-bold text-foreground leading-snug">{workItemDescription}</h2>
         <p className="text-xs text-foreground-muted">{workItemCode}</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 text-center">
-        <div className="bg-[#FAFAFA] rounded-lg py-3">
-          <p className="text-lg font-bold text-foreground">{formatQuantity(plannedQuantity)}</p>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+        <div className="bg-surface-soft rounded-lg py-3">
+          <p className="text-lg font-bold text-foreground tabular-nums">{formatQuantity(plannedQuantity)}</p>
           <p className="text-[11px] text-foreground-secondary">Target {unitOfMeasure ?? ""}</p>
         </div>
-        <div className="bg-purple-50 rounded-lg py-3">
-          <p className="text-lg font-bold text-purple-700">
+        <div className="bg-info-soft rounded-lg py-3">
+          <p className="text-lg font-bold text-info tabular-nums">
             {submittedQuantity !== null ? formatQuantity(submittedQuantity) : "—"}
           </p>
           <p className="text-[11px] text-foreground-secondary">
@@ -81,33 +82,33 @@ export default function WorkerHeroCard({
           </p>
         </div>
         <div className="bg-brand-soft rounded-lg py-3">
-          <p className="text-lg font-bold text-brand">
+          <p className="text-lg font-bold text-brand tabular-nums">
             {approvedQuantity !== null ? formatQuantity(approvedQuantity) : formatPercent(pct)}
           </p>
           <p className="text-[11px] text-foreground-secondary">
             Approved / Completed {approvedQuantity !== null ? (unitOfMeasure ?? "") : ""}
           </p>
         </div>
-        <div className="bg-amber-50 rounded-lg py-3">
-          <p className="text-lg font-bold text-amber-700">{formatQuantity(remaining)}</p>
+        <div className="bg-warning-soft rounded-lg py-3">
+          <p className="text-lg font-bold text-warning tabular-nums">{formatQuantity(remaining)}</p>
           <p className="text-[11px] text-foreground-secondary">Remaining {unitOfMeasure ?? ""}</p>
         </div>
       </div>
 
       <div>
-        <div className="h-2.5 w-full rounded-full bg-[#F1E7DF] overflow-hidden">
+        <div className="h-2.5 w-full rounded-full bg-line-soft overflow-hidden">
           <div
-            className={`h-full rounded-full transition-[width] duration-500 ease-out ${isCompleted ? "bg-green-500" : "bg-brand"}`}
+            className={`h-full rounded-full transition-[width] duration-500 ease-out ${isCompleted ? "bg-success" : "bg-brand"}`}
             style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
           />
         </div>
         <div className="flex items-center justify-between mt-1">
-          <p className="text-xs text-foreground-secondary">{formatPercent(pct)} complete</p>
+          <p className="text-xs text-foreground-secondary tabular-nums">{formatPercent(pct)} complete</p>
           {encouragement && (
             <p className="text-xs font-medium text-brand">{encouragement}</p>
           )}
         </div>
       </div>
-    </section>
+    </Card>
   );
 }
