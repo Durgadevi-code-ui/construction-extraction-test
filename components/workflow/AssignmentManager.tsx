@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import PlannedQuantityEditor from "./PlannedQuantityEditor";
+import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -39,9 +40,6 @@ type Props = {
   workers: AssignmentWorkerOption[];
   workItems: AssignmentWorkItemOption[];
   assignments: AssignmentRow[];
-  /** Shortcut to this Subcontractor's own Live Updates tab — omitted
-   * entirely (no button) for any caller that doesn't pass it. */
-  onViewLiveUpdates?: () => void;
 };
 
 /**
@@ -59,7 +57,6 @@ export default function AssignmentManager({
   workers,
   workItems,
   assignments,
-  onViewLiveUpdates,
 }: Props) {
   const router = useRouter();
   const [workerId, setWorkerId] = useState(workers[0]?.userId ?? "");
@@ -67,6 +64,13 @@ export default function AssignmentManager({
   const [busy, setBusy] = useState(false);
   const [busyRowKey, setBusyRowKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Toggled inline directly under the Department heading — never a
+  // navigation to the general Live Updates tab. Image-only
+  // (mode="imageOnly"), no per-item filter: the underlying feed is
+  // already scoped server-side to THIS Subcontractor's own department
+  // (see /api/workflow/live-updates listLiveUpdatesForReviewer), so it
+  // can never show another department's images.
+  const [showLiveUpdates, setShowLiveUpdates] = useState(false);
 
   async function post(body: Record<string, unknown>) {
     const res = await fetch("/api/workflow/foreman/assignments", {
@@ -116,12 +120,16 @@ export default function AssignmentManager({
           <span className="text-foreground-secondary">Department:</span>{" "}
           <span className="font-medium text-foreground">{departmentName}</span>
         </p>
-        {onViewLiveUpdates && (
-          <Button variant="secondary" size="sm" onClick={onViewLiveUpdates}>
-            View Live Updates
-          </Button>
-        )}
+        <Button variant="secondary" size="sm" onClick={() => setShowLiveUpdates((v) => !v)}>
+          {showLiveUpdates ? "Hide Live Updates" : "View Live Updates"}
+        </Button>
       </div>
+
+      {showLiveUpdates && (
+        <div className="rounded-lg border border-line bg-surface-soft p-3">
+          <LiveUpdateFeed mode="imageOnly" />
+        </div>
+      )}
 
       <div>
         <h2 className="font-semibold text-foreground">Work Item Assignments</h2>

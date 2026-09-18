@@ -16,6 +16,9 @@ import {
 type Props = {
   workerId: string;
   workItemId: string;
+  workItemCode: string;
+  workItemDescription: string;
+  departmentName: string;
   plannedQuantity: number | null;
   unitOfMeasure: string | null;
 };
@@ -37,6 +40,9 @@ type Props = {
 export default function DailyWorkUpdate({
   workerId,
   workItemId,
+  workItemCode,
+  workItemDescription,
+  departmentName,
   plannedQuantity,
   unitOfMeasure,
 }: Props) {
@@ -91,6 +97,9 @@ export default function DailyWorkUpdate({
         <TextInput
           locked={isLocked(lockState, "TEXT")}
           onResult={(status, text) => handleResult("TEXT", status, text)}
+          workItemCode={workItemCode}
+          workItemDescription={workItemDescription}
+          departmentName={departmentName}
         />
 
         {!showOtherMethods ? (
@@ -106,10 +115,16 @@ export default function DailyWorkUpdate({
             <HandwritingUpload
               locked={isLocked(lockState, "HANDWRITTEN")}
               onResult={(status, text) => handleResult("HANDWRITTEN", status, text)}
+              workItemCode={workItemCode}
+              workItemDescription={workItemDescription}
+              departmentName={departmentName}
             />
             <VoiceUpload
               locked={isLocked(lockState, "VOICE")}
               onResult={(status, text) => handleResult("VOICE", status, text)}
+              workItemCode={workItemCode}
+              workItemDescription={workItemDescription}
+              departmentName={departmentName}
             />
           </>
         )}

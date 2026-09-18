@@ -19,8 +19,8 @@ const ERROR_MESSAGES: Record<string, string> = {
  * background layer): the reference photo (LoginBlueprintVisual, an
  * actual <img>, not an illustration) on the left and the login
  * controls on the right, both edge-to-edge within a single fixed-height
- * surface. `h-[calc(100vh-64px)] overflow-hidden` (64px ≈ TopNav's own
- * height, same convention DashboardShell/WorkerTabs/loading.tsx use)
+ * surface. `flex-1 min-h-0 overflow-hidden` on <main> below claims the
+ * whole viewport (no top nav bar renders above it — see app/layout.tsx)
  * pins the whole page to exactly one viewport — no page scroll, no
  * second screen. On mobile the visual panel becomes a shorter banner
  * (`h-[30vh]`) above the form — same single fixed surface throughout.

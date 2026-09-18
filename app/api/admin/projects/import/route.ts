@@ -3,7 +3,7 @@ import { getSupabaseClient } from "@/lib/supabase";
 import { getCurrentUser } from "@/lib/session";
 import { assertAdminOrDelegated } from "@/lib/delegation";
 import { parseProjectWorkbook, distinctDepartments } from "@/lib/excelImport";
-import { findOrCreateProjectDepartment, upsertWorkItemFromImport } from "@/lib/admin";
+import { upsertWorkItemFromImport } from "@/lib/admin";
 
 export const runtime = "nodejs";
 
@@ -95,32 +95,31 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const departmentIdByName = new Map<string, string>();
+    // Department resolution happens inside upsertWorkItemFromImport now,
+    // lazily and per-row (see its doc comment) — not pre-resolved here —
+    // so a row whose imported department name is only a presentational
+    // grouping (e.g. an AIA G703 "DIVISION CO — CHANGE ORDERS" section
+    // whose items already exist under their real trade department) never
+    // forces a department to be created just because its name appeared
+    // in the file.
     let departmentsCreated = 0;
-    for (const departmentName of departments) {
-      const dept = await findOrCreateProjectDepartment(supabase, projectId, departmentName);
-      departmentIdByName.set(departmentName.toLowerCase(), dept.departmentId);
-      if (dept.wasCreated) departmentsCreated++;
-    }
-
     let workItemsCreated = 0;
     let workItemsUpdated = 0;
     for (const row of parsed.rows) {
-      const departmentId = departmentIdByName.get(row.department.trim().toLowerCase());
-      if (!departmentId) continue; // unreachable in practice — every row's department was just resolved above
-
       const result = await upsertWorkItemFromImport(supabase, {
         projectId,
-        departmentId,
+        departmentName: row.department,
         lineItemNo: row.workItemNo,
         description: row.description,
         plannedQuantity: row.plannedQuantity,
         unitOfMeasure: row.unitOfMeasure,
         scheduledValue: row.scheduledValue,
         csiLineCode: row.csiLineCode,
+        additionalFields: row.additionalFields,
       });
       if (result.wasCreated) workItemsCreated++;
       else workItemsUpdated++;
+      if (result.departmentWasCreated) departmentsCreated++;
     }
 
     return NextResponse.json({

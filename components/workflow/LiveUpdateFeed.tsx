@@ -50,6 +50,22 @@ function localDayKey(date: Date): string {
  * ContractorTabs without any change to those pages' existing
  * server-side data fetching.
  *
+ * Two distinct uses, controlled by `mode` (NOT two different
+ * components, since both share every bit of fetching/day-grouping
+ * logic below):
+ *   - "normal" (default) — the general Live Updates tab both roles
+ *     already have in their sidebar nav. Shows every media type
+ *     (image AND voice) for this reviewer's scope, unfiltered by
+ *     default. This is the one place voice notes are browsable after
+ *     the fact — never make this mode image-only.
+ *   - "imageOnly" — the two special, scoped entry points (Contractor's
+ *     per-Work-Item button, Subcontractor's per-Department button, see
+ *     DashboardPanel.tsx / AssignmentManager.tsx). Images only, no
+ *     voice. This does NOT touch worker submission/storage: VOICE rows
+ *     are still created and kept exactly as before (see
+ *     lib/liveUpdates.ts createLiveUpdate); they're simply not
+ *     rendered in this one filtered view.
+ *
  * Display is split into "Today's Updates" (default) and "History"
  * (grouped by local calendar day, newest day first) — a pure client-side
  * re-presentation of the same GET response; no new endpoint, no new
@@ -59,8 +75,10 @@ function localDayKey(date: Date): string {
  * partitions that same array by day for display.
  */
 export default function LiveUpdateFeed({
+  mode = "normal",
   initialFilterCode = null,
 }: {
+  mode?: "normal" | "imageOnly";
   /** When set, restricts the feed to this one work item's updates
    * (e.g. Contractor clicking "View Live Updates" on a specific Work
    * Items row) — pure client-side filter of the same reviewer-scoped
@@ -114,7 +132,7 @@ export default function LiveUpdateFeed({
     };
   }, []);
 
-  const { todayItems, historyGroups } = useMemo(() => {
+  const { todayItems, historyGroups, scopedCount } = useMemo(() => {
     const todayKey = localDayKey(new Date());
     const today: LiveUpdateItem[] = [];
     // Map preserves insertion order — items arrive newest-first from the
@@ -122,7 +140,8 @@ export default function LiveUpdateFeed({
     // newest-day-first order; no separate re-sort of groups needed.
     const groups = new Map<string, LiveUpdateItem[]>();
 
-    const scoped = filterCode ? items.filter((item) => item.workItemCode === filterCode) : items;
+    const byType = mode === "imageOnly" ? items.filter((item) => item.updateType === "PHOTO") : items;
+    const scoped = filterCode ? byType.filter((item) => item.workItemCode === filterCode) : byType;
 
     for (const item of scoped) {
       const day = localDayKey(new Date(item.createdAt));
@@ -135,10 +154,10 @@ export default function LiveUpdateFeed({
       }
     }
 
-    return { todayItems: today, historyGroups: groups };
-  }, [items, filterCode]);
+    return { todayItems: today, historyGroups: groups, scopedCount: scoped.length };
+  }, [items, filterCode, mode]);
 
-  const historyCount = items.length - todayItems.length;
+  const historyCount = scopedCount - todayItems.length;
 
   if (loading) {
     return <SkeletonRows count={3} rowHeight="h-24" />;
@@ -151,20 +170,30 @@ export default function LiveUpdateFeed({
 
   return (
     <div className="space-y-3">
-      {filterCode && (
-        <div className="flex items-center gap-2 rounded-lg border border-brand-border bg-brand-soft px-3 py-1.5 text-xs text-foreground-secondary w-fit">
-          <span>
-            Filtered: <span className="font-medium text-foreground">{filterCode}</span>
-          </span>
-          <button
-            type="button"
-            onClick={() => setFilterCode(null)}
-            className="font-medium text-brand transition-colors duration-150 hover:underline"
-          >
-            Show all
-          </button>
-        </div>
-      )}
+      {filterCode &&
+        (mode === "imageOnly" ? (
+          // The two special image-only entry points are a dedicated
+          // per-work-item/per-department view, not a general browser
+          // with an optional filter — no "Show all" escape hatch, so
+          // this can never end up displaying a different work item's
+          // images than the one the reviewer opened.
+          <p className="text-xs text-foreground-secondary">
+            Images for <span className="font-medium text-foreground">{filterCode}</span>
+          </p>
+        ) : (
+          <div className="flex items-center gap-2 rounded-lg border border-brand-border bg-brand-soft px-3 py-1.5 text-xs text-foreground-secondary w-fit">
+            <span>
+              Filtered: <span className="font-medium text-foreground">{filterCode}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setFilterCode(null)}
+              className="font-medium text-brand transition-colors duration-150 hover:underline"
+            >
+              Show all
+            </button>
+          </div>
+        ))}
       <TabNav
         tabs={[
           { key: "today", label: `Today's Updates (${todayItems.length})` },

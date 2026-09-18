@@ -135,7 +135,14 @@ export function isDemoRoleKey(value: unknown): value is DemoRoleKey {
  * configured with an email — never exposes which env var backs them,
  * never exposes the email itself. Safe to pass straight to a Client
  * Component. Slots with no configured email are simply omitted (no
- * broken/dead button for an account that isn't wired up yet). */
+ * broken/dead button for an account that isn't wired up yet).
+ *
+ * All four role groups (Admin/Contractor/Subcontractor/Worker) are
+ * offered here, including the four Worker demo accounts (Electrical/
+ * Plumbing/HVAC/Concrete) — this stays a demo/development environment
+ * for now; real email/password sign-in (app/login/actions.ts) remains
+ * available alongside this picker for every role, this just doesn't
+ * exclude Worker from it. */
 export function getAvailableDemoRoles(): DemoRoleOption[] {
   if (!DEMO_MODE_ENABLED) return [];
   return DEMO_ROLE_ORDER.filter((key) => !!process.env[DEMO_ROLE_ENV_VARS[key]]?.trim()).map((key) => ({

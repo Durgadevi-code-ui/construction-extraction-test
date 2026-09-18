@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseClient } from "@/lib/supabase";
 import { normalizeText, validateTypedText } from "@/lib/validation";
-import { resolveConstructionContext } from "@/lib/construction";
+import { resolveConstructionContext, assessWorkerSubmissionRelevance } from "@/lib/construction";
 
 export const runtime = "nodejs";
 
@@ -11,6 +11,16 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const originalText: unknown = body?.text;
+    // Optional — the real Worker Dashboard (components/workflow/
+    // DailyWorkUpdate.tsx) knows which work item it's updating and
+    // passes that item's own description through, so the single
+    // combined Validation step (see components/ValidationPanel.tsx) can
+    // also confirm the extracted text is actually about that work item,
+    // not just that it's readable — see assessWorkerSubmissionRelevance.
+    // Omitted entirely by the standalone Extraction Accuracy Test tool.
+    const selectedWorkItemDescription: unknown = body?.workItemDescription;
+    const selectedWorkItemDescriptionOrNull =
+      typeof selectedWorkItemDescription === "string" ? selectedWorkItemDescription : null;
 
     if (typeof originalText !== "string") {
       return NextResponse.json(
@@ -107,6 +117,12 @@ export async function POST(request: NextRequest) {
         code: context.workItemCode,
         description: context.workItemDescription,
       },
+      // Department + work-item relevance, resolved from the REAL
+      // signed-in worker's session/project (see
+      // assessWorkerSubmissionRelevance) — { status: "notChecked" } for
+      // any caller with no real Worker session (e.g. the standalone
+      // Extraction Accuracy Test tool), same as before.
+      relevance: await assessWorkerSubmissionRelevance(supabase, originalText, selectedWorkItemDescriptionOrNull),
     });
   } catch (err) {
     console.error("Text pipeline error:", err);

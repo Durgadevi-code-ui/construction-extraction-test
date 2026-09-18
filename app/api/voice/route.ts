@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseClient, STORAGE_BUCKETS } from "@/lib/supabase";
 import { runSTT } from "@/lib/stt";
 import { normalizeText, validateVoice } from "@/lib/validation";
-import { resolveConstructionContext } from "@/lib/construction";
+import { resolveConstructionContext, assessWorkerSubmissionRelevance } from "@/lib/construction";
 
 export const runtime = "nodejs";
 
@@ -15,6 +15,11 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get("audio");
+    // Same optional work-item-relevance check as /api/text — see its
+    // doc comment.
+    const selectedWorkItemDescriptionRaw = formData.get("workItemDescription");
+    const selectedWorkItemDescription =
+      typeof selectedWorkItemDescriptionRaw === "string" ? selectedWorkItemDescriptionRaw : null;
 
     if (!file || !(file instanceof File)) {
       return NextResponse.json(
@@ -162,6 +167,8 @@ export async function POST(request: NextRequest) {
         code: context.workItemCode,
         description: context.workItemDescription,
       },
+      // Same relevance check as /api/text, applied to the transcript.
+      relevance: await assessWorkerSubmissionRelevance(supabase, rawText, selectedWorkItemDescription),
     });
   } catch (err) {
     console.error("Voice pipeline error:", err);

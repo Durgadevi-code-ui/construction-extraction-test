@@ -14,61 +14,74 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * that turns that id into "who are you, and what are you allowed to
  * touch", looked up from user_project_roles.
  *
- * KNOWN LIMITATION (documented, not fixed, as of this writing — see the
- * P0 security review): `.single()` below assumes exactly one Active
- * user_project_roles row per user, and THROWS if a user has more than
- * one. There is no multi-project-selection flow anywhere in this app
- * (no "pick a project after login" screen) — every Worker/Foreman/
- * Supervisor/Manager is assumed to hold exactly one active role in
- * exactly one project+department at a time. The schema itself does not
- * prevent a second Active row (nothing stops an Admin from granting a
- * user two), so doing so today would break every page/route that calls
- * this function for that user, not just silently pick one. This is left
- * as-is because: (a) nothing currently in this app creates or requires
- * a multi-project user — Admin Setup's user creation flow does not
- * offer "add a second role," and (b) supporting it correctly needs an
- * actual UI (project selection after login) and a decision about how
- * delegation/notifications/dashboards behave per-project, not just a
- * relaxed query here. If multi-project support becomes an actual
- * requirement, the smallest safe fix is: change this query to return
- * all Active rows, add a project-selection step (e.g. a `?projectId=`
- * param or a cookie) for any caller with more than one, and keep
- * returning a single resolved context exactly as today for the
- * (still-common) single-role case — not a broader redesign.
+ * MULTI-PROJECT: a user can hold more than one Active user_project_roles
+ * row (nothing in the schema prevents it — see prior version of this
+ * comment/the P0 security review). This function used to call
+ * `.single()`, which THROWS the moment a second Active row exists for
+ * anyone. It no longer does: it fetches every Active row and resolves
+ * ONE of them exactly as before —
+ *   - `options.projectId` given -> the row for that project (falls back
+ *     to the first row if the user has no Active row in that project,
+ *     same as never having asked, rather than a hard error — a stale or
+ *     tampered `?projectId=` should degrade gracefully, not crash the
+ *     page).
+ *   - not given (the default, and every existing call site) -> the
+ *     first row, i.e. identical behavior to the single-role case this
+ *     app has always run on. A user with one Active row is completely
+ *     unaffected by this change.
+ * The returned `availableProjects` list is additive (new field, nothing
+ * removed) — it's what lets a specific page build a "switch project"
+ * control when a user actually has more than one, without every one of
+ * this function's ~20 existing call sites needing to change at all.
  */
-export async function getUserContext(supabase: SupabaseClient, userId: string) {
+export async function getUserContext(
+  supabase: SupabaseClient,
+  userId: string,
+  options?: { projectId?: string }
+) {
   const { data, error } = await supabase
     .from("user_project_roles")
     .select(
       "user_id, role, project_id, department_id, projects(project_name), departments(department_name)"
     )
     .eq("user_id", userId)
-    .eq("status", "Active")
-    .single();
+    .eq("status", "Active");
 
-  if (error || !data) {
-    throw new Error(
-      `No active project/department assignment found for user ${userId}: ${
-        error?.message ?? "no matching row"
-      }`
-    );
+  if (error) {
+    throw new Error(`Failed to look up project/department assignment for user ${userId}: ${error.message}`);
+  }
+  const rows = data ?? [];
+  if (rows.length === 0) {
+    throw new Error(`No active project/department assignment found for user ${userId}: no matching row`);
   }
 
-  const projects = Array.isArray(data.projects)
-    ? data.projects[0]
-    : data.projects;
-  const departments = Array.isArray(data.departments)
-    ? data.departments[0]
-    : data.departments;
+  const selected = (options?.projectId ? rows.find((row) => row.project_id === options.projectId) : null) ?? rows[0];
+
+  const projects = Array.isArray(selected.projects) ? selected.projects[0] : selected.projects;
+  const departments = Array.isArray(selected.departments) ? selected.departments[0] : selected.departments;
 
   return {
-    userId: data.user_id as string,
-    role: data.role as string,
-    projectId: data.project_id as string,
+    userId: selected.user_id as string,
+    role: selected.role as string,
+    projectId: selected.project_id as string,
     projectName: (projects?.project_name as string) ?? "(unknown project)",
-    departmentId: data.department_id as string,
+    departmentId: selected.department_id as string,
     departmentName:
       (departments?.department_name as string) ?? "(unknown department)",
+    /** Every Active project/department this user holds (length 1 for
+     * the still-common single-role case) — for building a project
+     * switcher. Not sorted/deduped beyond what the query already
+     * returns. */
+    availableProjects: rows.map((row) => {
+      const p = Array.isArray(row.projects) ? row.projects[0] : row.projects;
+      const d = Array.isArray(row.departments) ? row.departments[0] : row.departments;
+      return {
+        projectId: row.project_id as string,
+        projectName: (p?.project_name as string) ?? "(unknown project)",
+        departmentId: row.department_id as string,
+        departmentName: (d?.department_name as string) ?? "(unknown department)",
+      };
+    }),
   };
 }
 

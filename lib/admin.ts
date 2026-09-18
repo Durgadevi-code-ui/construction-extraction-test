@@ -276,6 +276,34 @@ function slugCode(name: string): string {
   return (alnum.slice(0, 8) || "DEPT") + Math.random().toString(36).slice(2, 5).toUpperCase();
 }
 
+// A small, generic table of industry abbreviations that don't reduce to
+// each other by punctuation/whitespace/suffix stripping alone (e.g.
+// "HVAC" vs "Heating, Ventilating & Air Conditioning" share no
+// substring). NOT a list of this project's department names — an entry
+// here applies to any project, the same way "Dept." vs "Department"
+// would. Add to this list only for genuinely standard industry
+// abbreviations, never for one-off project-specific aliases.
+const DEPARTMENT_ABBREVIATIONS: Record<string, string> = {
+  hvac: "heatingventilatingairconditioning",
+};
+
+/**
+ * Reduces a department name to a canonical comparison key so two names
+ * that refer to the same trade match regardless of a trailing
+ * "Department" suffix, casing, whitespace, or punctuation (commas,
+ * ampersands, dashes) — e.g. "Concrete Department", "CONCRETE", and
+ * "  concrete  " all reduce to the same key, as do "HVAC Department"
+ * and "HEATING, VENTILATING & AIR CONDITIONING" via
+ * DEPARTMENT_ABBREVIATIONS. Used for matching an imported department
+ * name against a project's existing departments — never for storing or
+ * displaying a name, which always keeps its original text.
+ */
+function canonicalDepartmentKey(name: string): string {
+  const withoutSuffix = name.trim().replace(/\s*department\s*$/i, "");
+  const key = withoutSuffix.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return DEPARTMENT_ABBREVIATIONS[key] ?? key;
+}
+
 /**
  * Case-insensitive exact match against the Active standard department
  * catalog — deliberately NOT `.ilike()`. A department name can contain
@@ -305,16 +333,24 @@ async function findStandardDepartmentByExactName(
 }
 
 /**
- * Finds an existing department in `projectId` matching `departmentName`
- * (case-insensitive, whitespace-trimmed — "Electrical" and "electrical "
- * are the same department), or creates one. A new department is linked
- * to the standard catalog when the name matches an Active standard
- * department (case-insensitive); otherwise it's created as a genuine
- * custom department (standard_department_id stays null) — exactly the
- * "standard catalog + project-specific activation + custom department
- * creation" model. The single entry point the Excel import flow uses so
- * re-processing the same file (or a corrected re-upload) never creates
- * duplicate "Electrical" rows for the same project.
+ * Finds an existing department in `projectId` matching `departmentName`,
+ * or creates one. Matching is by canonicalDepartmentKey, not a raw
+ * string compare — so an imported CSI/G703 division name like
+ * "CONCRETE" matches an existing "Concrete Department" (differs only by
+ * the "Department" suffix), "WOOD, PLASTICS & COMPOSITES" matches "Wood,
+ * Plastics & Composites Department" (differs only by punctuation/
+ * suffix), and "HEATING, VENTILATING & AIR CONDITIONING" matches "HVAC
+ * Department" (differs by industry abbreviation, via
+ * DEPARTMENT_ABBREVIATIONS) — without hardcoding any project's specific
+ * department list. A new department is linked to the standard catalog
+ * when the name matches an Active standard department (case-insensitive
+ * exact match); otherwise it's created as a genuine custom department
+ * (standard_department_id stays null) — exactly the "standard catalog +
+ * project-specific activation + custom department creation" model. The
+ * single entry point the Excel import flow uses so re-processing the
+ * same file (or a corrected re-upload, or a differently-formatted file
+ * for the same trade) never creates a duplicate department for the same
+ * project.
  */
 export async function findOrCreateProjectDepartment(
   supabase: SupabaseClient,
@@ -322,9 +358,9 @@ export async function findOrCreateProjectDepartment(
   departmentName: string
 ): Promise<{ departmentId: string; departmentName: string; wasCreated: boolean }> {
   const trimmedName = departmentName.trim();
-  const targetLower = trimmedName.toLowerCase();
+  const targetKey = canonicalDepartmentKey(trimmedName);
 
-  // Exact case-insensitive match in JS, not `.ilike()` — see
+  // Canonical-key match in JS, not `.ilike()` — see
   // findStandardDepartmentByExactName's doc for why (department names
   // can legitimately contain `%`/`_`, which ilike would treat as
   // wildcards). One project's department list is small, so this is
@@ -338,7 +374,7 @@ export async function findOrCreateProjectDepartment(
     throw new Error(`Failed to look up department: ${findError.message}`);
   }
   const existing = (projectDepartments ?? []).find(
-    (d) => (d.department_name as string).trim().toLowerCase() === targetLower
+    (d) => canonicalDepartmentKey(d.department_name as string) === targetKey
   );
   if (existing) {
     return {
@@ -370,45 +406,127 @@ export async function findOrCreateProjectDepartment(
 }
 
 /**
- * Creates or updates a work item from an imported spreadsheet row —
- * matched by (project_id, department_id, line_item_no) when a line
- * item number was supplied (the stable business identifier a real
- * project file uses), else by (project_id, department_id,
- * description_of_work) as a fallback so a file with no numbering
- * scheme still doesn't create duplicates on re-import. Existing
- * work_item_id and any assignments/progress history are preserved on
- * update — only the configuration fields a re-upload is meant to
- * refresh (description, quantity, unit, value, CSI code) are touched.
+ * A line-item number is only "the same" business identifier once
+ * leading zeros are ignored — a G703 file's "1" and an existing
+ * project's "001" refer to the same item. Purely-numeric values are
+ * normalized by parsing them as an integer (dropping leading zeros);
+ * anything else is compared case-insensitively, same as department
+ * names.
+ */
+function normalizeLineItemNo(raw: string): string {
+  const trimmed = raw.trim();
+  return /^\d+$/.test(trimmed) ? String(parseInt(trimmed, 10)) : trimmed.toLowerCase();
+}
+
+/**
+ * Creates or updates a work item from an imported spreadsheet row.
+ * `departmentName` is the raw division/department name from the file —
+ * this function resolves (or creates) the department itself, and only
+ * when it actually needs to, rather than the caller resolving it
+ * upfront. That laziness matters: an AIA G703's "DIVISION CO — CHANGE
+ * ORDERS" section is a presentational grouping in the *source file*, not
+ * necessarily a real department in the project — its items commonly
+ * already exist under their real trade department from an earlier
+ * import (e.g. an elevator change order already living under "Conveying
+ * Equipment Department"). If department resolution happened before
+ * matching, importing that section would either create a spurious
+ * "Change Orders" department or silently move the item's history to the
+ * wrong department.
+ *
+ * Matching therefore happens in two passes:
+ *   1. Project-wide by line_item_no (via normalizeLineItemNo — "1" and
+ *      "001" are the same item), completely ignoring `departmentName`.
+ *      AIA G703 item numbers are the file's stable business identifier
+ *      and are unique across an entire continuation sheet, including a
+ *      CO section — this is what lets imported item "66" find and
+ *      update the existing "066" wherever it actually lives, without
+ *      ever creating a "Change Orders" department. Only an *unambiguous*
+ *      match (exactly one project-wide row with that number) is used —
+ *      two or more is a genuine numbering collision across departments,
+ *      which this does not guess at; it falls through to pass 2 instead.
+ *   2. department-scoped, exactly as before: department resolved/created
+ *      via findOrCreateProjectDepartment, matched by line_item_no (or by
+ *      description_of_work when no number was supplied) within that one
+ *      department. This is also where a genuinely new work item is
+ *      created if nothing matched either pass.
+ *
+ * Existing work_item_id, department_id, and any assignments/progress
+ * history are preserved on update — only the configuration fields a
+ * re-upload is meant to refresh (description, quantity, unit, value,
+ * CSI code) are touched. departmentId/departmentWasCreated on the return
+ * value reflect whichever department the match (or new row) actually
+ * belongs to, for the caller's reporting.
  */
 export async function upsertWorkItemFromImport(
   supabase: SupabaseClient,
   params: {
     projectId: string;
-    departmentId: string;
+    departmentName: string;
     lineItemNo: string | null;
     description: string;
     plannedQuantity: number | null;
     unitOfMeasure: string | null;
     scheduledValue: number | null;
     csiLineCode: string | null;
+    /** Column data from the file that didn't map to a standard field
+     * (see lib/excelImport.ts collectAdditionalFields) — merged into
+     * whatever this work item already has on update (a re-import never
+     * erases a previously-captured field just because one file version
+     * happened not to include that column), stored as-is on create. */
+    additionalFields: Record<string, string | number> | null;
   }
-): Promise<{ workItemId: string; wasCreated: boolean }> {
-  let existingQuery = supabase
+): Promise<{ workItemId: string; departmentId: string; wasCreated: boolean; departmentWasCreated: boolean }> {
+  const { data: projectItems, error: findError } = await supabase
     .from("work_items")
-    .select("work_item_id")
-    .eq("project_id", params.projectId)
-    .eq("department_id", params.departmentId);
+    .select("work_item_id, department_id, line_item_no, description_of_work, additional_fields")
+    .eq("project_id", params.projectId);
 
-  existingQuery = params.lineItemNo
-    ? existingQuery.eq("line_item_no", params.lineItemNo)
-    : existingQuery.eq("description_of_work", params.description);
-
-  const { data: existing, error: findError } = await existingQuery.maybeSingle();
   if (findError) {
     throw new Error(`Failed to look up work item: ${findError.message}`);
   }
 
+  let existing:
+    | { work_item_id: string; department_id: string; additional_fields: Record<string, string | number> | null }
+    | undefined;
+
+  if (params.lineItemNo) {
+    const targetKey = normalizeLineItemNo(params.lineItemNo);
+    const projectWideMatches = (projectItems ?? []).filter(
+      (w) => normalizeLineItemNo(w.line_item_no as string) === targetKey
+    );
+    if (projectWideMatches.length === 1) {
+      existing = projectWideMatches[0];
+    }
+  }
+
+  let departmentId: string;
+  let departmentWasCreated = false;
+
   if (existing) {
+    departmentId = existing.department_id;
+  } else {
+    const dept = await findOrCreateProjectDepartment(supabase, params.projectId, params.departmentName);
+    departmentId = dept.departmentId;
+    departmentWasCreated = dept.wasCreated;
+
+    existing = params.lineItemNo
+      ? (projectItems ?? []).find(
+          (w) =>
+            w.department_id === departmentId &&
+            normalizeLineItemNo(w.line_item_no as string) === normalizeLineItemNo(params.lineItemNo as string)
+        )
+      : (projectItems ?? []).find(
+          (w) =>
+            w.department_id === departmentId &&
+            (w.description_of_work as string).trim().toLowerCase() === params.description.trim().toLowerCase()
+        );
+  }
+
+  if (existing) {
+    const mergedAdditionalFields =
+      existing.additional_fields || params.additionalFields
+        ? { ...(existing.additional_fields ?? {}), ...(params.additionalFields ?? {}) }
+        : null;
     const { error: updateError } = await supabase
       .from("work_items")
       .update({
@@ -417,13 +535,14 @@ export async function upsertWorkItemFromImport(
         unit_of_measure: params.unitOfMeasure,
         scheduled_value: params.scheduledValue,
         csi_line_code: params.csiLineCode,
+        additional_fields: mergedAdditionalFields,
       })
       .eq("work_item_id", existing.work_item_id);
 
     if (updateError) {
       throw new Error(`Failed to update work item: ${updateError.message}`);
     }
-    return { workItemId: existing.work_item_id, wasCreated: false };
+    return { workItemId: existing.work_item_id, departmentId: existing.department_id, wasCreated: false, departmentWasCreated };
   }
 
   let lineItemNo = params.lineItemNo;
@@ -431,7 +550,7 @@ export async function upsertWorkItemFromImport(
     const { count, error: countError } = await supabase
       .from("work_items")
       .select("work_item_id", { count: "exact", head: true })
-      .eq("department_id", params.departmentId);
+      .eq("department_id", departmentId);
     if (countError) {
       throw new Error(`Failed to number work item: ${countError.message}`);
     }
@@ -442,13 +561,14 @@ export async function upsertWorkItemFromImport(
     .from("work_items")
     .insert({
       project_id: params.projectId,
-      department_id: params.departmentId,
+      department_id: departmentId,
       line_item_no: lineItemNo,
       description_of_work: params.description,
       planned_quantity: params.plannedQuantity,
       unit_of_measure: params.unitOfMeasure,
       scheduled_value: params.scheduledValue,
       csi_line_code: params.csiLineCode,
+      additional_fields: params.additionalFields,
       status: "Active",
     })
     .select("work_item_id")
@@ -457,7 +577,7 @@ export async function upsertWorkItemFromImport(
   if (createError || !created) {
     throw new Error(`Failed to create work item: ${createError?.message ?? "no row returned"}`);
   }
-  return { workItemId: created.work_item_id, wasCreated: true };
+  return { workItemId: created.work_item_id, departmentId, wasCreated: true, departmentWasCreated };
 }
 
 export type AdminWorkItem = {

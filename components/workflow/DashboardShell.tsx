@@ -21,6 +21,12 @@ type Props = {
    * caller identity yet (there isn't one currently, but keeps the shell
    * safe to reuse). */
   userId?: string;
+  /** Optional extra controls rendered in the header row, left of the
+   * date chip/notification bell — e.g. Admin's "Dashboard"/"Extraction
+   * Test (Dev)" links, relocated here now that TopNav no longer renders
+   * above this shell (see components/workflow/TopNav.tsx). Omit for
+   * every role that has nothing to relocate. */
+  actions?: React.ReactNode;
   children: React.ReactNode;
 };
 
@@ -41,15 +47,19 @@ export default function DashboardShell({
   heading,
   subheading,
   userId,
+  actions,
   children,
 }: Props) {
   const [logoAvailable, setLogoAvailable] = useState(true);
 
   return (
     // No rounded corners/border/shadow/page padding around this shell —
-    // it IS the single application surface directly below TopNav, not a
-    // card floating over a differently-colored page background.
-    <div className="flex flex-col lg:flex-row bg-surface min-h-[calc(100vh-64px)]">
+    // it IS the single application surface, not a card floating over a
+    // differently-colored page background. TopNav no longer renders
+    // above any screen that uses this shell, so this claims the full
+    // viewport height (not calc(100vh-64px), a stale TopNav-height
+    // offset that would otherwise leave a dead gap at the bottom).
+    <div className="flex flex-col lg:flex-row bg-surface min-h-screen">
       <aside className="lg:w-60 shrink-0 bg-gradient-to-b from-brand via-[#173c52] to-info text-white flex flex-col">
         <div className="px-5 py-5 border-b border-white/10 flex items-center gap-2.5">
           {logoAvailable && (
@@ -108,6 +118,7 @@ export default function DashboardShell({
             {subheading && <p className="text-sm text-foreground-secondary">{subheading}</p>}
           </div>
           <div className="flex items-center gap-3">
+            {actions}
             <span
               suppressHydrationWarning
               className="hidden sm:inline text-xs text-foreground-secondary bg-surface-soft border border-line rounded-full px-3 py-1.5"

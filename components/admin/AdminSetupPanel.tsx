@@ -21,6 +21,7 @@ import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import Badge, { type BadgeVariant } from "@/components/ui/Badge";
 import EmptyState from "@/components/ui/EmptyState";
+import Link from "next/link";
 import DashboardShell, { type ShellTab } from "@/components/workflow/DashboardShell";
 import ChatPanel from "@/components/workflow/ChatPanel";
 
@@ -173,6 +174,30 @@ export default function AdminSetupPanel({
       heading={TAB_HEADING[activeTab]}
       subheading={isRealAdmin ? undefined : "Viewing under a temporary administrative delegation."}
       userId={adminUserId}
+      actions={
+        // Relocated from the removed top nav bar (see
+        // components/workflow/TopNav.tsx) — same two links, same
+        // Extraction Test (Dev) gating (real Admin only, never a
+        // delegated caller), just living in the main screen now instead
+        // of a header above it.
+        <div className="flex items-center gap-1.5">
+          <Link
+            href="/workflow/dashboard"
+            className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground-secondary border border-line transition-colors duration-150 hover:bg-surface-hover hover:text-foreground whitespace-nowrap"
+          >
+            Dashboard
+          </Link>
+          {isRealAdmin && (
+            <Link
+              href="/dev/extraction-test"
+              title="Developer/testing tool for the extraction pipeline"
+              className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground-secondary border border-line transition-colors duration-150 hover:bg-surface-hover hover:text-foreground whitespace-nowrap"
+            >
+              Extraction Test (Dev)
+            </Link>
+          )}
+        </div>
+      }
     >
       {activeTab === "companies" && <CompaniesTab adminUserId={adminUserId} companies={companies} />}
       {activeTab === "projects" && (
@@ -760,6 +785,11 @@ function WorkItemRow({
       <div className="flex items-start justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium">{item.lineItemNo}</span>
+          {item.csiLineCode && (
+            <span className="text-xs text-foreground-muted border border-line rounded px-1.5 py-0.5">
+              CSI {item.csiLineCode}
+            </span>
+          )}
           <span className="text-foreground-secondary">{item.descriptionOfWork}</span>
           <span className="text-foreground-muted">({item.departmentName})</span>
           <StatusBadge status={item.status} />

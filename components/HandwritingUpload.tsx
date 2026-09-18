@@ -1,14 +1,23 @@
 "use client";
 
 import { useRef, useState } from "react";
-import ValidationStatus from "./ValidationStatus";
+import ValidationPanel, { type RelevanceCheckResult } from "./ValidationPanel";
 
 type Props = {
   locked: boolean;
   onResult: (status: "VALID" | "INVALID", normalizedText?: string) => void;
+  workItemCode?: string | null;
+  workItemDescription?: string | null;
+  departmentName?: string | null;
 };
 
-export default function HandwritingUpload({ locked, onResult }: Props) {
+export default function HandwritingUpload({
+  locked,
+  onResult,
+  workItemCode,
+  workItemDescription,
+  departmentName,
+}: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<"IDLE" | "PROCESSING" | "VALID" | "INVALID">("IDLE");
   const [rawText, setRawText] = useState("");
@@ -17,7 +26,8 @@ export default function HandwritingUpload({ locked, onResult }: Props) {
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
   const [submissionId, setSubmissionId] = useState<string | null>(null);
-  const [userValidation, setUserValidation] = useState<"valid" | "invalid" | null>(null);
+  const [relevance, setRelevance] = useState<RelevanceCheckResult | undefined>(undefined);
+  const [userValidation, setUserValidation] = useState<"valid" | null>(null);
   const [userValidationBusy, setUserValidationBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -33,6 +43,7 @@ export default function HandwritingUpload({ locked, onResult }: Props) {
     try {
       const formData = new FormData();
       formData.append("image", file);
+      if (workItemDescription) formData.append("workItemDescription", workItemDescription);
       const res = await fetch("/api/handwritten", { method: "POST", body: formData });
       const data = await res.json();
       if (!res.ok) {
@@ -46,6 +57,7 @@ export default function HandwritingUpload({ locked, onResult }: Props) {
       setReason(data.reason);
       setStatus(data.status);
       setSubmissionId(data.submissionId);
+      setRelevance(data.relevance);
       if (data.status === "INVALID") {
         onResult("INVALID");
       }
@@ -55,7 +67,7 @@ export default function HandwritingUpload({ locked, onResult }: Props) {
     }
   }
 
-  async function handleUserValidation(decision: "valid" | "invalid") {
+  async function handleConfirm() {
     if (!submissionId) return;
     setUserValidationBusy(true);
     setError("");
@@ -63,18 +75,15 @@ export default function HandwritingUpload({ locked, onResult }: Props) {
       const res = await fetch("/api/user-validation", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ submissionId, decision }),
+        body: JSON.stringify({ submissionId, decision: "valid" }),
       });
       const data = await res.json();
       if (!res.ok) {
         setError(data.error ?? "User validation failed.");
         return;
       }
-      setUserValidation(decision);
-      onResult(
-        decision === "valid" ? "VALID" : "INVALID",
-        decision === "valid" ? normalizedText : undefined
-      );
+      setUserValidation("valid");
+      onResult("VALID", normalizedText);
     } catch {
       setError("User validation request failed.");
     } finally {
@@ -115,40 +124,18 @@ export default function HandwritingUpload({ locked, onResult }: Props) {
           </div>
         </div>
       )}
-      <ValidationStatus status={displayStatus} reason={reason} confidence={confidence} />
-      {!locked && status === "VALID" && (
-        <div className="border-t border-line pt-3 space-y-2">
-          {userValidation === null ? (
-            <>
-              <p className="text-xs font-medium text-foreground-secondary">User Validation</p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleUserValidation("valid")}
-                  disabled={userValidationBusy}
-                  className="px-3 py-1.5 bg-green-600 text-white rounded text-sm font-medium disabled:opacity-50"
-                >
-                  Valid
-                </button>
-                <button
-                  onClick={() => handleUserValidation("invalid")}
-                  disabled={userValidationBusy}
-                  className="px-3 py-1.5 bg-red-600 text-white rounded text-sm font-medium disabled:opacity-50"
-                >
-                  Invalid
-                </button>
-              </div>
-            </>
-          ) : userValidation === "valid" ? (
-            <p className="text-sm font-medium text-green-700">
-              User Validation: VALID — Accepted
-            </p>
-          ) : (
-            <p className="text-sm font-medium text-red-700">
-              User Validation: INVALID — upload a new attempt.
-            </p>
-          )}
-        </div>
-      )}
+      <ValidationPanel
+        status={displayStatus}
+        reason={reason}
+        confidence={confidence}
+        relevance={relevance}
+        ownDepartmentName={departmentName}
+        workItemCode={workItemCode}
+        mediaKind="image"
+        decision={userValidation}
+        busy={userValidationBusy}
+        onConfirm={handleConfirm}
+      />
     </div>
   );
 }

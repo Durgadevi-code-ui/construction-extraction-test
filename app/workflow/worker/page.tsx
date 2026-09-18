@@ -28,14 +28,17 @@ function SignOutLink() {
 export default async function WorkerPage({
   searchParams,
 }: {
-  searchParams: Promise<{ workItemId?: string }>;
+  searchParams: Promise<{ workItemId?: string; projectId?: string }>;
 }) {
   const currentUser = await requireCurrentUser("/workflow/worker");
   const userId = currentUser.userId;
   const supabase = getSupabaseClient();
-  const { workItemId: workItemIdParam } = await searchParams;
+  const { workItemId: workItemIdParam, projectId: projectIdParam } = await searchParams;
 
-  const ctx = await getUserContext(supabase, userId);
+  // A worker with more than one active project assignment can switch
+  // via ?projectId=; omitted (the common case), this behaves exactly as
+  // before — the first (only) active assignment (see getUserContext).
+  const ctx = await getUserContext(supabase, userId, { projectId: projectIdParam });
   // A logged-in Contractor/Subcontractor navigating straight to this
   // URL should see their own dashboard, not a Worker's — redirect to
   // the role router rather than rendering data that isn't theirs.
@@ -43,19 +46,44 @@ export default async function WorkerPage({
     redirect("/workflow");
   }
 
+  const projectSwitcher =
+    ctx.availableProjects.length > 1 ? (
+      <div className="flex items-center gap-1 flex-wrap">
+        {ctx.availableProjects.map((p) => (
+          <Link
+            key={p.projectId}
+            href={`/workflow/worker?projectId=${p.projectId}`}
+            className={
+              p.projectId === ctx.projectId
+                ? "rounded-lg bg-brand-soft px-2.5 py-1.5 text-xs font-semibold text-brand whitespace-nowrap"
+                : "rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground-secondary border border-line transition-colors duration-150 hover:bg-surface-hover hover:text-foreground whitespace-nowrap"
+            }
+            title={`${p.projectName} — ${p.departmentName}`}
+          >
+            {p.projectName}
+          </Link>
+        ))}
+      </div>
+    ) : null;
+
   const workItems = await listAssignedWorkItemsForWorker(supabase, userId, ctx.departmentId);
 
   if (workItems.length === 0) {
     return (
       <main className="min-h-screen py-10 px-4">
         <div className="max-w-[1600px] mx-auto space-y-4">
-          <div>
+          <div className="flex items-start justify-between gap-3 flex-wrap">
             <h1 className="text-2xl font-bold text-foreground">Worker Dashboard</h1>
-            <SignOutLink />
+            <div className="flex items-center gap-3">
+              {projectSwitcher}
+              <SignOutLink />
+            </div>
           </div>
           <p className="text-sm text-foreground-secondary">
-            No work items are currently assigned to you in {ctx.departmentName}. Ask your
-            Subcontractor/Contractor to assign one.
+            No work items are currently assigned to you in {ctx.projectName} — {ctx.departmentName}.
+            {ctx.availableProjects.length > 1
+              ? " Switch to another project above, or ask your Subcontractor/Contractor to assign one here."
+              : " Ask your Subcontractor/Contractor to assign one."}
           </p>
         </div>
       </main>
@@ -182,6 +210,7 @@ export default async function WorkerPage({
           suggestionNote={suggestionNote}
           history={history}
           approvedWork={approvedWork}
+          projectSwitcher={projectSwitcher}
         />
     </main>
   );

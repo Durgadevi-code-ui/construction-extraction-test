@@ -141,7 +141,6 @@ export default function ForemanTabs({
           workers={board.workers}
           workItems={board.workItems}
           assignments={board.assignments}
-          onViewLiveUpdates={() => setTab("liveUpdates")}
         />
       )}
 
@@ -181,7 +180,11 @@ export default function ForemanTabs({
         </div>
       )}
 
-      {tab === "liveUpdates" && <LiveUpdateFeed />}
+      {/* The general/normal Live Updates tab — every media type (image
+          AND voice), unfiltered. Distinct from the Department-scoped
+          image-only panel embedded inline in the Work Item Assignments
+          tab (AssignmentManager), which never routes here. */}
+      {tab === "liveUpdates" && <LiveUpdateFeed mode="normal" />}
 
       {tab === "communication" && <ChatPanel />}
     </DashboardShell>

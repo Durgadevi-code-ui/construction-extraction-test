@@ -12,9 +12,15 @@ type ParsedRow = {
   department: string;
   workItemNo: string | null;
   description: string;
+  descriptionInferred: boolean;
   plannedQuantity: number | null;
   unitOfMeasure: string | null;
   scheduledValue: number | null;
+  csiLineCode: string | null;
+  /** Columns in the file that didn't map to a standard field — kept and
+   * imported under work_items.additional_fields, shown here so nothing
+   * from the file looks silently dropped. */
+  additionalFields: Record<string, string | number> | null;
 };
 
 type ParseIssue = { sourceRow: number; sourceSheet: string; message: string };
@@ -114,6 +120,9 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
     );
   }
 
+  const hasAdditionalFields =
+    preview?.rows.some((r) => r.additionalFields && Object.keys(r.additionalFields).length > 0) ?? false;
+
   return (
     <div className="mt-2 bg-surface-soft border border-line rounded-lg p-4 space-y-3 text-sm">
       <div className="flex items-center justify-between">
@@ -180,10 +189,14 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
                     <tr>
                       <th className="text-left px-2.5 py-1.5 font-medium text-foreground-secondary">Dept</th>
                       <th className="text-left px-2.5 py-1.5 font-medium text-foreground-secondary">Item #</th>
+                      <th className="text-left px-2.5 py-1.5 font-medium text-foreground-secondary">CSI Code</th>
                       <th className="text-left px-2.5 py-1.5 font-medium text-foreground-secondary">Description</th>
                       <th className="text-right px-2.5 py-1.5 font-medium text-foreground-secondary">Qty</th>
                       <th className="text-left px-2.5 py-1.5 font-medium text-foreground-secondary">Unit</th>
                       <th className="text-right px-2.5 py-1.5 font-medium text-foreground-secondary">Value</th>
+                      {hasAdditionalFields && (
+                        <th className="text-left px-2.5 py-1.5 font-medium text-foreground-secondary">Extra columns</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -191,7 +204,15 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
                       <tr key={i} className="border-t border-line hover:bg-surface-hover transition-colors duration-150">
                         <td className="px-2.5 py-1.5 text-foreground-secondary">{r.department}</td>
                         <td className="px-2.5 py-1.5 text-foreground">{r.workItemNo ?? "—"}</td>
-                        <td className="px-2.5 py-1.5 text-foreground">{r.description}</td>
+                        <td className="px-2.5 py-1.5 text-foreground-secondary">{r.csiLineCode ?? "—"}</td>
+                        <td className="px-2.5 py-1.5 text-foreground">
+                          {r.description}
+                          {r.descriptionInferred && (
+                            <span className="ml-1 text-foreground-muted italic" title="No description column value — inferred from item/CSI code.">
+                              (inferred)
+                            </span>
+                          )}
+                        </td>
                         <td className="px-2.5 py-1.5 text-right tabular-nums text-foreground">
                           {r.plannedQuantity !== null ? formatQuantity(r.plannedQuantity) : "—"}
                         </td>
@@ -201,6 +222,24 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
                             ? `$${r.scheduledValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
                             : "—"}
                         </td>
+                        {hasAdditionalFields && (
+                          <td
+                            className="px-2.5 py-1.5 text-foreground-secondary truncate max-w-[220px]"
+                            title={
+                              r.additionalFields
+                                ? Object.entries(r.additionalFields)
+                                    .map(([k, v]) => `${k}: ${v}`)
+                                    .join("\n")
+                                : undefined
+                            }
+                          >
+                            {r.additionalFields
+                              ? Object.entries(r.additionalFields)
+                                  .map(([k, v]) => `${k}: ${v}`)
+                                  .join(", ")
+                              : "—"}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>

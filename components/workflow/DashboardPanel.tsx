@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import ProgressBar from "@/components/workflow/charts/ProgressBar";
 import ProgressRing from "@/components/workflow/charts/ProgressRing";
+import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
 import { formatDateUS, formatPercent } from "@/lib/format";
 import Card from "@/components/ui/Card";
 import Badge, { type BadgeVariant } from "@/components/ui/Badge";
@@ -104,7 +105,7 @@ export default function DashboardPanel({
   userId,
   initialData,
   sections = ALL_SECTIONS,
-  onViewLiveUpdates,
+  showLiveUpdatesColumn = false,
 }: {
   userId: string;
   initialData: DashboardData;
@@ -116,11 +117,13 @@ export default function DashboardPanel({
    * once and just narrow `sections` per active tab — same fetch, same
    * filters, same calculations, only which part is visible changes. */
   sections?: DashboardSection[];
-  /** When provided, adds a "View Live Updates" action per Work Items
-   * row, called with that row's work item code. Omitted entirely (no
-   * extra column) for callers — like the standalone /workflow/dashboard
-   * page — that have nowhere to route this. */
-  onViewLiveUpdates?: (workItemCode: string) => void;
+  /** When true, adds a "View Live Updates" action per Work Items row
+   * that expands an IMAGE-ONLY LiveUpdateFeed inline, directly under
+   * that row — never a navigation to the general Live Updates tab (see
+   * LiveUpdateFeed's `mode` prop doc). Omitted entirely (no extra
+   * column) for callers — like the standalone /workflow/dashboard page
+   * — that have no per-row action for this. */
+  showLiveUpdatesColumn?: boolean;
 }) {
   // Default scope = the caller's own data, not "All" (see design
   // brief section 8): when the server has already resolved exactly one
@@ -143,6 +146,10 @@ export default function DashboardPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAllWorkItems, setShowAllWorkItems] = useState(false);
+  // Which work item's inline image-only Live Updates panel is expanded
+  // (see showLiveUpdatesColumn) — null when none is. Toggled, not
+  // routed: clicking the same row's button again collapses it.
+  const [expandedLiveUpdatesCode, setExpandedLiveUpdatesCode] = useState<string | null>(null);
 
   useEffect(() => {
     let ignore = false;
@@ -415,7 +422,7 @@ export default function DashboardPanel({
                       <th className="text-left px-5 py-2.5 font-medium">Work Item</th>
                       <th className="text-left px-5 py-2.5 font-medium">Progress</th>
                       <th className="text-left px-5 py-2.5 font-medium">Status</th>
-                      {onViewLiveUpdates && (
+                      {showLiveUpdatesColumn && (
                         <th className="text-left px-5 py-2.5 font-medium">Live Updates</th>
                       )}
                     </tr>
@@ -423,42 +430,60 @@ export default function DashboardPanel({
                   <tbody className="divide-y divide-line">
                     {visibleWorkItems.map((item) => {
                       const badge = statusBadge(item);
+                      const expanded = expandedLiveUpdatesCode === item.code;
                       return (
-                        <tr
-                          key={item.workItemId}
-                          className="min-h-[46px] transition-colors duration-150 hover:bg-surface-hover"
-                        >
-                          <td className="px-5 py-3">
-                            <span className="text-foreground-secondary">{item.code}</span> {item.description}
-                            {data.scopeDepartments.length > 1 && !departmentId && (
-                              <span className="text-foreground-muted text-xs"> · {item.departmentName}</span>
-                            )}
-                          </td>
-                          <td className="px-5 py-3 w-40">
-                            <div className="flex items-center gap-2">
-                              <div className="w-24">
-                                <ProgressBar percent={item.progressPercentage} />
-                              </div>
-                              <span className="text-xs text-foreground-secondary whitespace-nowrap tabular-nums">
-                                {formatPercent(item.progressPercentage)}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="px-5 py-3">
-                            <Badge variant={badge.variant}>{badge.label}</Badge>
-                          </td>
-                          {onViewLiveUpdates && (
+                        <Fragment key={item.workItemId}>
+                          <tr className="min-h-[46px] transition-colors duration-150 hover:bg-surface-hover">
                             <td className="px-5 py-3">
-                              <button
-                                type="button"
-                                onClick={() => onViewLiveUpdates(item.code)}
-                                className="rounded-md border border-line bg-surface-soft px-2.5 py-1 text-xs font-medium text-foreground-secondary transition-colors duration-150 hover:border-brand-border hover:bg-brand-soft whitespace-nowrap"
-                              >
-                                View Live Updates
-                              </button>
+                              <span className="text-foreground-secondary">{item.code}</span> {item.description}
+                              {data.scopeDepartments.length > 1 && !departmentId && (
+                                <span className="text-foreground-muted text-xs"> · {item.departmentName}</span>
+                              )}
                             </td>
+                            <td className="px-5 py-3 w-40">
+                              <div className="flex items-center gap-2">
+                                <div className="w-24">
+                                  <ProgressBar percent={item.progressPercentage} />
+                                </div>
+                                <span className="text-xs text-foreground-secondary whitespace-nowrap tabular-nums">
+                                  {formatPercent(item.progressPercentage)}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-5 py-3">
+                              <Badge variant={badge.variant}>{badge.label}</Badge>
+                            </td>
+                            {showLiveUpdatesColumn && (
+                              <td className="px-5 py-3">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setExpandedLiveUpdatesCode((prev) => (prev === item.code ? null : item.code))
+                                  }
+                                  className="rounded-md border border-line bg-surface-soft px-2.5 py-1 text-xs font-medium text-foreground-secondary transition-colors duration-150 hover:border-brand-border hover:bg-brand-soft whitespace-nowrap"
+                                >
+                                  {expanded ? "Hide Live Updates" : "View Live Updates"}
+                                </button>
+                              </td>
+                            )}
+                          </tr>
+                          {/* Displays directly under the row it belongs to —
+                              never a navigation to the general Live Updates
+                              tab. Image-only (mode="imageOnly"), scoped to
+                              exactly this work item via initialFilterCode;
+                              the underlying feed is still fetched
+                              server-scoped to this reviewer's own
+                              project/department (see LiveUpdateFeed /
+                              /api/workflow/live-updates), so this can never
+                              show another work item's or project's images. */}
+                          {showLiveUpdatesColumn && expanded && (
+                            <tr>
+                              <td colSpan={4} className="px-5 py-4 bg-surface-soft">
+                                <LiveUpdateFeed mode="imageOnly" initialFilterCode={item.code} />
+                              </td>
+                            </tr>
                           )}
-                        </tr>
+                        </Fragment>
                       );
                     })}
                   </tbody>

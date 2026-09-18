@@ -1,21 +1,34 @@
 "use client";
 
 import { useState } from "react";
-import ValidationStatus from "./ValidationStatus";
+import ValidationPanel, { type RelevanceCheckResult } from "./ValidationPanel";
 
 type Props = {
   locked: boolean;
   onResult: (status: "VALID" | "INVALID", normalizedText?: string) => void;
+  /** The Worker's currently selected work item, if any — passed through
+   * to /api/text so the single Validation step can also check the
+   * extracted text against it (see lib/construction.ts
+   * assessWorkerSubmissionRelevance). Omitted by any caller with no
+   * selected work item (e.g. the standalone Extraction Accuracy Test
+   * tool). */
+  workItemCode?: string | null;
+  workItemDescription?: string | null;
+  /** The Worker's own department — display-only (the relevance check
+   * itself is resolved server-side from the real session, never from
+   * this prop); shown in the wrong-department message. */
+  departmentName?: string | null;
 };
 
-export default function TextInput({ locked, onResult }: Props) {
+export default function TextInput({ locked, onResult, workItemCode, workItemDescription, departmentName }: Props) {
   const [text, setText] = useState("");
   const [status, setStatus] = useState<"IDLE" | "PROCESSING" | "VALID" | "INVALID">("IDLE");
   const [normalizedText, setNormalizedText] = useState("");
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
   const [submissionId, setSubmissionId] = useState<string | null>(null);
-  const [userValidation, setUserValidation] = useState<"valid" | "invalid" | null>(null);
+  const [relevance, setRelevance] = useState<RelevanceCheckResult | undefined>(undefined);
+  const [userValidation, setUserValidation] = useState<"valid" | null>(null);
   const [userValidationBusy, setUserValidationBusy] = useState(false);
 
   async function handleSubmit() {
@@ -27,7 +40,7 @@ export default function TextInput({ locked, onResult }: Props) {
       const res = await fetch("/api/text", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, workItemDescription: workItemDescription ?? undefined }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -39,6 +52,7 @@ export default function TextInput({ locked, onResult }: Props) {
       setReason(data.reason);
       setStatus(data.status);
       setSubmissionId(data.submissionId);
+      setRelevance(data.relevance);
       if (data.status === "INVALID") {
         onResult("INVALID");
       }
@@ -48,7 +62,7 @@ export default function TextInput({ locked, onResult }: Props) {
     }
   }
 
-  async function handleUserValidation(decision: "valid" | "invalid") {
+  async function handleConfirm() {
     if (!submissionId) return;
     setUserValidationBusy(true);
     setError("");
@@ -56,18 +70,15 @@ export default function TextInput({ locked, onResult }: Props) {
       const res = await fetch("/api/user-validation", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ submissionId, decision }),
+        body: JSON.stringify({ submissionId, decision: "valid" }),
       });
       const data = await res.json();
       if (!res.ok) {
         setError(data.error ?? "User validation failed.");
         return;
       }
-      setUserValidation(decision);
-      onResult(
-        decision === "valid" ? "VALID" : "INVALID",
-        decision === "valid" ? normalizedText : undefined
-      );
+      setUserValidation("valid");
+      onResult("VALID", normalizedText);
     } catch {
       setError("User validation request failed.");
     } finally {
@@ -102,40 +113,17 @@ export default function TextInput({ locked, onResult }: Props) {
           <p className="bg-[#FAFAFA] border border-line text-foreground rounded p-2">{normalizedText}</p>
         </div>
       )}
-      <ValidationStatus status={displayStatus} reason={reason} confidence={null} />
-      {!locked && status === "VALID" && (
-        <div className="border-t border-line pt-3 space-y-2">
-          {userValidation === null ? (
-            <>
-              <p className="text-xs font-medium text-foreground-secondary">User Validation</p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleUserValidation("valid")}
-                  disabled={userValidationBusy}
-                  className="px-3 py-1.5 bg-green-600 text-white rounded text-sm font-medium disabled:opacity-50"
-                >
-                  Valid
-                </button>
-                <button
-                  onClick={() => handleUserValidation("invalid")}
-                  disabled={userValidationBusy}
-                  className="px-3 py-1.5 bg-red-600 text-white rounded text-sm font-medium disabled:opacity-50"
-                >
-                  Invalid
-                </button>
-              </div>
-            </>
-          ) : userValidation === "valid" ? (
-            <p className="text-sm font-medium text-green-700">
-              User Validation: VALID — Accepted
-            </p>
-          ) : (
-            <p className="text-sm font-medium text-red-700">
-              User Validation: INVALID — enter a new attempt.
-            </p>
-          )}
-        </div>
-      )}
+      <ValidationPanel
+        status={displayStatus}
+        reason={reason}
+        confidence={null}
+        relevance={relevance}
+        ownDepartmentName={departmentName}
+        workItemCode={workItemCode}
+        decision={userValidation}
+        busy={userValidationBusy}
+        onConfirm={handleConfirm}
+      />
     </div>
   );
 }

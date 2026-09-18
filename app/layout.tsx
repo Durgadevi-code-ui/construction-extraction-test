@@ -1,10 +1,6 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
-import TopNav from "@/components/workflow/TopNav";
-import { getCurrentUser } from "@/lib/session";
-import { isAdminUser } from "@/lib/authContext";
-import { getSupabaseClient } from "@/lib/supabase";
 
 const geistSans = Geist({
   subsets: ["latin"],
@@ -17,21 +13,23 @@ export const metadata: Metadata = {
   description: "Construction progress tracking, review, and approval workflow.",
 };
 
-export default async function RootLayout({ children }: LayoutProps<"/">) {
-  // Best-effort only: getCurrentUser() never throws (returns null when
-  // there's no session, e.g. on /login), and isAdminUser is wrapped
-  // separately so a lookup failure never breaks the whole app shell —
-  // it just falls back to hiding the admin-only nav links, the safe
-  // default.
-  const currentUser = await getCurrentUser().catch(() => null);
-  const isAdmin = currentUser
-    ? await isAdminUser(getSupabaseClient(), currentUser.userId).catch(() => false)
-    : false;
-
+// No top nav bar (Agentic Atoms / Progress Workflow / Dashboard) is
+// rendered here — removed permanently, for every route, not just
+// role-conditionally. Each role's own dashboard shell
+// (DashboardShell/WorkerTabs) is a self-contained surface with its own
+// branding/nav; Admin's two links that used to live in that bar
+// ("Dashboard" -> /workflow/dashboard, "Extraction Test (Dev)" ->
+// /dev/extraction-test) are relocated into the Admin main screen (see
+// components/admin/AdminSetupPanel.tsx's `actions` prop on
+// DashboardShell) rather than reintroduced here — this file intentionally
+// has no per-route/per-role branching to keep "no header, anywhere" a
+// single, deterministic fact rather than a list of exceptions to
+// maintain.
+export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`h-full antialiased ${geistSans.variable}`}>
       {/* overflow-x-hidden is a defensive backstop only — every legitimate
-          horizontal scroll area (TopNav, TabNav, data tables) has its own
+          horizontal scroll area (TabNav, data tables) has its own
           explicit overflow-x-auto container, which still scrolls normally
           nested inside this; this just stops any missed/future overflow
           from widening the whole page. */}
@@ -42,7 +40,6 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
             single application surface (bg-background on body), no
             separate decorative layer behind it. */}
         <div className="min-h-screen flex flex-col">
-          <TopNav isAdmin={isAdmin} />
           <div className="flex-1 flex flex-col">{children}</div>
         </div>
       </body>

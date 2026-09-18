@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseClient, STORAGE_BUCKETS } from "@/lib/supabase";
 import { runOCR } from "@/lib/ocr";
 import { normalizeText, validateHandwritten } from "@/lib/validation";
-import { resolveConstructionContext } from "@/lib/construction";
+import { resolveConstructionContext, assessImageSubmissionRelevance, imageRelevanceRejection } from "@/lib/construction";
 
 export const runtime = "nodejs";
 
@@ -22,6 +22,12 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get("image");
+    // Same optional work-item-relevance check as /api/text — see its
+    // doc comment. A form field, not JSON, since this route already
+    // reads multipart formData for the image itself.
+    const selectedWorkItemDescriptionRaw = formData.get("workItemDescription");
+    const selectedWorkItemDescription =
+      typeof selectedWorkItemDescriptionRaw === "string" ? selectedWorkItemDescriptionRaw : null;
 
     // ------------------------------------------------------------
     // 1. Validate image
@@ -56,7 +62,34 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
 
     // ------------------------------------------------------------
-    // 3. Run OCR
+    // 3. Department relevance — looks at the actual physical
+    //    construction work shown in the photo (Gemini Vision, a
+    //    different prompt from runOCR's "read the note text" one —
+    //    see lib/construction.ts assessImageSubmissionRelevance /
+    //    lib/ocr.ts classifyConstructionImageDepartment). Runs BEFORE
+    //    OCR, storage upload, and the extraction_submissions insert —
+    //    a wrong-department, too-unclear, or classifier/provider-
+    //    failure image must never be persisted or processed further
+    //    (same shared imageRelevanceRejection helper and behavior as
+    //    app/api/workflow/live-updates/route.ts's Live Update photo
+    //    flow). A "notChecked" result (no real Worker session, e.g.
+    //    the standalone Extraction Accuracy Test tool) falls through
+    //    to the normal flow below, unchanged.
+    // ------------------------------------------------------------
+
+    const { relevance, visionChecked, ownDepartmentName } = await assessImageSubmissionRelevance(
+      supabase,
+      buffer,
+      file.type,
+      selectedWorkItemDescription
+    );
+    const rejection = imageRelevanceRejection(relevance, ownDepartmentName);
+    if (rejection) {
+      return NextResponse.json({ error: rejection.error }, { status: rejection.status });
+    }
+
+    // ------------------------------------------------------------
+    // 4. Run OCR
     // ------------------------------------------------------------
 
     const ocrResult = await runOCR(buffer, file.type);
@@ -66,12 +99,23 @@ export async function POST(request: NextRequest) {
     const confidence = ocrFailed ? null : ocrResult.confidence;
     const normalized = ocrFailed ? "" : normalizeText(rawText);
 
-    const validation = ocrFailed
+    const ocrValidation = ocrFailed
       ? { status: "INVALID" as const, reason: ocrResult.error }
       : validateHandwritten(ocrResult.rawText, ocrResult.confidence);
 
+    // The image was usefully processed if EITHER signal succeeded: OCR
+    // found real note text, or the vision model rendered a verdict on
+    // the photo's physical content (department match, or a genuine
+    // "vague"/"notChecked" — anything that reached this point already
+    // passed imageRelevanceRejection above, so it's never a rejection
+    // reaching here). Only when neither worked at all is this
+    // genuinely "extraction failed."
+    const status: "VALID" | "INVALID" = ocrValidation.status === "VALID" || visionChecked ? "VALID" : "INVALID";
+    const reason =
+      ocrValidation.status === "VALID" ? ocrValidation.reason : visionChecked ? "Image analyzed." : ocrValidation.reason;
+
     // ------------------------------------------------------------
-    // 4. Resolve project / department / work item / worker from the
+    // 5. Resolve project / department / work item / worker from the
     //    Construction Automation schema (never hardcoded).
     // ------------------------------------------------------------
 
@@ -87,7 +131,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ------------------------------------------------------------
-    // 5. Upload image to Supabase Storage
+    // 6. Upload image to Supabase Storage
     // ------------------------------------------------------------
 
     const path = `${randomUUID()}.${file.type.split("/")[1] || "bin"}`;
@@ -108,7 +152,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ------------------------------------------------------------
-    // 6. Save into extraction_submissions
+    // 7. Save into extraction_submissions
     // ------------------------------------------------------------
 
     const { data: submission, error: insertError } = await supabase
@@ -133,17 +177,19 @@ export async function POST(request: NextRequest) {
           : { raw_text: rawText, normalized_text: normalized },
         confidence_score: confidence,
 
-        processing_status: ocrFailed ? "FAILED" : "COMPLETED",
+        // Reflects the COMBINED (OCR or vision) outcome, not OCR alone
+        // — a real construction photo with no note text on it, whose
+        // physical content the vision check successfully classified,
+        // is genuinely "processed", not "failed".
+        processing_status: ocrFailed && !visionChecked ? "FAILED" : "COMPLETED",
         processing_error: ocrFailed ? ocrResult.error : null,
         processed_at: new Date().toISOString(),
 
-        validation_status: validation.status,
-        validation_errors:
-          validation.status === "INVALID" ? { reason: validation.reason } : null,
+        validation_status: status,
+        validation_errors: status === "INVALID" ? { reason } : null,
         validated_at: new Date().toISOString(),
 
-        submission_status:
-          validation.status === "VALID" ? "PENDING_REVIEW" : "REJECTED",
+        submission_status: status === "VALID" ? "PENDING_REVIEW" : "REJECTED",
       })
       .select()
       .single();
@@ -161,10 +207,16 @@ export async function POST(request: NextRequest) {
     }
 
     // ------------------------------------------------------------
-    // 7. Return response
+    // 8. Return response
     // ------------------------------------------------------------
 
-    if (ocrFailed) {
+    // Only a genuine provider/infra failure with NO usable signal at
+    // all (OCR errored AND the vision check couldn't run either) is a
+    // hard failure — otherwise (e.g. OCR found nothing but vision
+    // successfully classified the photo) this falls through to the
+    // normal 200 response below with status/relevance reflecting
+    // whichever signal actually worked.
+    if (ocrFailed && !visionChecked) {
       return NextResponse.json({ error: ocrResult.error }, { status: 503 });
     }
 
@@ -173,12 +225,16 @@ export async function POST(request: NextRequest) {
       rawText,
       normalizedText: normalized,
       confidence,
-      status: validation.status,
-      reason: validation.reason,
+      status,
+      reason,
       workItem: {
         code: context.workItemCode,
         description: context.workItemDescription,
       },
+      // The VISUAL department/work-item check (see
+      // assessImageSubmissionRelevance above) — looks at the photo's
+      // actual physical content, not just any note text OCR'd off it.
+      relevance,
     });
   } catch (err) {
     console.error("Handwritten pipeline error:", err);

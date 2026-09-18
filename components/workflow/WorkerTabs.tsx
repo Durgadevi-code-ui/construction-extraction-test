@@ -79,6 +79,13 @@ type Props = {
   suggestionNote: string | null;
   history: WorkerHistoryItem[];
   approvedWork: WorkerApprovedWorkItem[];
+  /** Rendered in the header row, left of the date chip — a "switch
+   * project" control (see app/workflow/worker/page.tsx), only ever
+   * non-null when this worker actually holds more than one active
+   * project assignment. Omitted entirely for the (still-common)
+   * single-project worker, same principle as DashboardShell's `actions`
+   * prop. */
+  projectSwitcher?: React.ReactNode;
 };
 
 const TABS = [
@@ -122,6 +129,7 @@ export default function WorkerTabs({
   suggestionNote,
   history,
   approvedWork,
+  projectSwitcher,
 }: Props) {
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("update");
   const [logoAvailable, setLogoAvailable] = useState(true);
@@ -131,9 +139,12 @@ export default function WorkerTabs({
 
   return (
     // No rounded corners/border/shadow/page padding around this shell —
-    // it IS the single application surface directly below TopNav, not a
-    // card floating over a differently-colored page background.
-    <div className="flex flex-col lg:flex-row bg-surface min-h-[calc(100vh-64px)]">
+    // it IS the single application surface, not a card floating over a
+    // differently-colored page background. TopNav no longer renders
+    // above the Worker screen, so this claims the full viewport height
+    // (not calc(100vh-64px), a stale TopNav-height offset that would
+    // otherwise leave a dead gap at the bottom).
+    <div className="flex flex-col lg:flex-row bg-surface min-h-screen">
       {/* Sidebar nav — same 5 tabs as before, now vertical */}
       <aside className="lg:w-60 shrink-0 bg-gradient-to-b from-brand via-[#173c52] to-info text-white flex flex-col">
         <div className="px-5 py-5 border-b border-white/10 flex items-center gap-2.5">
@@ -197,6 +208,7 @@ export default function WorkerTabs({
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {projectSwitcher}
             <span
               suppressHydrationWarning
               className="hidden sm:inline text-xs text-foreground-secondary bg-surface-soft border border-line rounded-full px-3 py-1.5"
@@ -230,6 +242,9 @@ export default function WorkerTabs({
               <DailyWorkUpdate
                 workerId={workerId}
                 workItemId={activeWorkItem.id}
+                workItemCode={activeWorkItem.code}
+                workItemDescription={activeWorkItem.description}
+                departmentName={departmentName}
                 plannedQuantity={activeWorkItem.plannedQuantity}
                 unitOfMeasure={activeWorkItem.unitOfMeasure}
               />

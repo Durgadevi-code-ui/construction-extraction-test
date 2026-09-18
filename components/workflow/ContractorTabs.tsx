@@ -85,7 +85,6 @@ export default function ContractorTabs({
   delegatedScopes,
 }: Props) {
   const [tab, setTab] = useState("today");
-  const [liveUpdatesFilter, setLiveUpdatesFilter] = useState<string | null>(null);
 
   const showDashboardPanel = tab === "dashboard" || tab === "workItems" || tab === "departments";
 
@@ -127,14 +126,7 @@ export default function ContractorTabs({
           userId={userId}
           initialData={dashboardData}
           sections={DASHBOARD_PANEL_SECTIONS[tab]}
-          onViewLiveUpdates={
-            tab === "workItems"
-              ? (code) => {
-                  setLiveUpdatesFilter(code);
-                  setTab("liveUpdates");
-                }
-              : undefined
-          }
+          showLiveUpdatesColumn={tab === "workItems"}
         />
       )}
 
@@ -142,7 +134,11 @@ export default function ContractorTabs({
         <DelegatedAdminPanel contractorUserId={userId} scopes={delegatedScopes} />
       )}
 
-      {tab === "liveUpdates" && <LiveUpdateFeed initialFilterCode={liveUpdatesFilter} />}
+      {/* The general/normal Live Updates tab — every media type (image
+          AND voice), unfiltered. Distinct from the per-Work-Item
+          image-only panel embedded inline above (DashboardPanel's
+          showLiveUpdatesColumn), which never routes here. */}
+      {tab === "liveUpdates" && <LiveUpdateFeed mode="normal" />}
 
       {tab === "communication" && <ChatPanel />}
     </DashboardShell>

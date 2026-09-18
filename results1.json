@@ -1,0 +1,52 @@
+[
+  {
+    "name": "Electrical worker -> 053 ALLOW",
+    "pass": true,
+    "detail": "{\"projectName\":\"New York City Commercial Building\",\"departmentName\":\"Electrical Department\",\"workItem\":{\"id\":\"00da59ff-5"
+  },
+  {
+    "name": "Electrical worker -> 055 ALLOW",
+    "pass": true,
+    "detail": "{\"projectName\":\"New York City Commercial Building\",\"departmentName\":\"Electrical Department\",\"workItem\":{\"id\":\"f22f7387-6"
+  },
+  {
+    "name": "Electrical worker default -> lowest assigned (053)",
+    "pass": true,
+    "detail": "{\"projectName\":\"New York City Commercial Building\",\"departmentName\":\"Electrical Department\",\"workItem\":{\"id\":\"00da59ff-5"
+  },
+  {
+    "name": "Electrical worker -> 054 (unassigned) DENY",
+    "pass": true,
+    "detail": "status=500 {\"error\":\"Work item 48078adf-8346-4144-a56b-55478061433e is not assigned to worker 8c680558-6399-482b-9173-17636f976ced\"}"
+  },
+  {
+    "name": "Electrical worker -> 056 (unassigned) DENY",
+    "pass": true,
+    "detail": "status=500 {\"error\":\"Work item 89ca56ef-ec30-4f14-928f-9bf4173d9ca3 is not assigned to worker 8c680558-6399-482b-9173-17636f976ced\"}"
+  },
+  {
+    "name": "Electrical worker -> Plumbing 043 DENY",
+    "pass": true,
+    "detail": "status=500 {\"error\":\"Work item 3263d029-47bc-42f8-93b8-69841b1b452a does not belong to department 8be7ae15-b312-4e1a-92cc-b9df5ce5b35d\"}"
+  },
+  {
+    "name": "Plumbing worker -> Electrical 053 DENY",
+    "pass": true,
+    "detail": "status=500 {\"error\":\"Work item 00da59ff-53dc-479d-96ef-7c46fb5ca831 does not belong to department 4884362d-95df-4b9f-b40d-dc4a93ee5923\"}"
+  },
+  {
+    "name": "Plumbing worker -> 043 ALLOW",
+    "pass": true,
+    "detail": "{\"projectName\":\"New York City Commercial Building\",\"departmentName\":\"Plumbing Department\",\"workItem\":{\"id\":\"3263d029-47b"
+  },
+  {
+    "name": "Plumbing worker -> 044 (unassigned) DENY",
+    "pass": true,
+    "detail": "status=500 {\"error\":\"Work item f355f909-7e95-4844-8329-90e78f526f5b is not assigned to worker 9fd0afad-39eb-417c-8dd2-a0b557b13940\"}"
+  },
+  {
+    "name": "Plumbing worker -> 045 (unassigned) DENY",
+    "pass": true,
+    "detail": "status=500 {\"error\":\"Work item 125146a5-3c7e-4d9f-be8f-a3115b1ae7c0 is not assigned to worker 9fd0afad-39eb-417c-8dd2-a0b557b13940\"}"
+  }
+]
