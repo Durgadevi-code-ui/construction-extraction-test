@@ -25,8 +25,8 @@ export default function ResetPasswordForm() {
         />
       </div>
 
-      {state?.error && <p className="text-sm text-red-600">{state.error}</p>}
-      {state?.message && <p className="text-sm text-green-700">{state.message}</p>}
+      {state?.error && <p className="text-sm text-error">{state.error}</p>}
+      {state?.message && <p className="text-sm text-success">{state.message}</p>}
 
       <button
         type="submit"

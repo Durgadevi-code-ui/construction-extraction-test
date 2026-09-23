@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getSupabaseClient } from "@/lib/supabase";
 import { getCurrentUser } from "@/lib/session";
+import { resolveActorRole } from "@/lib/authContext";
 import {
   getUnreadNotificationCount,
   listNotificationsForUser,
@@ -28,8 +29,12 @@ export async function GET(request: NextRequest) {
   const unreadOnly = request.nextUrl.searchParams.get("unreadOnly") === "true";
 
   try {
+    // Role is used only to pick each notification's navigation target
+    // (see resolveNotificationTarget) — never to widen which rows are
+    // returned; that's still ownership alone (recipient_user_id).
+    const recipientRole = await resolveActorRole(supabase, currentUser.userId);
     const [notifications, unreadCount] = await Promise.all([
-      listNotificationsForUser(supabase, currentUser.userId, { unreadOnly, limit: 50 }),
+      listNotificationsForUser(supabase, currentUser.userId, recipientRole, { unreadOnly, limit: 50 }),
       getUnreadNotificationCount(supabase, currentUser.userId),
     ]);
     return NextResponse.json({ notifications, unreadCount });

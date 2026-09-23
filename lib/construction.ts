@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getCurrentUser } from "./session";
 import { getUserContext } from "./authContext";
-import { classifyConstructionImageDepartment } from "./ocr";
+import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
 
 /**
  * Resolves extraction submissions to the Construction Automation schema
@@ -245,14 +245,14 @@ export type RelevanceResult =
   | { status: "wrongDepartment"; matchedDepartmentName: string | null }
   | { status: "vague" }
   | { status: "workItemMismatch" }
-  /** Image path only: the classifier/provider itself failed (network,
-   * auth, rate limit/quota, model unavailable, unexpected exception,
-   * or the worker's own department was missing from the project
-   * catalog) — the photo was never actually looked at, so this is
-   * NEVER conflated with "vague" (a completed classification that
-   * came back inconclusive) or "wrongDepartment". Callers must reject
-   * on this exactly like any other non-"valid" status, but with a
-   * distinct, retryable message — see imageRelevanceRejection. */
+  /** Reserved for a check that could not run at all (provider/network
+   * failure) as opposed to "vague" (a completed check that came back
+   * inconclusive). Not currently produced by any TEXT/VOICE relevance
+   * path below — images no longer run a department classification at
+   * all (that check was intentionally removed; see components/workflow/
+   * LiveUpdateBar.tsx and app/api/handwritten/route.ts) — kept in the
+   * union so ValidationPanel.tsx's mirrored type and rendering stay
+   * valid without change. */
   | { status: "checkFailed" };
 
 /**
@@ -339,6 +339,64 @@ export function assessSubmissionRelevance(params: {
   return { status: "valid" };
 }
 
+/** Whether the text shares at least one substantive word with a work
+ * item's own description - used only after the worker has explicitly
+ * confirmed that work item (see app/api/text/route.ts). */
+export function textMatchesWorkItem(text: string, description: string): boolean {
+  const itemTokens = new Set(tokenize(description));
+  return tokenize(text).some((t) => itemTokens.has(t));
+}
+
+export type TaskConflictResult =
+  | { status: "noConflict" }
+  | { status: "conflict"; matchedTask: { id: string; label: string } };
+
+/**
+ * Detects when a worker's typed text clearly names a DIFFERENT task of
+ * the same work item than the one they explicitly selected — e.g.
+ * selected task "Install metal stud framing" but the text reads "Tape
+ * and finish joints done today." Reuses the same tokenize/keyword-
+ * overlap technique as assessSubmissionRelevance/textMatchesWorkItem —
+ * semantic-ish via shared words, not exact phrase matching.
+ *
+ * Deliberately conservative: only flags a conflict when a DIFFERENT
+ * task scores clearly higher than the selected one AND on at least two
+ * shared substantive words — a terse update, or text that merely
+ * mentions the selected task's own wording (even partially), is never
+ * falsely flagged. This mirrors resolveWorkItemAmbiguity's "only ask/
+ * flag on strong evidence" principle at the task level, so a worker who
+ * picked the right task from the dropdown and typed a normal update is
+ * never bothered.
+ */
+export function detectTaskConflict(
+  text: string,
+  selectedTask: { id: string; label: string },
+  allTasks: { id: string; label: string }[]
+): TaskConflictResult {
+  const textTokens = new Set(tokenize(text));
+  if (textTokens.size < MIN_TOKENS_TO_JUDGE) return { status: "noConflict" };
+
+  const scoreFor = (label: string) =>
+    tokenize(label).filter((token) => textTokens.has(token)).length;
+  const selectedScore = scoreFor(selectedTask.label);
+
+  let best: { id: string; label: string } | null = null;
+  let bestScore = 0;
+  for (const task of allTasks) {
+    if (task.id === selectedTask.id) continue;
+    const score = scoreFor(task.label);
+    if (score > bestScore) {
+      bestScore = score;
+      best = task;
+    }
+  }
+
+  if (best && bestScore >= 2 && bestScore > selectedScore) {
+    return { status: "conflict", matchedTask: best };
+  }
+  return { status: "noConflict" };
+}
+
 export type RelevanceCheckResult = RelevanceResult | { status: "notChecked" };
 
 /**
@@ -359,13 +417,27 @@ export type RelevanceCheckResult = RelevanceResult | { status: "notChecked" };
 export async function assessWorkerSubmissionRelevance(
   supabase: SupabaseClient,
   text: string,
-  selectedWorkItemDescription: string | null
+  selectedWorkItemDescription: string | null,
+  selectedWorkItemId?: string | null
 ): Promise<RelevanceCheckResult> {
   try {
     const currentUser = await getCurrentUser();
     if (!currentUser) return { status: "notChecked" };
 
-    const ctx = await getUserContext(supabase, currentUser.userId);
+    // A worker on several projects is judged against the project of the
+    // work item they selected, not always their first one. A work item
+    // outside their own projects just falls back to the default context
+    // (getUserContext ignores a project the user has no Active role in).
+    let projectId: string | undefined;
+    if (selectedWorkItemId) {
+      const { data } = await supabase
+        .from("work_items")
+        .select("project_id")
+        .eq("work_item_id", selectedWorkItemId)
+        .maybeSingle();
+      projectId = (data?.project_id as string | undefined) ?? undefined;
+    }
+    const ctx = await getUserContext(supabase, currentUser.userId, projectId ? { projectId } : undefined);
     if (ctx.role !== "WORKER") return { status: "notChecked" };
 
     const departments = await getProjectDepartmentVocabulary(supabase, ctx.projectId);
@@ -380,225 +452,207 @@ export async function assessWorkerSubmissionRelevance(
   }
 }
 
+export type WorkItemCandidate = {
+  workItemId: string;
+  code: string;
+  description: string;
+  plannedQuantity: number | null;
+  unitOfMeasure: string | null;
+};
+
+export type WorkItemAmbiguityResult =
+  | { status: "clear" }
+  /** `selectedInTie`: the worker's currently selected item is one of the
+   * tied candidates (the text is about that family of similar items). */
+  | { status: "ambiguous"; candidates: WorkItemCandidate[]; selectedInTie: boolean }
+  /** No longer produced by resolveWorkItemAmbiguity below (a strong
+   * conflict with an explicitly selected item is always asked about via
+   * "ambiguous" now, never silently switched) — kept in the type only
+   * so existing callers that still check for it keep compiling. */
+  | { status: "resolved"; workItem: WorkItemCandidate }
+  | { status: "confirmed"; workItem: WorkItemCandidate }
+  | { status: "invalidConfirmation" };
+
+/** Like `tokenize`, but keeps 1-2 character tokens ("1", "2", "l2") —
+ * those are exactly what tells "Level 1" from "Level 2" apart. */
+function tokenizeDistinguishing(text: string): string[] {
+  return text.toLowerCase().match(/[a-z0-9]+/g)?.filter((w) => !STOPWORDS.has(w)) ?? [];
+}
+
 /**
- * The visual counterpart to assessWorkerSubmissionRelevance — same
- * session resolution, same RelevanceCheckResult shape (reusing the
- * existing structure rather than inventing a new one), but the
- * department verdict comes from actually looking at the photo's
- * physical content (lib/ocr.ts classifyConstructionImageDepartment,
- * Gemini Vision), not from OCR'd note text. This is what makes a photo
- * of real work with no writing on it classifiable at all — an
- * OCR-only check (assessWorkerSubmissionRelevance) has nothing to work
- * with for that case.
+ * Similar-work-item handling for a Worker's typed update. Purely
+ * additive to assessWorkerSubmissionRelevance (which still runs, and
+ * still rejects wrong-department/vague/mismatched text exactly as
+ * before) — this only decides whether the text points at ONE of the
+ * worker's own assigned work items or is a tie between several similar
+ * ones ("Electrical Installation — Level 1/2/3" with text that never
+ * says which level).
  *
- * Department-level match is the ONLY mandatory rule for an image. Work
- * item relevance (classification.workItemRelevant) is computed by the
- * model for information purposes only and is never used to block —
- * unlike the TEXT-based assessSubmissionRelevance, where a work-item
- * mismatch does still block. A photo can clearly show the correct
- * department's work without visually proving one narrow selected work
- * item description.
+ * Candidates come only from the worker's own Active work_item_assignments
+ * (server-verified session), narrowed to the same project + department
+ * as the work item they currently have selected — no names, numbers or
+ * projects are hardcoded, so new projects/work items/assignments are
+ * picked up automatically. A tie is reported ambiguous ONLY when the
+ * text contains nothing (a level number, a line item code, another
+ * distinguishing word) that singles out exactly one of the tied items;
+ * otherwise it is "clear" and the worker is not bothered. Anything
+ * unexpected (no worker session, non-Worker role, lookup failure)
+ * degrades to "clear" — the old behavior — never blocks extraction.
  *
- * FAIL-CLOSED for a confirmed authenticated Worker, with THREE distinct
- * outcomes below "valid" — never collapsed into one another:
- *   - "wrongDepartment": the classifier confidently identified a
- *     DIFFERENT real project department.
- *   - "vague": the classifier ran successfully but the photo itself
- *     didn't contain enough recognizable construction evidence to name
- *     any department confidently.
- *   - "checkFailed": the classifier/provider itself did not run to
- *     completion (not configured, network/auth/rate-limit/quota/
- *     provider error, an unexpected exception, or the worker's own
- *     department was missing from the project catalog). This is NOT
- *     "vague" — nothing about the image was actually judged — so it
- *     must never be reported to the worker as if their photo showed
- *     the wrong department or was unclear; see imageRelevanceRejection
- *     for the distinct retryable message.
- * `{ status: "notChecked" }` is returned ONLY when there is genuinely
- * no authenticated Worker to enforce a department against at all (no
- * session, or a non-Worker role, e.g. the standalone Extraction
- * Accuracy Test tool). A confirmed Worker's photo is never silently
- * accepted just because the check itself broke.
- *
- * `visionChecked` mirrors `relevance.status !== "notChecked"`.
- *
- * `ownDepartmentName` (the resolved worker's own real department, from
- * the server-verified session — never client-supplied) is returned
- * alongside so a caller that doesn't already have it on hand (e.g. the
- * Live Update photo route) can build a message like "...not Electrical
- * Department work" without a second session lookup. Null when no
- * Worker was confirmed, or when even the worker's own department
- * couldn't be resolved.
- *
- * Diagnostic logging below is permanent, safe production telemetry
- * (worker role/department/project, the real department names supplied
- * to the classifier, success/failure and failure category, the
- * detected department, and the final decision) — never the image
- * bytes, never any credential/token/PII. See AGENTS.md's diagnostic
- * logging requirement.
+ * `confirmedWorkItemId` (the worker's pick from a previous "ambiguous"
+ * answer) is re-verified against that same assigned set here, so it can
+ * never be used to target a work item that isn't theirs.
  */
-export async function assessImageSubmissionRelevance(
+export async function resolveWorkItemAmbiguity(
   supabase: SupabaseClient,
-  fileBuffer: Buffer,
-  mimeType: string,
-  selectedWorkItemDescription: string | null
-): Promise<{ relevance: RelevanceCheckResult; visionChecked: boolean; ownDepartmentName: string | null }> {
-  const currentUser = await getCurrentUser().catch(() => null);
-  if (!currentUser) return { relevance: { status: "notChecked" }, visionChecked: false, ownDepartmentName: null };
-
-  let ctx;
+  text: string,
+  selectedWorkItemId: string,
+  confirmedWorkItemId?: string | null,
+  /** Whether `selectedWorkItemId` is the Worker's own explicit choice
+   * (picked in WorkItemSelector) as opposed to the system's own
+   * auto-suggested default (see page.tsx's isAutoSuggested). Defaults to
+   * true (explicit) so every pre-existing caller that doesn't pass this
+   * keeps its old behavior. Only affects the "text gives no signal at
+   * all" branch below (see its own comment) — CASE 1/3/4 (a signal
+   * clearly matches, or clearly conflicts with, the selection) are
+   * unaffected either way, since those never depended on how the
+   * selection was made. */
+  hasExplicitSelection: boolean = true
+): Promise<WorkItemAmbiguityResult> {
   try {
-    ctx = await getUserContext(supabase, currentUser.userId);
-  } catch {
-    // Could not even confirm this caller IS a Worker — not the
-    // fail-closed case (that requires a CONFIRMED Worker), so this
-    // stays "notChecked" exactly like before.
-    return { relevance: { status: "notChecked" }, visionChecked: false, ownDepartmentName: null };
-  }
-  if (ctx.role !== "WORKER") return { relevance: { status: "notChecked" }, visionChecked: false, ownDepartmentName: null };
+    const currentUser = await getCurrentUser();
+    if (!currentUser) return { status: "clear" };
+    const ctx = await getUserContext(supabase, currentUser.userId);
+    if (ctx.role !== "WORKER") return { status: "clear" };
 
-  // From here on, this IS a confirmed authenticated Worker — every
-  // return below is a real verdict or a fail-closed rejection, never
-  // "notChecked".
-  const logContext = {
-    workerRole: ctx.role,
-    workerDepartmentId: ctx.departmentId,
-    projectId: ctx.projectId,
-  };
+    const { data, error } = await getSupabaseServiceRoleClient()
+      .from("work_item_assignments")
+      .select(
+        "work_items!inner(work_item_id, line_item_no, description_of_work, department_id, project_id, planned_quantity, unit_of_measure, status)"
+      )
+      .eq("user_id", currentUser.userId)
+      .eq("status", "Active")
+      .eq("work_items.status", "Active");
+    if (error) return { status: "clear" };
 
-  try {
-    const departments = await getProjectDepartmentVocabulary(supabase, ctx.projectId);
-    const ownDepartment = departments.find((d) => d.departmentId === ctx.departmentId);
-
-    if (!ownDepartment) {
-      console.log(
-        "[image-department-check] " +
-          JSON.stringify({
-            ...logContext,
-            availableDepartmentNames: departments.map((d) => d.departmentName),
-            classifierSucceeded: false,
-            failureCategory: "worker_department_not_in_catalog",
-            decision: "checkFailed",
-          })
-      );
-      return { relevance: { status: "checkFailed" }, visionChecked: true, ownDepartmentName: null };
-    }
-
-    const classification = await classifyConstructionImageDepartment(
-      fileBuffer,
-      mimeType,
-      departments.map((d) => d.departmentName),
-      selectedWorkItemDescription
-    );
-
-    if ("error" in classification) {
-      console.log(
-        "[image-department-check] " +
-          JSON.stringify({
-            ...logContext,
-            workerDepartmentName: ownDepartment.departmentName,
-            availableDepartmentNames: departments.map((d) => d.departmentName),
-            classifierSucceeded: false,
-            failureCategory: classification.category,
-            decision: "checkFailed",
-          })
-      );
-      return { relevance: { status: "checkFailed" }, visionChecked: true, ownDepartmentName: ownDepartment.departmentName };
-    }
-
-    const baseLog = {
-      ...logContext,
-      workerDepartmentName: ownDepartment.departmentName,
-      availableDepartmentNames: departments.map((d) => d.departmentName),
-      classifierSucceeded: true,
-      detectedDepartment: classification.detectedDepartment,
-      workItemRelevant: classification.workItemRelevant,
-      confidence: classification.confidence,
+    type Row = {
+      work_item_id: string;
+      line_item_no: string;
+      description_of_work: string;
+      department_id: string;
+      project_id: string;
+      planned_quantity: number | null;
+      unit_of_measure: string | null;
     };
+    const assigned = ((data ?? []) as unknown as { work_items: Row | Row[] | null }[])
+      .map((r) => (Array.isArray(r.work_items) ? r.work_items[0] : r.work_items))
+      .filter((w): w is Row => !!w);
 
-    if (classification.detectedDepartment === null) {
-      console.log("[image-department-check] " + JSON.stringify({ ...baseLog, decision: "vague" }));
-      return { relevance: { status: "vague" }, visionChecked: true, ownDepartmentName: ownDepartment.departmentName };
+    const selected = assigned.find((w) => w.work_item_id === selectedWorkItemId);
+    if (!selected) return { status: "clear" };
+
+    const pool = assigned
+      .filter((w) => w.project_id === selected.project_id && w.department_id === selected.department_id)
+      .sort((a, b) => a.line_item_no.localeCompare(b.line_item_no));
+    const toCandidate = (w: Row): WorkItemCandidate => ({
+      workItemId: w.work_item_id,
+      code: w.line_item_no,
+      description: w.description_of_work,
+      plannedQuantity: w.planned_quantity,
+      unitOfMeasure: w.unit_of_measure,
+    });
+
+    if (confirmedWorkItemId) {
+      const chosen = pool.find((w) => w.work_item_id === confirmedWorkItemId);
+      return chosen
+        ? { status: "confirmed", workItem: toCandidate(chosen) }
+        : { status: "invalidConfirmation" };
     }
 
-    if (classification.detectedDepartment.toLowerCase() !== ownDepartment.departmentName.toLowerCase()) {
-      console.log("[image-department-check] " + JSON.stringify({ ...baseLog, decision: "wrongDepartment" }));
-      return {
-        relevance: { status: "wrongDepartment", matchedDepartmentName: classification.detectedDepartment },
-        visionChecked: true,
-        ownDepartmentName: ownDepartment.departmentName,
-      };
-    }
+    const textTokens = new Set(tokenize(text));
+    const scored = pool.map((w) => ({
+      row: w,
+      score: tokenize(w.description_of_work).filter((t) => textTokens.has(t)).length,
+    }));
+    const top = Math.max(0, ...scored.map((s) => s.score));
+    if (top === 0) return { status: "clear" };
 
-    console.log("[image-department-check] " + JSON.stringify({ ...baseLog, decision: "valid" }));
-    return { relevance: { status: "valid" }, visionChecked: true, ownDepartmentName: ownDepartment.departmentName };
-  } catch (err) {
-    // A confirmed Worker, but something unexpected failed while
-    // actually running the check (DB error fetching the department
-    // catalog, an unexpected throw from the vision call, etc.) —
-    // fail-closed to "checkFailed" (rejected, retryable), never
-    // "notChecked" (which callers treat as permission to accept the
-    // photo anyway) and never "vague" (nothing was actually judged).
-    console.log(
-      "[image-department-check] " +
-        JSON.stringify({
-          ...logContext,
-          classifierSucceeded: false,
-          failureCategory: "unexpected_exception",
-          decision: "checkFailed",
-        })
+    const tied = scored.filter((s) => s.score === top).map((s) => s.row);
+    if (tied.length < 2) return { status: "clear" };
+
+    const tiedTokenSets = tied.map(
+      (w) =>
+        new Set([
+          ...tokenizeDistinguishing(w.description_of_work),
+          ...tokenizeDistinguishing(w.line_item_no),
+        ])
     );
-    return { relevance: { status: "checkFailed" }, visionChecked: true, ownDepartmentName: null };
+    const textDistinguishingTokens = new Set(tokenizeDistinguishing(text));
+    const uniqueTokens = (i: number) =>
+      [...tiedTokenSets[i]].filter((t) => !tiedTokenSets.every((set) => set.has(t)));
+    const mentionedIdx = tied
+      .map((_, i) => i)
+      .filter((i) => uniqueTokens(i).some((t) => textDistinguishingTokens.has(t)));
+    const mentioned = mentionedIdx.map((i) => tied[i]);
+    // Singles out the very item the worker has selected -> nothing to ask.
+    if (mentioned.length === 1 && mentioned[0].work_item_id === selectedWorkItemId) {
+      return { status: "clear" };
+    }
+
+    const selectedInTie = tied.some((w) => w.work_item_id === selectedWorkItemId);
+
+    // The text gives NO signal distinguishing between the tied family
+    // members at all (e.g. "Drywall work is progressing" scores equally
+    // against Level 1/2/3) — there is nothing for the worker to
+    // disambiguate. If the worker EXPLICITLY selected this item, that
+    // selection is trusted as-is rather than asking a question the text
+    // itself can't answer (CASE 1/2 in the spec). But when the "selected"
+    // item is only the system's own auto-suggested default (the worker
+    // never actually picked one), silently trusting it would mean a
+    // Worker who typed "Drywall installation completed" with no level
+    // selected never gets asked which level they mean — so fall through
+    // to the ambiguous return below instead (CASE 2: ask).
+    if (mentioned.length === 0 && selectedInTie && hasExplicitSelection) {
+      return { status: "clear" };
+    }
+
+    // Singles out a DIFFERENT item of the same similar family than the
+    // one currently selected - only on strong evidence, never a bare
+    // number that could just be a quantity ("2 rooms"). This is a
+    // genuine conflict with the worker's own explicit selection, so it
+    // is ALWAYS asked about (never silently switched): a two-way choice
+    // between exactly the selected item and the one the text suggests,
+    // not the whole tied family.
+    if (mentioned.length === 1 && selectedInTie) {
+      const i = mentionedIdx[0];
+      const m = mentioned[0];
+      const textSeq = tokenizeDistinguishing(text);
+      const descSeq = tokenizeDistinguishing(m.description_of_work);
+      const codeTokens = new Set(tokenizeDistinguishing(m.line_item_no));
+      const strong = uniqueTokens(i).some((u) => {
+        if (!textDistinguishingTokens.has(u)) return false;
+        if (codeTokens.has(u)) return true; // line item code
+        if (!/^\d+$/.test(u)) return true; // a distinguishing word
+        // bare number: only with the same "<word> <number>" pair as in the
+        // item's own description (e.g. "level 2")
+        return textSeq.some(
+          (t, k) => t === u && k > 0 && descSeq.some((d, j) => d === u && j > 0 && descSeq[j - 1] === textSeq[k - 1])
+        );
+      });
+      if (strong && m.work_item_id !== selectedWorkItemId) {
+        return {
+          status: "ambiguous",
+          candidates: [toCandidate(selected), toCandidate(m)],
+          selectedInTie: true,
+        };
+      }
+    }
+
+    return { status: "ambiguous", candidates: tied.map(toCandidate), selectedInTie };
+  } catch {
+    return { status: "clear" };
   }
 }
-
-/**
- * Shared server-side mapping from an image relevance verdict to the
- * HTTP status + user-facing message a route should return BEFORE any
- * storage upload / database insert / notification — used identically
- * by both image flows (app/api/handwritten/route.ts "Today's Update"
- * and app/api/workflow/live-updates/route.ts "Live Update Photo") so
- * they can never drift into different wording or different rejection
- * behavior. Returns null for "valid"/"notChecked"/"workItemMismatch"
- * (images never produce workItemMismatch — see
- * assessImageSubmissionRelevance's doc — this case only exists because
- * the type is shared with the text-based RelevanceResult), meaning the
- * caller should proceed normally.
- *
- * Message wording deliberately distinguishes "wrong department" (a
- * confident, wrong classification) from "vague" (a completed but
- * inconclusive classification) from "checkFailed" (the classifier/
- * provider never actually ran) — conflating any of these would either
- * mislead the worker (e.g. blaming "Plumbing" for what was actually a
- * quota/network failure) or, worse, silently accept an unverified
- * image.
- */
-export function imageRelevanceRejection(
-  relevance: RelevanceCheckResult,
-  ownDepartmentName: string | null
-): { status: number; error: string } | null {
-  const dept = ownDepartmentName ?? "your department";
-  switch (relevance.status) {
-    case "wrongDepartment":
-      return {
-        status: 422,
-        error: `This image appears to show ${relevance.matchedDepartmentName ?? "another department's"} work, not ${dept} work. Please upload an image showing ${dept} work.`,
-      };
-    case "vague":
-      return {
-        status: 422,
-        error: `We couldn't confidently identify the construction department from this image. Please upload a clearer photo showing ${dept} work.`,
-      };
-    case "checkFailed":
-      return {
-        status: 503,
-        error: "We couldn't verify this image right now. Please try again.",
-      };
-    default:
-      return null;
-  }
-}
-
 /**
  * Resolves project/department/work_item/worker IDs for a piece of
  * extracted text by querying the existing Construction Automation data.

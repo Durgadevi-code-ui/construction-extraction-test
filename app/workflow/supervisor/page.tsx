@@ -158,7 +158,7 @@ export default async function SupervisorPage() {
   return (
     <main className="flex-1 flex flex-col space-y-6">
         {activeDelegations.length > 0 && (
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 space-y-1">
+          <div className="bg-warning-soft border border-warning-border rounded-lg p-3 text-xs text-warning space-y-1">
             <p className="font-medium">Active delegated Admin access:</p>
             {activeDelegations.map((d) => (
               <p key={d.delegationId}>
@@ -175,6 +175,7 @@ export default async function SupervisorPage() {
 
         <ContractorTabs
           userId={userId}
+          userEmail={currentUser.email}
           dashboardData={dashboardData}
           queue={queue}
           todaysProgress={todaysProgress}

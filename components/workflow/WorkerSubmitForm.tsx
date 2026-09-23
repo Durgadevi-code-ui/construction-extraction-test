@@ -16,6 +16,9 @@ type Props = {
   unitOfMeasure: string | null;
   initialDescription: string;
   onSubmitted: () => void;
+  /** Optional Task context, sent with the submission; the server
+   * re-verifies it belongs to this work item. */
+  taskId?: string | null;
 };
 
 export default function WorkerSubmitForm({
@@ -25,6 +28,7 @@ export default function WorkerSubmitForm({
   unitOfMeasure,
   initialDescription,
   onSubmitted,
+  taskId = null,
 }: Props) {
   const router = useRouter();
 
@@ -73,6 +77,7 @@ export default function WorkerSubmitForm({
         body: JSON.stringify({
           workerId,
           workItemId,
+          taskId: taskId ?? undefined,
           completedQuantity: hasPlannedQuantity ? completedQuantity : undefined,
           progressPercentage: hasPlannedQuantity ? calculatedProgress ?? 0 : progress,
           description,
@@ -92,7 +97,7 @@ export default function WorkerSubmitForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-3 bg-surface rounded-xl border border-line shadow-sm p-4">
+    <form onSubmit={handleSubmit} className="space-y-3 bg-surface rounded-lg border border-line shadow-sm p-4">
       <h3 className="text-sm font-semibold text-foreground">
         Review &amp; Submit to Progress Workflow
       </h3>

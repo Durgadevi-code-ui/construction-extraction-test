@@ -2,21 +2,43 @@
 
 import { useRef, useState } from "react";
 import ValidationPanel, { type RelevanceCheckResult } from "./ValidationPanel";
+import type { ConfirmedWorkItem } from "./TextInput";
+
+type TaskRef = { id: string; label: string };
 
 type Props = {
   locked: boolean;
-  onResult: (status: "VALID" | "INVALID", normalizedText?: string) => void;
+  onResult: (
+    status: "VALID" | "INVALID",
+    normalizedText?: string,
+    confirmedWorkItem?: ConfirmedWorkItem,
+    effectiveTask?: TaskRef
+  ) => void;
+  /** Selected Work Item context — same role as TextInput's workItemId:
+   * lets /api/voice detect several similar assigned work items and ask
+   * instead of guessing, and lets it validate a selected Task against
+   * the TRANSCRIPT (see detectTaskConflict). Omitted by any caller with
+   * no selected work item. */
+  workItemId?: string | null;
+  taskId?: string | null;
+  taskLabel?: string | null;
   workItemCode?: string | null;
   workItemDescription?: string | null;
   departmentName?: string | null;
+  /** See TextInput's prop doc — defaults to true (explicit). */
+  workItemExplicitlySelected?: boolean;
 };
 
 export default function VoiceUpload({
   locked,
   onResult,
+  workItemId,
+  taskId,
+  taskLabel,
   workItemCode,
   workItemDescription,
   departmentName,
+  workItemExplicitlySelected = true,
 }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [recording, setRecording] = useState(false);
@@ -30,6 +52,14 @@ export default function VoiceUpload({
   const [relevance, setRelevance] = useState<RelevanceCheckResult | undefined>(undefined);
   const [userValidation, setUserValidation] = useState<"valid" | null>(null);
   const [userValidationBusy, setUserValidationBusy] = useState(false);
+  const [candidates, setCandidates] = useState<ConfirmedWorkItem[] | null>(null);
+  const [pickedId, setPickedId] = useState("");
+  const [confirmedWorkItem, setConfirmedWorkItem] = useState<ConfirmedWorkItem | null>(null);
+  // Strong task conflict — same "ask, don't guess, nothing saved yet"
+  // pattern as TextInput's taskConflict (see lib/construction.ts
+  // detectTaskConflict), applied to the transcript instead of typed text.
+  const [taskConflict, setTaskConflict] = useState<{ selectedTask: TaskRef; suggestedTask: TaskRef } | null>(null);
+  const [effectiveTask, setEffectiveTask] = useState<TaskRef | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -59,7 +89,7 @@ export default function VoiceUpload({
     setRecording(false);
   }
 
-  async function handleTranscribe() {
+  async function handleTranscribe(confirmedWorkItemId?: string, taskConflictDecision?: "keep" | "switch") {
     if (!file) {
       setError("Record or choose an audio file first.");
       return;
@@ -68,10 +98,18 @@ export default function VoiceUpload({
     setError("");
     setUserValidation(null);
     setSubmissionId(null);
+    setCandidates(null);
+    setConfirmedWorkItem(null);
+    setTaskConflict(null);
     try {
       const formData = new FormData();
       formData.append("audio", file);
       if (workItemDescription) formData.append("workItemDescription", workItemDescription);
+      if (workItemId) formData.append("workItemId", workItemId);
+      formData.append("workItemExplicitlySelected", String(workItemExplicitlySelected));
+      if (taskId) formData.append("taskId", taskId);
+      if (confirmedWorkItemId) formData.append("confirmedWorkItemId", confirmedWorkItemId);
+      if (taskConflictDecision) formData.append("taskConflictDecision", taskConflictDecision);
       const res = await fetch("/api/voice", { method: "POST", body: formData });
       const data = await res.json();
       if (!res.ok) {
@@ -79,6 +117,19 @@ export default function VoiceUpload({
         setStatus("IDLE");
         return;
       }
+      if (data.ambiguity) {
+        setCandidates(data.ambiguity.candidates);
+        setPickedId("");
+        setStatus("IDLE");
+        return;
+      }
+      if (data.taskConflict) {
+        setTaskConflict(data.taskConflict);
+        setStatus("IDLE");
+        return;
+      }
+      setConfirmedWorkItem(data.confirmedWorkItem ?? null);
+      setEffectiveTask(data.task ?? null);
       setRawText(data.rawText);
       setNormalizedText(data.normalizedText);
       setConfidence(data.confidence);
@@ -111,7 +162,7 @@ export default function VoiceUpload({
         return;
       }
       setUserValidation("valid");
-      onResult("VALID", normalizedText);
+      onResult("VALID", normalizedText, confirmedWorkItem ?? undefined, effectiveTask ?? undefined);
     } catch {
       setError("User validation request failed.");
     } finally {
@@ -144,13 +195,74 @@ export default function VoiceUpload({
       </div>
       {file && <p className="text-xs text-foreground-secondary">Ready: {file.name}</p>}
       <button
-        onClick={handleTranscribe}
+        onClick={() => handleTranscribe()}
         disabled={locked || status === "PROCESSING"}
         className="px-4 py-2 bg-success hover:bg-success/90 text-white rounded-lg text-sm font-semibold transition-colors duration-150 disabled:opacity-50"
       >
         {status === "PROCESSING" ? "Transcribing…" : "Convert to Text"}
       </button>
-      {error && <p className="text-red-600 text-sm">{error}</p>}
+      {error && <p className="text-error text-sm">{error}</p>}
+      {candidates && (
+        <fieldset className="text-sm space-y-2 rounded-lg border border-line bg-surface-soft p-3">
+          <legend className="px-1 text-sm font-medium text-foreground">
+            Several similar work items were found. Please confirm which work item this update belongs to.
+          </legend>
+          {candidates.map((c) => (
+            <label key={c.workItemId} className="flex items-center gap-2 text-foreground">
+              <input
+                type="radio"
+                name="similar-work-item-voice"
+                value={c.workItemId}
+                checked={pickedId === c.workItemId}
+                onChange={() => setPickedId(c.workItemId)}
+              />
+              {c.code} — {c.description}
+            </label>
+          ))}
+          <button
+            type="button"
+            onClick={() => handleTranscribe(pickedId)}
+            disabled={!pickedId || status === "PROCESSING"}
+            className="px-3 py-1.5 bg-success hover:bg-success/90 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+          >
+            Confirm
+          </button>
+        </fieldset>
+      )}
+      {taskConflict && (
+        <div className="text-sm space-y-2 rounded-lg border border-warning-border bg-warning-soft p-3">
+          <p className="font-medium text-foreground">
+            Your selected task is &ldquo;{taskConflict.selectedTask.label}&rdquo;, but your update appears to refer
+            to &ldquo;{taskConflict.suggestedTask.label}&rdquo;.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => handleTranscribe(undefined, "keep")}
+              disabled={status === "PROCESSING"}
+              className="px-3 py-1.5 bg-success hover:bg-success/90 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+            >
+              Continue with {taskConflict.selectedTask.label}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleTranscribe(undefined, "switch")}
+              disabled={status === "PROCESSING"}
+              className="px-3 py-1.5 bg-info hover:bg-info/90 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+            >
+              Use {taskConflict.suggestedTask.label}
+            </button>
+            <button
+              type="button"
+              onClick={() => setTaskConflict(null)}
+              disabled={status === "PROCESSING"}
+              className="px-3 py-1.5 border border-line rounded-lg text-sm font-medium text-foreground-secondary disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       {rawText && (
         <div className="space-y-2 text-sm">
           <div>
@@ -163,6 +275,14 @@ export default function VoiceUpload({
           </div>
         </div>
       )}
+      {confirmedWorkItem && confirmedWorkItem.workItemId !== workItemId && (
+        <p className="text-xs text-foreground-secondary">
+          Identified as {confirmedWorkItem.code} — {confirmedWorkItem.description}.
+        </p>
+      )}
+      {effectiveTask && taskId && effectiveTask.id !== taskId && (
+        <p className="text-xs text-foreground-secondary">Task: {effectiveTask.label} (switched from {taskLabel ?? "the selected task"}).</p>
+      )}
       <ValidationPanel
         status={displayStatus}
         reason={reason}
@@ -170,6 +290,7 @@ export default function VoiceUpload({
         relevance={relevance}
         ownDepartmentName={departmentName}
         workItemCode={workItemCode}
+        mediaKind="voice"
         decision={userValidation}
         busy={userValidationBusy}
         onConfirm={handleConfirm}

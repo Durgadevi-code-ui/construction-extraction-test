@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { LogOut } from "lucide-react";
+import { LogOut, CalendarDays } from "lucide-react";
 import NotificationBell from "@/components/workflow/NotificationBell";
+import ProfileChip from "@/components/workflow/ProfileChip";
 import { logout } from "@/app/login/actions";
 
 export type ShellTab = {
@@ -21,6 +22,12 @@ type Props = {
    * caller identity yet (there isn't one currently, but keeps the shell
    * safe to reuse). */
   userId?: string;
+  /** The signed-in caller's email (already resolved server-side by
+   * every page that uses this shell) and a short role label — purely
+   * for the header's greeting/profile chip (see ProfileChip). Omit
+   * either to fall back to the previous plain-heading header. */
+  userEmail?: string;
+  roleLabel?: string;
   /** Optional extra controls rendered in the header row, left of the
    * date chip/notification bell — e.g. Admin's "Dashboard"/"Extraction
    * Test (Dev)" links, relocated here now that TopNav no longer renders
@@ -47,6 +54,8 @@ export default function DashboardShell({
   heading,
   subheading,
   userId,
+  userEmail,
+  roleLabel,
   actions,
   children,
 }: Props) {
@@ -54,13 +63,13 @@ export default function DashboardShell({
 
   return (
     // No rounded corners/border/shadow/page padding around this shell —
-    // it IS the single application surface, not a card floating over a
-    // differently-colored page background. TopNav no longer renders
-    // above any screen that uses this shell, so this claims the full
-    // viewport height (not calc(100vh-64px), a stale TopNav-height
-    // offset that would otherwise leave a dead gap at the bottom).
-    <div className="flex flex-col lg:flex-row bg-surface min-h-screen">
-      <aside className="lg:w-60 shrink-0 bg-gradient-to-b from-brand via-[#173c52] to-info text-white flex flex-col">
+    // it's the light page canvas (bg-background) that every white Card
+    // sits on top of, not a card itself. TopNav no longer renders above
+    // any screen that uses this shell, so this claims the full viewport
+    // height (not calc(100vh-64px), a stale TopNav-height offset that
+    // would otherwise leave a dead gap at the bottom).
+    <div className="flex flex-col lg:flex-row bg-background min-h-screen">
+      <aside className="lg:w-60 shrink-0 bg-gradient-to-b from-navy-deep via-navy to-brand text-white flex flex-col">
         <div className="px-5 py-5 border-b border-white/10 flex items-center gap-2.5">
           {logoAvailable && (
             // eslint-disable-next-line @next/next/no-img-element -- small static brand mark, matches TopNav's own use of the same asset
@@ -87,7 +96,7 @@ export default function DashboardShell({
                 aria-current={activeTab === key ? "page" : undefined}
                 className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors duration-150 ${
                   activeTab === key
-                    ? "bg-info text-white shadow-sm"
+                    ? "bg-brand text-white shadow-sm"
                     : "text-white/70 hover:bg-white/10 hover:text-white"
                 }`}
               >
@@ -114,6 +123,7 @@ export default function DashboardShell({
       <div className="flex-1 min-w-0 p-5 sm:p-6 space-y-5">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
+            <p className="text-xs font-medium text-foreground-muted">Good morning,</p>
             <h2 className="text-xl sm:text-2xl font-extrabold text-foreground tracking-tight">{heading}</h2>
             {subheading && <p className="text-sm text-foreground-secondary">{subheading}</p>}
           </div>
@@ -121,8 +131,9 @@ export default function DashboardShell({
             {actions}
             <span
               suppressHydrationWarning
-              className="hidden sm:inline text-xs text-foreground-secondary bg-surface-soft border border-line rounded-full px-3 py-1.5"
+              className="hidden sm:inline-flex items-center gap-1.5 text-xs text-foreground-secondary bg-surface-soft border border-line rounded-full px-3 py-1.5"
             >
+              <CalendarDays className="h-3.5 w-3.5" strokeWidth={2} />
               {new Date().toLocaleDateString("en-US", {
                 weekday: "long",
                 month: "short",
@@ -130,6 +141,7 @@ export default function DashboardShell({
               })}
             </span>
             {userId && <NotificationBell userId={userId} />}
+            {userEmail && roleLabel && <ProfileChip email={userEmail} roleLabel={roleLabel} />}
           </div>
         </div>
 

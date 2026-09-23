@@ -1,7 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { LayoutDashboard, ListChecks, ClipboardCheck, Radio, MessageSquare } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import {
+  LayoutDashboard,
+  ListChecks,
+  ClipboardCheck,
+  Radio,
+  MessageSquare,
+  CheckCircle2,
+  Clock,
+  TrendingUp,
+  Percent,
+  DollarSign,
+} from "lucide-react";
 import DashboardShell from "@/components/workflow/DashboardShell";
 import AssignmentManager, {
   type AssignmentWorkerOption,
@@ -34,6 +46,9 @@ type AwaitingContractorItem = {
 
 type Props = {
   foremanUserId: string;
+  /** The signed-in Subcontractor's email — purely for the header's
+   * profile chip (see DashboardShell). */
+  userEmail?: string;
   departmentName: string;
   kpis: Kpis | null;
   board: {
@@ -62,28 +77,46 @@ const HEADINGS: Record<string, string> = {
   communication: "Communication",
 };
 
+type KpiTone = "brand" | "success" | "warning";
+
+const KPI_ICON_CHIP: Record<KpiTone, string> = {
+  brand: "bg-brand text-white",
+  success: "bg-success text-white",
+  warning: "bg-warning text-white",
+};
+
 function KpiCard({
   label,
   value,
+  icon: Icon,
   highlight,
+  tone = "brand",
   hint,
 }: {
   label: string;
   value: string;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
   highlight?: boolean;
+  tone?: KpiTone;
   hint?: string;
 }) {
+  const effectiveTone: KpiTone = highlight ? "warning" : tone;
   return (
     <div
-      className={`rounded-lg border p-3 ${
+      className={`flex flex-col gap-2 rounded-lg border p-3 ${
         highlight ? "bg-warning-soft border-warning-border" : "bg-white border-line"
       }`}
       title={hint}
     >
-      <p className={`text-lg font-bold tabular-nums ${highlight ? "text-warning" : "text-foreground"}`}>
-        {value}
-      </p>
-      <p className="text-xs text-foreground-secondary">{label}</p>
+      <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${KPI_ICON_CHIP[effectiveTone]}`}>
+        <Icon className="h-4 w-4" strokeWidth={2} />
+      </span>
+      <div>
+        <p className={`text-lg font-bold tabular-nums leading-tight ${highlight ? "text-warning" : "text-foreground"}`}>
+          {value}
+        </p>
+        <p className="text-xs text-foreground-secondary">{label}</p>
+      </div>
     </div>
   );
 }
@@ -98,13 +131,26 @@ function KpiCard({
  */
 export default function ForemanTabs({
   foremanUserId,
+  userEmail,
   departmentName,
   kpis,
   board,
   queue,
   awaitingContractorReview,
 }: Props) {
-  const [tab, setTab] = useState("dashboard");
+  // Initial tab comes from the URL when present (?tab=reviews) — this is
+  // what a notification's "View Queue" link relies on (see
+  // lib/notifications.ts resolveNotificationTarget): NotificationBell
+  // does a full page navigation (window.location), never router.push,
+  // specifically so this component always mounts fresh here and this
+  // lazy initializer is guaranteed to run — no reliance on client-side
+  // navigation/state-preservation edge cases. Falls back to "dashboard"
+  // for a plain visit with no ?tab= (or an unrecognized one).
+  const searchParams = useSearchParams();
+  const [tab, setTab] = useState(() => {
+    const requested = searchParams.get("tab");
+    return requested && TABS.some((t) => t.key === requested) ? requested : "dashboard";
+  });
 
   return (
     <DashboardShell
@@ -114,19 +160,23 @@ export default function ForemanTabs({
       heading={HEADINGS[tab]}
       subheading={`My Department: ${departmentName}`}
       userId={foremanUserId}
+      userEmail={userEmail}
+      roleLabel="Subcontractor"
     >
       {tab === "dashboard" && kpis && (
         <section className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <KpiCard label="Assigned Work" value={`${kpis.totalWorkItems}`} />
-          <KpiCard label="Completed" value={`${kpis.completedCount}`} />
+          <KpiCard icon={ListChecks} label="Assigned Work" value={`${kpis.totalWorkItems}`} />
+          <KpiCard icon={CheckCircle2} label="Completed" value={`${kpis.completedCount}`} tone="success" />
           <KpiCard
+            icon={Clock}
             label="Pending Review"
             value={`${kpis.pendingReviews}`}
             highlight={kpis.pendingReviews > 0}
           />
-          <KpiCard label="Overall Progress" value={formatPercent(kpis.overallProgressPercent)} />
-          <KpiCard label="Work Left" value={formatPercent(kpis.workLeftPercent)} />
+          <KpiCard icon={TrendingUp} label="Overall Progress" value={formatPercent(kpis.overallProgressPercent)} />
+          <KpiCard icon={Percent} label="Work Left" value={formatPercent(kpis.workLeftPercent)} />
           <KpiCard
+            icon={DollarSign}
             label="Estimated Revenue"
             value={`$${kpis.totalEstimatedValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
             hint="Estimated value of this department's work at its current approved progress"

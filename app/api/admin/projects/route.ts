@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseClient } from "@/lib/supabase";
-import { createProject, updateProject } from "@/lib/admin";
+import { createProject, updateProject, setProjectTaskContextEnabled } from "@/lib/admin";
 import { assertAdminRole, assertAdminOrDelegated } from "@/lib/delegation";
 import { getCurrentUser } from "@/lib/session";
 
@@ -81,6 +81,7 @@ export async function PATCH(request: NextRequest) {
     const projectId: unknown = body?.projectId;
     const projectName: unknown = body?.projectName;
     const projectLocation: unknown = body?.projectLocation;
+    const taskContextEnabled: unknown = body?.taskContextEnabled;
 
     if (typeof projectId !== "string" || !projectId) {
       return NextResponse.json({ error: "projectId is required." }, { status: 400 });
@@ -100,6 +101,10 @@ export async function PATCH(request: NextRequest) {
         ? { projectLocation: typeof projectLocation === "string" ? projectLocation.trim() || null : null }
         : {}),
     });
+
+    if (typeof taskContextEnabled === "boolean") {
+      await setProjectTaskContextEnabled(supabase, projectId, taskContextEnabled);
+    }
 
     return NextResponse.json({ ok: true });
   } catch (err) {

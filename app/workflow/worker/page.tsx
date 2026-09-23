@@ -9,6 +9,7 @@ import {
   listAssignedWorkItemsForWorker,
   suggestNextWorkItem,
 } from "@/lib/workflow";
+import { getProjectTaskContextEnabled } from "@/lib/admin";
 import { requireCurrentUser } from "@/lib/session";
 import { logout } from "@/app/login/actions";
 import WorkerTabs from "@/components/workflow/WorkerTabs";
@@ -132,10 +133,11 @@ export default async function WorkerPage({
   const activeWorkItem =
     workItems.find((w) => w.workItemId === activeWorkItemId) ?? defaultWorkItem;
 
-  const [dashboard, history, approvedWork] = await Promise.all([
+  const [dashboard, history, approvedWork, taskContextEnabled] = await Promise.all([
     getWorkerDashboard(supabase, userId, activeWorkItemId),
     getWorkerSubmissionHistory(supabase, userId),
     getWorkerApprovedWork(supabase, userId),
+    getProjectTaskContextEnabled(supabase, ctx.projectId),
   ]);
 
   // Sum of as-submitted quantity across every one of this worker's own
@@ -187,6 +189,7 @@ export default async function WorkerPage({
     <main className="flex-1 flex flex-col">
       <WorkerTabs
         workerId={userId}
+        userEmail={currentUser.email}
           projectName={dashboard.projectName}
           departmentName={dashboard.departmentName}
           activeWorkItem={dashboard.workItem}
@@ -204,13 +207,23 @@ export default async function WorkerPage({
             description: w.description,
             isCompleted: w.isCompleted,
             isEligible: w.isEligible,
+            // Only Active tasks are offered to a Worker — a Contractor/
+            // Subcontractor-deactivated task (see
+            // lib/workflow.ts WorkItemTask.status) is never shown here,
+            // even though the Contractor/Subcontractor management view
+            // still lists it (to allow reactivating).
+            tasks: w.tasks.filter((t) => t.status === "Active"),
           }))}
           activeWorkItemId={activeWorkItemId}
           isAutoSuggested={isAutoSuggested}
           suggestionNote={suggestionNote}
           history={history}
           approvedWork={approvedWork}
-          projectSwitcher={projectSwitcher}
+          projects={[...new Map(ctx.availableProjects.map((p) => [p.projectId, p])).values()].map(
+            (p) => ({ projectId: p.projectId, projectName: p.projectName })
+          )}
+          activeProjectId={ctx.projectId}
+          taskContextEnabled={taskContextEnabled}
         />
     </main>
   );

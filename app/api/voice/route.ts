@@ -3,23 +3,53 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseClient, STORAGE_BUCKETS } from "@/lib/supabase";
 import { runSTT } from "@/lib/stt";
 import { normalizeText, validateVoice } from "@/lib/validation";
-import { resolveConstructionContext, assessWorkerSubmissionRelevance } from "@/lib/construction";
+import {
+  resolveConstructionContext,
+  assessWorkerSubmissionRelevance,
+  resolveWorkItemAmbiguity,
+  textMatchesWorkItem,
+  detectTaskConflict,
+  type WorkItemAmbiguityResult,
+} from "@/lib/construction";
+import { getCurrentUser } from "@/lib/session";
+import { resolveTaskForWorker } from "@/lib/workflow";
 
 export const runtime = "nodejs";
 
 const MAX_SIZE_BYTES = 25 * 1024 * 1024; // 25MB
 
+/**
+ * Voice input — same selected Project/Work Item/Task context handling as
+ * app/api/text/route.ts, applied to the SPEECH-TO-TEXT TRANSCRIPT once
+ * it exists (never a separate voice-specific validation system; see
+ * that route's doc for the full rationale of each shared function
+ * reused below: resolveWorkItemAmbiguity, resolveTaskForWorker,
+ * detectTaskConflict, assessWorkerSubmissionRelevance,
+ * textMatchesWorkItem). Ambiguity/task-conflict responses use the exact
+ * same { ambiguity } / { taskConflict } shapes the Text flow already
+ * uses so the client-side confirmation UI pattern is identical.
+ */
 export async function POST(request: NextRequest) {
   const supabase = getSupabaseClient();
 
   try {
     const formData = await request.formData();
     const file = formData.get("audio");
-    // Same optional work-item-relevance check as /api/text — see its
-    // doc comment.
     const selectedWorkItemDescriptionRaw = formData.get("workItemDescription");
     const selectedWorkItemDescription =
       typeof selectedWorkItemDescriptionRaw === "string" ? selectedWorkItemDescriptionRaw : null;
+    const selectedWorkItemIdRaw = formData.get("workItemId");
+    const selectedWorkItemId = typeof selectedWorkItemIdRaw === "string" && selectedWorkItemIdRaw ? selectedWorkItemIdRaw : null;
+    const confirmedWorkItemIdRaw = formData.get("confirmedWorkItemId");
+    const confirmedWorkItemIdInput =
+      typeof confirmedWorkItemIdRaw === "string" && confirmedWorkItemIdRaw ? confirmedWorkItemIdRaw : null;
+    const taskIdRaw = formData.get("taskId");
+    const taskIdInput = typeof taskIdRaw === "string" && taskIdRaw ? taskIdRaw : null;
+    const taskConflictDecisionRaw = formData.get("taskConflictDecision");
+    const taskConflictDecision = typeof taskConflictDecisionRaw === "string" ? taskConflictDecisionRaw : null;
+    // See app/api/text/route.ts for the full rationale — defaults to
+    // explicit (true) so an omitted field keeps the old "trust it" behavior.
+    const hasExplicitSelection = formData.get("workItemExplicitlySelected") !== "false";
 
     if (!file || !(file instanceof File)) {
       return NextResponse.json(
@@ -61,7 +91,96 @@ export async function POST(request: NextRequest) {
       : validateVoice(sttResult.rawText, sttResult.confidence);
 
     // ------------------------------------------------------------
-    // 2. Resolve project / department / work item / worker from the
+    // 2. Task context (validated server-side, never trusted from the
+    //    client) — same resolveTaskForWorker + detectTaskConflict as
+    //    /api/text, run against the TRANSCRIPT. Skipped entirely when
+    //    STT failed (nothing to judge) or no task was selected (Task
+    //    Context feature disabled, or no task chosen).
+    // ------------------------------------------------------------
+
+    let task: { id: string; label: string } | null = null;
+    if (!sttFailed && taskIdInput && selectedWorkItemId) {
+      const currentUser = await getCurrentUser();
+      if (currentUser) {
+        let resolved;
+        try {
+          resolved = await resolveTaskForWorker(supabase, currentUser.userId, selectedWorkItemId, taskIdInput);
+        } catch {
+          return NextResponse.json(
+            { error: "That task does not belong to the selected work item." },
+            { status: 400 }
+          );
+        }
+        task = { id: resolved.id, label: resolved.label };
+
+        if (taskConflictDecision !== "keep") {
+          const conflict = detectTaskConflict(rawText, task, resolved.allTasks);
+          if (conflict.status === "conflict") {
+            if (taskConflictDecision === "switch") {
+              task = { id: conflict.matchedTask.id, label: conflict.matchedTask.label };
+            } else {
+              return NextResponse.json({
+                taskConflict: { selectedTask: task, suggestedTask: conflict.matchedTask },
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // ------------------------------------------------------------
+    // 3. Similar work items — same resolveWorkItemAmbiguity as
+    //    /api/text, run against the transcript once it passed basic
+    //    validation.
+    // ------------------------------------------------------------
+
+    let selectedDescription = selectedWorkItemDescription;
+    let confirmedWorkItem = null;
+    let userConfirmed = false;
+    let resolution: WorkItemAmbiguityResult = { status: "clear" };
+    if (!sttFailed && validation.status === "VALID" && selectedWorkItemId) {
+      resolution = await resolveWorkItemAmbiguity(
+        supabase,
+        rawText,
+        selectedWorkItemId,
+        confirmedWorkItemIdInput,
+        hasExplicitSelection
+      );
+      if (resolution.status === "invalidConfirmation") {
+        return NextResponse.json(
+          { error: "That work item is not one of your assigned work items." },
+          { status: 400 }
+        );
+      }
+      if (resolution.status === "confirmed" || resolution.status === "resolved") {
+        confirmedWorkItem = resolution.workItem;
+        selectedDescription = resolution.workItem.description;
+        userConfirmed = resolution.status === "confirmed";
+      }
+    }
+
+    let relevance = sttFailed
+      ? { status: "notChecked" as const }
+      : await assessWorkerSubmissionRelevance(supabase, rawText, selectedDescription, selectedWorkItemId);
+
+    if (
+      relevance.status === "vague" &&
+      userConfirmed &&
+      confirmedWorkItem &&
+      textMatchesWorkItem(rawText, confirmedWorkItem.description)
+    ) {
+      relevance = { status: "valid" };
+    }
+
+    if (
+      resolution.status === "ambiguous" &&
+      (relevance.status === "valid" || (relevance.status === "vague" && resolution.selectedInTie))
+    ) {
+      return NextResponse.json({ ambiguity: { candidates: resolution.candidates } });
+    }
+
+    // ------------------------------------------------------------
+    // 4. Resolve project / department / work item / worker from the
     //    Construction Automation schema (never hardcoded).
     // ------------------------------------------------------------
 
@@ -77,7 +196,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ------------------------------------------------------------
-    // 3. Store audio file
+    // 5. Store audio file
     // ------------------------------------------------------------
 
     const ext = file.type.split("/")[1]?.replace(";codecs=opus", "") || "bin";
@@ -99,7 +218,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ------------------------------------------------------------
-    // 4. Save into extraction_submissions
+    // 6. Save into extraction_submissions
     // ------------------------------------------------------------
 
     const { data: submission, error: insertError } = await supabase
@@ -149,7 +268,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ------------------------------------------------------------
-    // 5. Return response
+    // 7. Return response
     // ------------------------------------------------------------
 
     if (sttFailed) {
@@ -167,8 +286,9 @@ export async function POST(request: NextRequest) {
         code: context.workItemCode,
         description: context.workItemDescription,
       },
-      // Same relevance check as /api/text, applied to the transcript.
-      relevance: await assessWorkerSubmissionRelevance(supabase, rawText, selectedWorkItemDescription),
+      relevance,
+      confirmedWorkItem,
+      task,
     });
   } catch (err) {
     console.error("Voice pipeline error:", err);

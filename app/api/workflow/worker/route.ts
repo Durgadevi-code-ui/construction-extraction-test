@@ -44,9 +44,13 @@ export async function POST(request: NextRequest) {
     const completedQuantity: unknown = body?.completedQuantity;
     const progressPercentage: unknown = body?.progressPercentage;
     const description: unknown = body?.description;
+    const taskId: unknown = body?.taskId;
 
     if (workItemId !== undefined && workItemId !== null && typeof workItemId !== "string") {
       return NextResponse.json({ error: "workItemId must be a string." }, { status: 400 });
+    }
+    if (taskId !== undefined && taskId !== null && typeof taskId !== "string") {
+      return NextResponse.json({ error: "taskId must be a string." }, { status: 400 });
     }
     if (
       completedQuantity !== undefined &&
@@ -82,6 +86,7 @@ export async function POST(request: NextRequest) {
       completedQuantity: typeof completedQuantity === "number" ? completedQuantity : undefined,
       progressPercentage,
       description: description.trim(),
+      taskId: typeof taskId === "string" && taskId ? taskId : undefined,
     });
 
     return NextResponse.json({ ok: true });

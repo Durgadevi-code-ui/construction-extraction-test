@@ -51,7 +51,7 @@ export default async function AccountPage() {
 
           {currentUser ? (
             <>
-              <p className="text-green-700 bg-green-50 border border-green-200 rounded p-2">
+              <p className="text-success bg-success-soft border border-success-border rounded p-2">
                 Linked to an existing app account (user_id{" "}
                 <span className="font-mono text-xs">{currentUser.userId}</span>).
               </p>
@@ -61,7 +61,7 @@ export default async function AccountPage() {
               </p>
             </>
           ) : (
-            <p className="text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+            <p className="text-warning bg-warning-soft border border-warning-border rounded p-2">
               Not linked to an app account yet (no matching public.users.auth_user_id). An Admin
               needs to link this login to a demo user before it can be used anywhere in the app.
             </p>

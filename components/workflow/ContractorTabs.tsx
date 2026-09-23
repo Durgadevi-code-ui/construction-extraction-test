@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ClipboardList, BarChart3, LayoutDashboard, ListChecks, Building2, Radio, MessageSquare } from "lucide-react";
 import DashboardShell from "@/components/workflow/DashboardShell";
 import DashboardPanel, { type DashboardSection } from "@/components/workflow/DashboardPanel";
@@ -18,6 +19,9 @@ import type { DashboardData } from "@/lib/dashboard";
 
 type Props = {
   userId: string;
+  /** The signed-in Contractor's email — purely for the header's profile
+   * chip (see DashboardShell). */
+  userEmail?: string;
   dashboardData: DashboardData;
   queue: SupervisorQueueItem[];
   todaysProgress: SupervisorQueueItem[];
@@ -76,6 +80,7 @@ const DASHBOARD_PANEL_SECTIONS: Record<string, DashboardSection[]> = {
  */
 export default function ContractorTabs({
   userId,
+  userEmail,
   dashboardData,
   queue,
   todaysProgress,
@@ -84,7 +89,16 @@ export default function ContractorTabs({
   workSummary,
   delegatedScopes,
 }: Props) {
-  const [tab, setTab] = useState("today");
+  // Same as ForemanTabs (see its own doc comment) — initial tab comes
+  // from the URL (?tab=today) when present, which is what a
+  // notification's "View Queue" link relies on. NotificationBell does a
+  // full page navigation (window.location), so this component always
+  // mounts fresh for that click and this lazy initializer always runs.
+  const searchParams = useSearchParams();
+  const [tab, setTab] = useState(() => {
+    const requested = searchParams.get("tab");
+    return requested && TABS.some((t) => t.key === requested) ? requested : "today";
+  });
 
   const showDashboardPanel = tab === "dashboard" || tab === "workItems" || tab === "departments";
 
@@ -96,6 +110,8 @@ export default function ContractorTabs({
       heading={HEADINGS[tab]}
       subheading={SUBHEADINGS[tab]}
       userId={userId}
+      userEmail={userEmail}
+      roleLabel="Contractor"
     >
       {tab === "today" && (
         <SupervisorPanel

@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Camera, Mic, Square } from "lucide-react";
+import { Camera, Mic, Square, Image as ImageIcon } from "lucide-react";
+import CameraCapture from "@/components/CameraCapture";
 
 type Props = {
   /** Optional — associates the live update with the worker's current
@@ -27,6 +28,7 @@ type Props = {
  */
 export default function LiveUpdateBar({ workItemId }: Props) {
   const photoInputRef = useRef<HTMLInputElement>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [voiceMenuOpen, setVoiceMenuOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [status, setStatus] = useState<"idle" | "uploading" | "sent" | "error">("idle");
@@ -62,6 +64,17 @@ export default function LiveUpdateBar({ workItemId }: Props) {
     if (file) upload(file, "PHOTO");
   }
 
+  // Same upload path as the normal photo picker above — a photo captured
+  // live goes through the exact same /api/workflow/live-updates
+  // submission, no separate pipeline. Uses a real getUserMedia camera
+  // stream (see components/CameraCapture.tsx), not the HTML `capture`
+  // attribute — that attribute is unreliable on desktop browsers, which
+  // mostly just open the ordinary file picker instead of a live camera.
+  function handleCameraCapture(file: File) {
+    setCameraOpen(false);
+    upload(file, "PHOTO");
+  }
+
   async function startRecording() {
     setMessage(null);
     setVoiceMenuOpen(false);
@@ -92,7 +105,7 @@ export default function LiveUpdateBar({ workItemId }: Props) {
   const busy = status === "uploading";
 
   return (
-    <div className="rounded-xl border border-line bg-surface p-3.5 shadow-sm">
+    <div className="rounded-lg border border-line bg-surface p-3.5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
         <div className="flex items-center gap-2">
           <span className="relative flex h-2 w-2" aria-hidden="true">
@@ -110,6 +123,21 @@ export default function LiveUpdateBar({ workItemId }: Props) {
       </p>
 
       <div className="flex flex-wrap items-center gap-2">
+        {cameraOpen && (
+          <CameraCapture onCapture={handleCameraCapture} onClose={() => setCameraOpen(false)} />
+        )}
+        <button
+          type="button"
+          onClick={() => setCameraOpen(true)}
+          disabled={busy}
+          className="inline-flex items-center gap-2 rounded-lg border border-line bg-surface-soft pl-2 pr-3.5 py-1.5 text-sm font-medium text-foreground-secondary transition-colors duration-150 hover:border-brand-border hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:opacity-50"
+        >
+          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-brand text-white">
+            <Camera className="h-3.5 w-3.5" strokeWidth={2} />
+          </span>
+          Capture
+        </button>
+
         <input
           ref={photoInputRef}
           type="file"
@@ -123,10 +151,10 @@ export default function LiveUpdateBar({ workItemId }: Props) {
           disabled={busy}
           className="inline-flex items-center gap-2 rounded-lg border border-line bg-surface-soft pl-2 pr-3.5 py-1.5 text-sm font-medium text-foreground-secondary transition-colors duration-150 hover:border-brand-border hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:opacity-50"
         >
-          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-brand text-white">
-            <Camera className="h-3.5 w-3.5" strokeWidth={2} />
+          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-info text-white">
+            <ImageIcon className="h-3.5 w-3.5" strokeWidth={2} />
           </span>
-          Photo
+          Upload
         </button>
 
         <div className="relative">

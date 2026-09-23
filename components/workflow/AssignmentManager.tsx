@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import PlannedQuantityEditor from "./PlannedQuantityEditor";
+import WorkItemTaskManager from "./WorkItemTaskManager";
 import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
@@ -23,6 +24,11 @@ export type AssignmentWorkItemOption = {
   description: string;
   plannedQuantity: number | null;
   unitOfMeasure: string | null;
+  /** This work item's own task list (Active and Inactive) — see
+   * lib/workflow.ts WorkItemTask. Optional only so any older caller
+   * that doesn't pass it keeps compiling; every real caller (see
+   * app/workflow/foreman/page.tsx) supplies it. */
+  tasks?: { id: string; label: string; conditional: boolean; status: "Active" | "Inactive" }[];
 };
 
 export type AssignmentRow = {
@@ -149,16 +155,19 @@ export default function AssignmentManager({
           </h3>
           <div className="divide-y divide-line">
             {workItems.map((w) => (
-              <div key={w.workItemId} className="flex items-center justify-between gap-2 py-2">
-                <span>
-                  <span className="font-medium">{w.code}</span> — {w.description}
-                </span>
-                <PlannedQuantityEditor
-                  actorUserId={subcontractorUserId}
-                  workItemId={w.workItemId}
-                  plannedQuantity={w.plannedQuantity}
-                  unitOfMeasure={w.unitOfMeasure}
-                />
+              <div key={w.workItemId} className="py-2 space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span>
+                    <span className="font-medium">{w.code}</span> — {w.description}
+                  </span>
+                  <PlannedQuantityEditor
+                    actorUserId={subcontractorUserId}
+                    workItemId={w.workItemId}
+                    plannedQuantity={w.plannedQuantity}
+                    unitOfMeasure={w.unitOfMeasure}
+                  />
+                </div>
+                <WorkItemTaskManager workItemId={w.workItemId} tasks={w.tasks ?? []} />
               </div>
             ))}
           </div>

@@ -1,15 +1,19 @@
+import { progressColorClass } from "@/lib/progressColor";
+
 /**
  * Reusable SVG donut ring for a single KPI percentage (e.g. "Overall
  * Progress" on the Dashboard's KPI row) — hand-built (stroke-dasharray
  * on a circle), no charting library per this feature's no-new-
- * dependency constraint.
+ * dependency constraint. Defaults its stroke color to the shared
+ * progress-health banding (see lib/progressColor.ts) — callers can still
+ * override via `colorClass` for a non-progress use of this ring.
  */
 export default function ProgressRing({
   percent,
   label,
   size = 88,
   strokeWidth = 10,
-  colorClass = "text-brand",
+  colorClass,
 }: {
   /** 0-100, or null when there's nothing to compute yet — renders an
    * empty ring with "—", never a fabricated 0%. */
@@ -23,6 +27,7 @@ export default function ProgressRing({
   const circumference = 2 * Math.PI * radius;
   const clamped = percent === null ? 0 : Math.max(0, Math.min(100, percent));
   const offset = circumference * (1 - clamped / 100);
+  const resolvedColorClass = colorClass ?? progressColorClass(percent);
 
   return (
     <div className="flex flex-col items-center gap-1" title={label}>
@@ -34,7 +39,7 @@ export default function ProgressRing({
             r={radius}
             fill="none"
             strokeWidth={strokeWidth}
-            className="stroke-gray-100"
+            className="stroke-line-soft"
           />
           {percent !== null && (
             <circle
@@ -46,7 +51,7 @@ export default function ProgressRing({
               strokeDasharray={circumference}
               strokeDashoffset={offset}
               strokeLinecap="round"
-              className={`${colorClass} stroke-current transition-[stroke-dashoffset]`}
+              className={`${resolvedColorClass} stroke-current transition-[stroke-dashoffset]`}
             />
           )}
         </svg>

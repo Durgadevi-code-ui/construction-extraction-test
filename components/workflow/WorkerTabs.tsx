@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
   LayoutDashboard,
   ClipboardList,
@@ -10,8 +11,10 @@ import {
   FileClock,
   LogOut,
   MessageSquare,
+  CalendarDays,
 } from "lucide-react";
 import ChatPanel from "@/components/workflow/ChatPanel";
+import ProfileChip from "@/components/workflow/ProfileChip";
 import WorkerHeroCard from "@/components/workflow/WorkerHeroCard";
 import WorkItemSelector, {
   type WorkItemOptionView,
@@ -52,6 +55,10 @@ export type WorkerApprovedWorkItem = {
 
 type Props = {
   workerId: string;
+  /** The signed-in Worker's email (already resolved server-side) —
+   * purely for the header's greeting/profile chip (see ProfileChip).
+   * Omit to fall back to the previous plain header (no chip). */
+  userEmail?: string;
   projectName: string;
   departmentName: string;
   activeWorkItem: {
@@ -86,6 +93,17 @@ type Props = {
    * single-project worker, same principle as DashboardShell's `actions`
    * prop. */
   projectSwitcher?: React.ReactNode;
+  /** The worker's own assigned projects + the one currently shown —
+   * feed the Project filter inside WorkItemSelector. */
+  projects?: { projectId: string; projectName: string }[];
+  activeProjectId?: string;
+  /** Admin on/off switch (per-project) for the Project/Work Item/Task
+   * selection UI below — see lib/admin.ts Project.taskContextEnabled's
+   * doc. When false, WorkItemSelector is not rendered at all: the
+   * already-auto-suggested/assigned work item (activeWorkItem) is used
+   * as-is and no Task is ever attached, but every input method keeps
+   * working exactly as before this feature existed. */
+  taskContextEnabled: boolean;
 };
 
 const TABS = [
@@ -112,6 +130,7 @@ const TABS = [
  */
 export default function WorkerTabs({
   workerId,
+  userEmail,
   projectName,
   departmentName,
   activeWorkItem,
@@ -130,23 +149,63 @@ export default function WorkerTabs({
   history,
   approvedWork,
   projectSwitcher,
+  projects,
+  activeProjectId,
+  taskContextEnabled,
 }: Props) {
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("update");
   const [logoAvailable, setLogoAvailable] = useState(true);
+
+  // Task selection belongs to ONE work item: it is stored together with
+  // that work item id and only honored while that same work item is the
+  // active one, so changing the work item or project (which changes the
+  // active work item) resets it with no effect/reset code. With no single
+  // work item chosen ("All assigned"), there are no tasks at all.
+  const [taskSel, setTaskSel] = useState({ workItemId: "", taskId: "" });
+
+  // Project / Work Item changes re-render the whole page on the server
+  // (several seconds), but everything the selectors need is already here.
+  // `pending` lets the selector show the new choice immediately; the
+  // update form below is dimmed and inert until the server has caught up
+  // so a submission can never target the previous work item.
+  const router = useRouter();
+  const [isNavigating, startTransition] = useTransition();
+  const [pendingNav, setPendingNav] = useState<{
+    kind: "project" | "workItem";
+    workItemId: string;
+    projectId?: string;
+  } | null>(null);
+  const pending = isNavigating ? pendingNav : null;
+  function navigate(
+    url: string,
+    next: { kind: "project" | "workItem"; workItemId: string; projectId?: string }
+  ) {
+    setPendingNav(next);
+    startTransition(() => {
+      router.push(url);
+    });
+  }
+  const activeTasks = isAutoSuggested
+    ? []
+    : (workItems.find((w) => w.workItemId === activeWorkItemId)?.tasks ?? []);
+  const selectedTask =
+    taskSel.workItemId === activeWorkItemId
+      ? (activeTasks.find((t) => t.id === taskSel.taskId) ?? null)
+      : null;
 
   const activeTab = TABS.find((t) => t.key === tab)!;
   const heading = tab === "update" ? "Worker Dashboard" : activeTab.label;
 
   return (
     // No rounded corners/border/shadow/page padding around this shell —
-    // it IS the single application surface, not a card floating over a
-    // differently-colored page background. TopNav no longer renders
-    // above the Worker screen, so this claims the full viewport height
-    // (not calc(100vh-64px), a stale TopNav-height offset that would
+    // it's the light page canvas (bg-background) that every white Card
+    // sits on top of, not a card itself. TopNav no longer renders above
+    // the Worker screen, so this claims the full viewport height (not
+    // calc(100vh-64px), a stale TopNav-height offset that would
     // otherwise leave a dead gap at the bottom).
-    <div className="flex flex-col lg:flex-row bg-surface min-h-screen">
+    <div className="flex flex-col lg:flex-row bg-background min-h-screen">
       {/* Sidebar nav — same 5 tabs as before, now vertical */}
-      <aside className="lg:w-60 shrink-0 bg-gradient-to-b from-brand via-[#173c52] to-info text-white flex flex-col">
+      <aside className="lg:w-60 shrink-0 bg-gradient-to-b from-navy-deep via-navy to-brand text-white flex flex-col">
         <div className="px-5 py-5 border-b border-white/10 flex items-center gap-2.5">
           {logoAvailable && (
             // eslint-disable-next-line @next/next/no-img-element -- small static brand mark, matches TopNav's own use of the same asset
@@ -172,7 +231,7 @@ export default function WorkerTabs({
                 aria-current={tab === key ? "page" : undefined}
                 className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors duration-150 ${
                   tab === key
-                    ? "bg-info text-white shadow-sm"
+                    ? "bg-brand text-white shadow-sm"
                     : "text-white/70 hover:bg-white/10 hover:text-white"
                 }`}
               >
@@ -200,6 +259,7 @@ export default function WorkerTabs({
       <div className="flex-1 min-w-0 p-5 sm:p-6 space-y-5">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
+            <p className="text-xs font-medium text-foreground-muted">Good morning,</p>
             <h2 className="text-xl sm:text-2xl font-extrabold text-foreground tracking-tight">{heading}</h2>
             <p className="text-sm text-foreground-secondary">
               {tab === "update"
@@ -211,8 +271,9 @@ export default function WorkerTabs({
             {projectSwitcher}
             <span
               suppressHydrationWarning
-              className="hidden sm:inline text-xs text-foreground-secondary bg-surface-soft border border-line rounded-full px-3 py-1.5"
+              className="hidden sm:inline-flex items-center gap-1.5 text-xs text-foreground-secondary bg-surface-soft border border-line rounded-full px-3 py-1.5"
             >
+              <CalendarDays className="h-3.5 w-3.5" strokeWidth={2} />
               {new Date().toLocaleDateString("en-US", {
                 weekday: "long",
                 month: "short",
@@ -220,18 +281,25 @@ export default function WorkerTabs({
               })}
             </span>
             <NotificationBell userId={workerId} />
+            {userEmail && <ProfileChip email={userEmail} roleLabel="Worker" />}
           </div>
         </div>
 
         {tab === "update" && (
           <div className="grid lg:grid-cols-[1.5fr_1fr] gap-5 items-start">
             <div className="space-y-4">
-              {workItems.length > 1 && (
+              {taskContextEnabled && (workItems.length > 0 || (projects?.length ?? 0) > 0) && (
                 <WorkItemSelector
                   workItems={workItems}
                   activeWorkItemId={activeWorkItemId}
                   isAutoSuggested={isAutoSuggested}
                   suggestionNote={suggestionNote}
+                  projects={projects}
+                  activeProjectId={activeProjectId}
+                  taskSelection={taskSel}
+                  onTaskChange={(workItemId, taskId) => setTaskSel({ workItemId, taskId })}
+                  pending={pending}
+                  onNavigate={navigate}
                 />
               )}
               {noEligibleWorkNote && (
@@ -239,6 +307,10 @@ export default function WorkerTabs({
                   {noEligibleWorkNote}
                 </p>
               )}
+              <div
+                aria-busy={pending !== null}
+                className={pending ? "opacity-50 pointer-events-none select-none" : undefined}
+              >
               <DailyWorkUpdate
                 workerId={workerId}
                 workItemId={activeWorkItem.id}
@@ -247,7 +319,11 @@ export default function WorkerTabs({
                 departmentName={departmentName}
                 plannedQuantity={activeWorkItem.plannedQuantity}
                 unitOfMeasure={activeWorkItem.unitOfMeasure}
+                taskId={selectedTask?.id ?? null}
+                taskLabel={selectedTask?.label ?? null}
+                workItemExplicitlySelected={!isAutoSuggested}
               />
+              </div>
             </div>
 
             {/* Right rail — same figures as the Dashboard tab's
@@ -265,7 +341,6 @@ export default function WorkerTabs({
                     label="Overall Progress"
                     size={110}
                     strokeWidth={10}
-                    colorClass={isCompleted ? "text-success" : "text-info"}
                   />
                 </div>
                 <div className="mt-4 space-y-2.5 text-sm">

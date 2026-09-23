@@ -1,11 +1,11 @@
 type Status = "IDLE" | "PROCESSING" | "VALID" | "INVALID" | "LOCKED";
 
 const STATUS_STYLES: Record<Status, string> = {
-  IDLE: "bg-gray-100 text-gray-600",
-  PROCESSING: "bg-blue-50 text-blue-700",
-  VALID: "bg-green-50 text-green-700",
-  INVALID: "bg-red-50 text-red-700",
-  LOCKED: "bg-gray-50 text-gray-400",
+  IDLE: "bg-surface-soft text-foreground-muted",
+  PROCESSING: "bg-info-soft text-info",
+  VALID: "bg-success-soft text-success",
+  INVALID: "bg-error-soft text-error",
+  LOCKED: "bg-surface-soft text-foreground-placeholder",
 };
 
 const STATUS_LABELS: Record<Status, string> = {
@@ -126,8 +126,8 @@ function RelevanceMessage({
     case "valid":
       return (
         <div className="space-y-0.5">
-          <p className="text-xs font-medium text-green-700">✓ Department matches{ownDepartmentName ? ` (${ownDepartmentName})` : ""}.</p>
-          {workItemCode && <p className="text-xs font-medium text-green-700">✓ Matches selected work item ({workItemCode}).</p>}
+          <p className="text-xs font-medium text-success">✓ Department matches{ownDepartmentName ? ` (${ownDepartmentName})` : ""}.</p>
+          {workItemCode && <p className="text-xs font-medium text-success">✓ Matches selected work item ({workItemCode}).</p>}
         </div>
       );
     case "wrongDepartment":
@@ -141,7 +141,7 @@ function RelevanceMessage({
       );
     case "vague":
       return (
-        <p className="text-xs font-medium text-amber-700">
+        <p className="text-xs font-medium text-warning">
           ⚠ More information is required. Please describe what work was completed.
         </p>
       );
@@ -153,7 +153,7 @@ function RelevanceMessage({
       );
     case "checkFailed":
       return (
-        <p className="text-xs font-medium text-amber-700">
+        <p className="text-xs font-medium text-warning">
           ⚠ We couldn&apos;t verify this {MEDIA_NOUN[mediaKind]} right now. Please try again.
         </p>
       );
@@ -215,13 +215,13 @@ export default function ValidationPanel({
 
       {status === "VALID" &&
         (decision === "valid" ? (
-          <p className="text-sm font-medium text-green-700">Confirmed — continuing to submit.</p>
+          <p className="text-sm font-medium text-success">Confirmed — continuing to submit.</p>
         ) : blocked ? null : (
           <div className="flex gap-2 pt-1">
             <button
               onClick={onConfirm}
               disabled={busy}
-              className="px-3 py-1.5 bg-green-600 text-white rounded text-sm font-medium disabled:opacity-50"
+              className="px-3 py-1.5 bg-success hover:bg-success/90 text-white rounded-lg text-sm font-medium transition-colors duration-150 disabled:opacity-50"
             >
               Confirm &amp; Continue
             </button>

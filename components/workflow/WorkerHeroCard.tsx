@@ -1,5 +1,38 @@
+import { Target, Send, CheckCircle2, Hourglass } from "lucide-react";
 import { formatPercent, formatQuantity } from "@/lib/format";
+import { progressColorClass } from "@/lib/progressColor";
 import Card from "@/components/ui/Card";
+
+const STAT_ICON_CHIP: Record<"neutral" | "info" | "brand" | "warning", string> = {
+  neutral: "bg-navy text-white",
+  info: "bg-info text-white",
+  brand: "bg-brand text-white",
+  warning: "bg-warning text-white",
+};
+
+function StatCell({
+  icon: Icon,
+  tone,
+  value,
+  label,
+  valueClassName,
+}: {
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+  tone: "neutral" | "info" | "brand" | "warning";
+  value: React.ReactNode;
+  label: string;
+  valueClassName: string;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-2 rounded-lg border border-line bg-white py-3 px-2">
+      <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${STAT_ICON_CHIP[tone]}`}>
+        <Icon className="h-4 w-4" strokeWidth={2} />
+      </span>
+      <p className={`text-lg font-bold tabular-nums leading-tight ${valueClassName}`}>{value}</p>
+      <p className="text-[11px] text-foreground-secondary text-center">{label}</p>
+    </div>
+  );
+}
 
 /**
  * The primary Worker screen — "what work is assigned to me, what's the
@@ -68,37 +101,41 @@ export default function WorkerHeroCard({
         <p className="text-xs text-foreground-muted">{workItemCode}</p>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
-        <div className="bg-surface-soft rounded-lg py-3">
-          <p className="text-lg font-bold text-foreground tabular-nums">{formatQuantity(plannedQuantity)}</p>
-          <p className="text-[11px] text-foreground-secondary">Target {unitOfMeasure ?? ""}</p>
-        </div>
-        <div className="bg-info-soft rounded-lg py-3">
-          <p className="text-lg font-bold text-info tabular-nums">
-            {submittedQuantity !== null ? formatQuantity(submittedQuantity) : "—"}
-          </p>
-          <p className="text-[11px] text-foreground-secondary">
-            Submitted / Estimated {submittedQuantity !== null ? (unitOfMeasure ?? "") : ""}
-          </p>
-        </div>
-        <div className="bg-brand-soft rounded-lg py-3">
-          <p className="text-lg font-bold text-brand tabular-nums">
-            {approvedQuantity !== null ? formatQuantity(approvedQuantity) : formatPercent(pct)}
-          </p>
-          <p className="text-[11px] text-foreground-secondary">
-            Approved / Completed {approvedQuantity !== null ? (unitOfMeasure ?? "") : ""}
-          </p>
-        </div>
-        <div className="bg-warning-soft rounded-lg py-3">
-          <p className="text-lg font-bold text-warning tabular-nums">{formatQuantity(remaining)}</p>
-          <p className="text-[11px] text-foreground-secondary">Remaining {unitOfMeasure ?? ""}</p>
-        </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatCell
+          icon={Target}
+          tone="neutral"
+          valueClassName="text-foreground"
+          value={formatQuantity(plannedQuantity)}
+          label={`Target ${unitOfMeasure ?? ""}`}
+        />
+        <StatCell
+          icon={Send}
+          tone="info"
+          valueClassName="text-info"
+          value={submittedQuantity !== null ? formatQuantity(submittedQuantity) : "—"}
+          label={`Submitted / Estimated ${submittedQuantity !== null ? (unitOfMeasure ?? "") : ""}`}
+        />
+        <StatCell
+          icon={CheckCircle2}
+          tone="brand"
+          valueClassName="text-brand"
+          value={approvedQuantity !== null ? formatQuantity(approvedQuantity) : formatPercent(pct)}
+          label={`Approved / Completed ${approvedQuantity !== null ? (unitOfMeasure ?? "") : ""}`}
+        />
+        <StatCell
+          icon={Hourglass}
+          tone="warning"
+          valueClassName="text-warning"
+          value={formatQuantity(remaining)}
+          label={`Remaining ${unitOfMeasure ?? ""}`}
+        />
       </div>
 
       <div>
         <div className="h-2.5 w-full rounded-full bg-line-soft overflow-hidden">
           <div
-            className={`h-full rounded-full transition-[width] duration-500 ease-out ${isCompleted ? "bg-success" : "bg-brand"}`}
+            className={`h-full rounded-full transition-[width] duration-500 ease-out ${progressColorClass(pct, "bg")}`}
             style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
           />
         </div>

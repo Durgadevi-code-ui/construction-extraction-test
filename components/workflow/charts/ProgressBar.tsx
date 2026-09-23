@@ -1,14 +1,19 @@
+import { progressColorClass } from "@/lib/progressColor";
+
 /**
  * Reusable horizontal progress indicator (CSS/Tailwind, no SVG needed)
  * — used for a single work item's or department's percent complete
  * wherever the Dashboard needs "one bar per row" (see
  * app/workflow/dashboard). `tooltip` uses the native title attribute
- * per the no-new-dependency constraint on this feature.
+ * per the no-new-dependency constraint on this feature. Defaults its
+ * fill color to the shared progress-health banding (see
+ * lib/progressColor.ts) — callers can still override via `colorClass`
+ * to layer in an operational signal (e.g. "stuck" work items).
  */
 export default function ProgressBar({
   percent,
   tooltip,
-  colorClass = "bg-brand",
+  colorClass,
   showLabel = false,
 }: {
   /** 0-100, or null when there's nothing to show yet (renders an empty
@@ -21,6 +26,7 @@ export default function ProgressBar({
   showLabel?: boolean;
 }) {
   const clamped = percent === null ? 0 : Math.max(0, Math.min(100, percent));
+  const resolvedColorClass = colorClass ?? progressColorClass(percent, "bg");
 
   return (
     <div className="w-full">
@@ -41,7 +47,7 @@ export default function ProgressBar({
       >
         {percent !== null && (
           <div
-            className={`h-full rounded-full ${colorClass} transition-[width] duration-500 ease-out`}
+            className={`h-full rounded-full ${resolvedColorClass} transition-[width] duration-500 ease-out`}
             style={{ width: `${clamped}%` }}
           />
         )}

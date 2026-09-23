@@ -1,47 +1,51 @@
 @import "tailwindcss";
 
-/* "Fieldwork Precision" — premium cool-neutral enterprise construction
-   theme (Stripe/Attio/Procore/Vercel/Autodesk-inspired). Steel Blue is
-   the primary/professional accent (primary actions, active nav state,
-   selected states); Teal and Green are supporting accents (secondary
-   status, approved/completed progress) — never a page background or a
-   general fill. Amber/sunset is a small, deliberately muted accent
-   reserved for in-progress/attention status only. */
+/* Construction-management SaaS theme — clean white/light surfaces, dark
+   navy/teal navigation, teal primary actions, and light-tinted semantic
+   status colors (green/amber/red) for progress and review states. Every
+   screen (Worker/Subcontractor/Contractor/Admin) draws from this single
+   token set via Tailwind's @theme mapping below, so a status/progress
+   color always looks the same everywhere it appears. */
 :root {
-  --background: #eef3f5;
-  --foreground: #111827;
-  --foreground-secondary: #4b5563;
-  --foreground-muted: #6b7280;
-  --foreground-placeholder: #9ca3af;
+  --background: #f5f7f8;
+  --foreground: #172128;
+  --foreground-secondary: #66708b;
+  --foreground-muted: #838ca3;
+  --foreground-placeholder: #aab1c2;
 
   --surface: #ffffff;
-  --surface-soft: #f6f9fa;
-  --surface-hover: #eef2f4;
+  --surface-soft: #f1f4f6;
+  --surface-hover: #e9eef1;
 
-  --line: #dde5e9;
-  --line-strong: #c7d3d9;
-  --line-soft: #eef1f3;
+  --line: #e1e7ea;
+  --line-strong: #c9d3d8;
+  --line-soft: #eef2f4;
 
-  --brand: #2e5c7e;
-  --brand-hover: #24485f;
-  --brand-soft: #e7eff4;
-  --brand-border: #c3d6e2;
+  /* Primary Teal — primary actions, active nav state, selected states. */
+  --brand: #0f8f8c;
+  --brand-hover: #0c716f;
+  --brand-soft: #e3f4f3;
+  --brand-border: #bfe3e1;
 
-  --success: #2f8f5a;
-  --success-soft: #e7f4ec;
-  --success-border: #c2e5cf;
+  /* Dark Navy — sidebar/navigation only, never a content background. */
+  --navy: #123a4a;
+  --navy-deep: #0d2b37;
 
-  --warning: #c96a1f;
-  --warning-soft: #fbeee1;
-  --warning-border: #f0d2b3;
+  --success: #2e9862;
+  --success-soft: #e5f5ec;
+  --success-border: #c2e6d2;
 
-  --error: #b91c1c;
-  --error-soft: #fef2f2;
-  --error-border: #fecaca;
+  --warning: #d98c18;
+  --warning-soft: #fcefdc;
+  --warning-border: #f2d9ac;
 
-  --info: #0d8f8a;
-  --info-soft: #e2f4f2;
-  --info-border: #bfe6e2;
+  --error: #d64545;
+  --error-soft: #fbeaea;
+  --error-border: #f2c8c8;
+
+  --info: #1e88a8;
+  --info-soft: #e4f1f5;
+  --info-border: #c3e0ea;
 }
 
 @theme inline {
@@ -63,6 +67,9 @@
   --color-brand-hover: var(--brand-hover);
   --color-brand-soft: var(--brand-soft);
   --color-brand-border: var(--brand-border);
+
+  --color-navy: var(--navy);
+  --color-navy-deep: var(--navy-deep);
 
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);

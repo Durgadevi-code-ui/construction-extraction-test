@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import StatusFlow from "@/components/workflow/StatusFlow";
 import { formatPercent } from "@/lib/format";
 import Card from "@/components/ui/Card";
@@ -45,32 +45,39 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const bulkLock = useRef(false);
+
+  async function forwardOne(item: ForemanQueueItem) {
+    const draft = drafts[item.submissionId];
+    const res = await fetch("/api/workflow/foreman", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        foremanUserId,
+        action: "submit",
+        submissionId: item.submissionId,
+        progressPercentage: draft?.progress,
+        comment: draft?.comment,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? "Forward failed.");
+
+    setDrafts((prev) => {
+      const next = { ...prev };
+      delete next[item.submissionId];
+      return next;
+    });
+  }
 
   async function handleForward(item: ForemanQueueItem) {
     setBusyId(item.submissionId);
     setError(null);
     setSuccessMessage(null);
     try {
-      const draft = drafts[item.submissionId];
-      const res = await fetch("/api/workflow/foreman", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          foremanUserId,
-          action: "submit",
-          submissionId: item.submissionId,
-          progressPercentage: draft?.progress,
-          comment: draft?.comment,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Forward failed.");
-
-      setDrafts((prev) => {
-        const next = { ...prev };
-        delete next[item.submissionId];
-        return next;
-      });
+      await forwardOne(item);
       setSuccessMessage("Submission forwarded to Contractor.");
       router.refresh();
     } catch (err) {
@@ -78,6 +85,41 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
     } finally {
       setBusyId(null);
     }
+  }
+
+  // Universal action for the Subcontractor: this queue's approval step is
+  // "Forward to Contractor" (the only action it has), so the one button
+  // runs that same per-item action over the ticked items. A ref lock
+  // stops repeated clicks from starting a second batch.
+  const selectedItems = items.filter((item) => selectedIds.has(item.submissionId));
+  const allSelected = items.length > 0 && selectedItems.length === items.length;
+
+  function selectAll() {
+    setSelectedIds(new Set(items.map((item) => item.submissionId)));
+  }
+
+  async function forwardSelected() {
+    if (bulkLock.current || selectedItems.length === 0) return;
+    bulkLock.current = true;
+    setBulkBusy(true);
+    setError(null);
+    setSuccessMessage(null);
+    let done = 0;
+    let firstError: string | null = null;
+    for (const item of selectedItems) {
+      try {
+        await forwardOne(item);
+        done += 1;
+      } catch (err) {
+        firstError ??= err instanceof Error ? err.message : "Forward failed.";
+      }
+    }
+    setSelectedIds(new Set());
+    if (done > 0) setSuccessMessage(`${done} submission${done === 1 ? "" : "s"} forwarded to Contractor.`);
+    if (firstError) setError(`${selectedItems.length - done} failed: ${firstError}`);
+    router.refresh();
+    setBulkBusy(false);
+    bulkLock.current = false;
   }
 
   if (items.length === 0) {
@@ -103,6 +145,27 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
       {error && (
         <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
       )}
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-surface-soft px-3 py-2 text-sm">
+        <label
+          className="flex items-center gap-2 text-foreground-secondary"
+          title="Double-click to select all items"
+        >
+          <input
+            type="checkbox"
+            checked={allSelected}
+            onChange={() => (allSelected ? setSelectedIds(new Set()) : selectAll())}
+            onDoubleClick={selectAll}
+            disabled={bulkBusy}
+          />
+          Select
+        </label>
+        <Button size="sm" onClick={forwardSelected} disabled={bulkBusy || selectedItems.length === 0}>
+          {bulkBusy ? "Forwarding…" : `Forward to Contractor${selectedItems.length ? ` (${selectedItems.length})` : ""}`}
+        </Button>
+        <span className="text-xs text-foreground-muted">
+          Tick items to forward them together. Double-click the checkbox to select all.
+        </span>
+      </div>
       {items.map((item) => {
         const draft = drafts[item.submissionId];
         const isEditing = editingId === item.submissionId;
@@ -112,6 +175,24 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
 
         return (
           <Card key={item.submissionId} className="space-y-2 text-sm">
+            <label className="flex items-center gap-2 text-xs text-foreground-secondary">
+              <input
+                type="checkbox"
+                checked={selectedIds.has(item.submissionId)}
+                onChange={() =>
+                  setSelectedIds((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(item.submissionId)) next.delete(item.submissionId);
+                    else next.add(item.submissionId);
+                    return next;
+                  })
+                }
+                onDoubleClick={selectAll}
+                disabled={bulkBusy}
+                title="Double-click to select all items"
+              />
+              Select to forward
+            </label>
             <p>
               <span className="text-foreground-secondary">Worker:</span>{" "}
               <span className="font-medium">{item.workerName}</span>
@@ -254,7 +335,7 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
                 </Button>
               )}
 
-              <Button size="sm" onClick={() => handleForward(item)} disabled={busyId === item.submissionId}>
+              <Button size="sm" onClick={() => handleForward(item)} disabled={busyId === item.submissionId || bulkBusy}>
                 {busyId === item.submissionId ? "Forwarding…" : "Forward to Contractor"}
               </Button>
             </div>

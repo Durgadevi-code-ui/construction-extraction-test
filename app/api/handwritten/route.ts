@@ -3,7 +3,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseClient, STORAGE_BUCKETS } from "@/lib/supabase";
 import { runOCR } from "@/lib/ocr";
 import { normalizeText, validateHandwritten } from "@/lib/validation";
-import { resolveConstructionContext, assessImageSubmissionRelevance, imageRelevanceRejection } from "@/lib/construction";
+import {
+  resolveConstructionContext,
+  assessWorkerSubmissionRelevance,
+  resolveWorkItemAmbiguity,
+  textMatchesWorkItem,
+  detectTaskConflict,
+  type WorkItemAmbiguityResult,
+} from "@/lib/construction";
+import { getCurrentUser } from "@/lib/session";
+import { resolveTaskForWorker } from "@/lib/workflow";
 
 export const runtime = "nodejs";
 
@@ -22,12 +31,21 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get("image");
-    // Same optional work-item-relevance check as /api/text — see its
-    // doc comment. A form field, not JSON, since this route already
-    // reads multipart formData for the image itself.
     const selectedWorkItemDescriptionRaw = formData.get("workItemDescription");
     const selectedWorkItemDescription =
       typeof selectedWorkItemDescriptionRaw === "string" ? selectedWorkItemDescriptionRaw : null;
+    const selectedWorkItemIdRaw = formData.get("workItemId");
+    const selectedWorkItemId = typeof selectedWorkItemIdRaw === "string" && selectedWorkItemIdRaw ? selectedWorkItemIdRaw : null;
+    const confirmedWorkItemIdRaw = formData.get("confirmedWorkItemId");
+    const confirmedWorkItemIdInput =
+      typeof confirmedWorkItemIdRaw === "string" && confirmedWorkItemIdRaw ? confirmedWorkItemIdRaw : null;
+    const taskIdRaw = formData.get("taskId");
+    const taskIdInput = typeof taskIdRaw === "string" && taskIdRaw ? taskIdRaw : null;
+    const taskConflictDecisionRaw = formData.get("taskConflictDecision");
+    const taskConflictDecision = typeof taskConflictDecisionRaw === "string" ? taskConflictDecisionRaw : null;
+    // See app/api/text/route.ts for the full rationale — defaults to
+    // explicit (true) so an omitted field keeps the old "trust it" behavior.
+    const hasExplicitSelection = formData.get("workItemExplicitlySelected") !== "false";
 
     // ------------------------------------------------------------
     // 1. Validate image
@@ -62,34 +80,16 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
 
     // ------------------------------------------------------------
-    // 3. Department relevance — looks at the actual physical
-    //    construction work shown in the photo (Gemini Vision, a
-    //    different prompt from runOCR's "read the note text" one —
-    //    see lib/construction.ts assessImageSubmissionRelevance /
-    //    lib/ocr.ts classifyConstructionImageDepartment). Runs BEFORE
-    //    OCR, storage upload, and the extraction_submissions insert —
-    //    a wrong-department, too-unclear, or classifier/provider-
-    //    failure image must never be persisted or processed further
-    //    (same shared imageRelevanceRejection helper and behavior as
-    //    app/api/workflow/live-updates/route.ts's Live Update photo
-    //    flow). A "notChecked" result (no real Worker session, e.g.
-    //    the standalone Extraction Accuracy Test tool) falls through
-    //    to the normal flow below, unchanged.
-    // ------------------------------------------------------------
-
-    const { relevance, visionChecked, ownDepartmentName } = await assessImageSubmissionRelevance(
-      supabase,
-      buffer,
-      file.type,
-      selectedWorkItemDescription
-    );
-    const rejection = imageRelevanceRejection(relevance, ownDepartmentName);
-    if (rejection) {
-      return NextResponse.json({ error: rejection.error }, { status: rejection.status });
-    }
-
-    // ------------------------------------------------------------
-    // 4. Run OCR
+    // 3. Run OCR
+    //
+    //    No department classification is run against this image —
+    //    department-based image blocking was intentionally removed
+    //    (any relevant construction/site photo is allowed; only the
+    //    OCR'd note TEXT is validated below, same as before that
+    //    check ever existed). Text/voice department relevance is a
+    //    separate, unaffected mechanism (see
+    //    assessWorkerSubmissionRelevance, used by app/api/text and
+    //    app/api/voice).
     // ------------------------------------------------------------
 
     const ocrResult = await runOCR(buffer, file.type);
@@ -103,16 +103,98 @@ export async function POST(request: NextRequest) {
       ? { status: "INVALID" as const, reason: ocrResult.error }
       : validateHandwritten(ocrResult.rawText, ocrResult.confidence);
 
-    // The image was usefully processed if EITHER signal succeeded: OCR
-    // found real note text, or the vision model rendered a verdict on
-    // the photo's physical content (department match, or a genuine
-    // "vague"/"notChecked" — anything that reached this point already
-    // passed imageRelevanceRejection above, so it's never a rejection
-    // reaching here). Only when neither worked at all is this
-    // genuinely "extraction failed."
-    const status: "VALID" | "INVALID" = ocrValidation.status === "VALID" || visionChecked ? "VALID" : "INVALID";
-    const reason =
-      ocrValidation.status === "VALID" ? ocrValidation.reason : visionChecked ? "Image analyzed." : ocrValidation.reason;
+    const status = ocrValidation.status;
+    const reason = ocrValidation.reason;
+
+    // ------------------------------------------------------------
+    // 4. Selected Work Item / Task context, applied to the OCR'd note
+    //    TEXT — same shared functions app/api/text and app/api/voice
+    //    use (resolveTaskForWorker, detectTaskConflict,
+    //    resolveWorkItemAmbiguity, assessWorkerSubmissionRelevance),
+    //    never a separate/vision-based system. Deliberately
+    //    conservative: only runs when OCR actually found real text to
+    //    judge — a plain site photo with no readable note text is
+    //    accepted exactly as before (no relevance verdict fabricated
+    //    from "nothing was read"), matching "do not blindly reject an
+    //    image because it's visually difficult to classify."
+    // ------------------------------------------------------------
+
+    const hasOcrText = !ocrFailed && rawText.trim().length > 0 && rawText.trim().toUpperCase() !== "UNREADABLE";
+
+    let task: { id: string; label: string } | null = null;
+    if (hasOcrText && taskIdInput && selectedWorkItemId) {
+      const currentUser = await getCurrentUser();
+      if (currentUser) {
+        let resolved;
+        try {
+          resolved = await resolveTaskForWorker(supabase, currentUser.userId, selectedWorkItemId, taskIdInput);
+        } catch {
+          return NextResponse.json(
+            { error: "That task does not belong to the selected work item." },
+            { status: 400 }
+          );
+        }
+        task = { id: resolved.id, label: resolved.label };
+
+        if (taskConflictDecision !== "keep") {
+          const conflict = detectTaskConflict(rawText, task, resolved.allTasks);
+          if (conflict.status === "conflict") {
+            if (taskConflictDecision === "switch") {
+              task = { id: conflict.matchedTask.id, label: conflict.matchedTask.label };
+            } else {
+              return NextResponse.json({
+                taskConflict: { selectedTask: task, suggestedTask: conflict.matchedTask },
+              });
+            }
+          }
+        }
+      }
+    }
+
+    let selectedDescription = selectedWorkItemDescription;
+    let confirmedWorkItem = null;
+    let userConfirmed = false;
+    let resolution: WorkItemAmbiguityResult = { status: "clear" };
+    if (hasOcrText && status === "VALID" && selectedWorkItemId) {
+      resolution = await resolveWorkItemAmbiguity(
+        supabase,
+        rawText,
+        selectedWorkItemId,
+        confirmedWorkItemIdInput,
+        hasExplicitSelection
+      );
+      if (resolution.status === "invalidConfirmation") {
+        return NextResponse.json(
+          { error: "That work item is not one of your assigned work items." },
+          { status: 400 }
+        );
+      }
+      if (resolution.status === "confirmed" || resolution.status === "resolved") {
+        confirmedWorkItem = resolution.workItem;
+        selectedDescription = resolution.workItem.description;
+        userConfirmed = resolution.status === "confirmed";
+      }
+    }
+
+    let relevance = hasOcrText
+      ? await assessWorkerSubmissionRelevance(supabase, rawText, selectedDescription, selectedWorkItemId)
+      : ({ status: "notChecked" } as const);
+
+    if (
+      relevance.status === "vague" &&
+      userConfirmed &&
+      confirmedWorkItem &&
+      textMatchesWorkItem(rawText, confirmedWorkItem.description)
+    ) {
+      relevance = { status: "valid" };
+    }
+
+    if (
+      resolution.status === "ambiguous" &&
+      (relevance.status === "valid" || (relevance.status === "vague" && resolution.selectedInTie))
+    ) {
+      return NextResponse.json({ ambiguity: { candidates: resolution.candidates } });
+    }
 
     // ------------------------------------------------------------
     // 5. Resolve project / department / work item / worker from the
@@ -177,11 +259,7 @@ export async function POST(request: NextRequest) {
           : { raw_text: rawText, normalized_text: normalized },
         confidence_score: confidence,
 
-        // Reflects the COMBINED (OCR or vision) outcome, not OCR alone
-        // — a real construction photo with no note text on it, whose
-        // physical content the vision check successfully classified,
-        // is genuinely "processed", not "failed".
-        processing_status: ocrFailed && !visionChecked ? "FAILED" : "COMPLETED",
+        processing_status: ocrFailed ? "FAILED" : "COMPLETED",
         processing_error: ocrFailed ? ocrResult.error : null,
         processed_at: new Date().toISOString(),
 
@@ -210,13 +288,7 @@ export async function POST(request: NextRequest) {
     // 8. Return response
     // ------------------------------------------------------------
 
-    // Only a genuine provider/infra failure with NO usable signal at
-    // all (OCR errored AND the vision check couldn't run either) is a
-    // hard failure — otherwise (e.g. OCR found nothing but vision
-    // successfully classified the photo) this falls through to the
-    // normal 200 response below with status/relevance reflecting
-    // whichever signal actually worked.
-    if (ocrFailed && !visionChecked) {
+    if (ocrFailed) {
       return NextResponse.json({ error: ocrResult.error }, { status: 503 });
     }
 
@@ -231,10 +303,9 @@ export async function POST(request: NextRequest) {
         code: context.workItemCode,
         description: context.workItemDescription,
       },
-      // The VISUAL department/work-item check (see
-      // assessImageSubmissionRelevance above) — looks at the photo's
-      // actual physical content, not just any note text OCR'd off it.
       relevance,
+      confirmedWorkItem,
+      task,
     });
   } catch (err) {
     console.error("Handwritten pipeline error:", err);

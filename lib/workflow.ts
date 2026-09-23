@@ -49,6 +49,10 @@ export type ProgressData = {
    * calculated (not manually entered) — see lib/calculations.ts. */
   completed_quantity?: number | null;
   unit?: string | null;
+  /** Optional Task context the worker picked for this work item (see
+   * WorkItemTask) — validated server-side against that work item's own
+   * task definitions before being stored. */
+  task?: { id: string; label: string } | null;
 };
 
 export type SelectableUser = {
@@ -110,7 +114,7 @@ export async function listSelectableUsers(
 export { getUserContext };
 
 const WORK_ITEM_SELECT =
-  "work_item_id, project_id, department_id, line_item_no, description_of_work, scheduled_value, planned_quantity, unit_of_measure";
+  "work_item_id, project_id, department_id, line_item_no, description_of_work, scheduled_value, planned_quantity, unit_of_measure, additional_fields";
 
 type WorkItemRecord = {
   work_item_id: string;
@@ -121,6 +125,7 @@ type WorkItemRecord = {
   scheduled_value: number | null;
   planned_quantity: number | null;
   unit_of_measure: string | null;
+  additional_fields: Record<string, unknown> | null;
 };
 
 /**
@@ -164,6 +169,44 @@ async function getPrimaryAssignedWorkItem(
   }
 
   return workItem;
+}
+
+/** One selectable task/activity under a work item — stored as data in
+ * work_items.additional_fields.__tasks: originally seeded from an AI/
+ * report-derived analysis (scripts/seed-work-item-tasks.mjs) as GENERAL
+ * suggestions, now also directly editable by an authorized Contractor/
+ * Subcontractor (see createWorkItemTask/updateWorkItemTask below) — the
+ * same plain-data representation serves both origins, never two
+ * competing storages. `status` defaults to "Active" for entries that
+ * predate this field (every task seeded before this feature existed) —
+ * see parseWorkItemTasks. */
+export type WorkItemTask = {
+  id: string;
+  label: string;
+  conditional: boolean;
+  /** "Inactive" = soft-deactivated (see updateWorkItemTask): no longer
+   * offered to a Worker, but never deleted — a past submission that
+   * already recorded this task's id/label (denormalized at submit time,
+   * see ProgressData.task) keeps displaying correctly regardless. */
+  status: "Active" | "Inactive";
+};
+
+/** Defensive read of additional_fields.__tasks — anything malformed is
+ * ignored, so a work item with no/invalid task data simply has none. */
+export function parseWorkItemTasks(additionalFields: unknown): WorkItemTask[] {
+  const raw = (additionalFields as { __tasks?: unknown } | null | undefined)?.__tasks;
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const tasks: WorkItemTask[] = [];
+  for (const t of raw) {
+    const id = (t as { id?: unknown })?.id;
+    const label = (t as { label?: unknown })?.label;
+    if (typeof id !== "string" || !id || typeof label !== "string" || !label || seen.has(id)) continue;
+    seen.add(id);
+    const status = (t as { status?: unknown }).status === "Inactive" ? "Inactive" : "Active";
+    tasks.push({ id, label, conditional: (t as { conditional?: unknown }).conditional === true, status });
+  }
+  return tasks;
 }
 
 async function getWorkItemById(
@@ -288,6 +331,27 @@ async function resolveWorkItemForWorker(
   return workItem;
 }
 
+/**
+ * A worker holding Active roles on more than one project must be acted
+ * on under the project the work item actually belongs to — not always
+ * their first role (getUserContext's default), which made every
+ * other-project work item fail the department check below. Falls back
+ * to the default context when no work item is given or it isn't in one
+ * of the worker's own projects, so nothing that was rejected before is
+ * newly allowed (resolveWorkItemForWorker still enforces department +
+ * assignment).
+ */
+async function getWorkerContextForWorkItem(
+  supabase: SupabaseClient,
+  workerId: string,
+  workItemId?: string | null
+) {
+  const projectId = workItemId
+    ? (await getWorkItemById(supabase, workItemId).catch(() => null))?.project_id
+    : undefined;
+  return getUserContext(supabase, workerId, projectId ? { projectId } : undefined);
+}
+
 export type WorkItemOption = {
   workItemId: string;
   lineItemNo: string;
@@ -310,6 +374,9 @@ export type WorkItemOption = {
    * (vacuously true when there are none). Advisory only — drives the
    * next-task suggestion, does not block manual selection. */
   isEligible: boolean;
+  /** Task/activity options defined for this work item (empty when none
+   * are configured) — see WorkItemTask. */
+  tasks: WorkItemTask[];
 };
 
 /**
@@ -339,6 +406,7 @@ async function annotateWorkItemOptions(
         unitOfMeasure: item.unit_of_measure,
         progressPercentage: status.progressPercentage,
         isCompleted: status.isCompleted,
+        tasks: parseWorkItemTasks(item.additional_fields),
       };
     })
   );
@@ -737,7 +805,7 @@ export async function getWorkerDashboard(
   userId: string,
   workItemId?: string | null
 ): Promise<WorkerDashboard> {
-  const ctx = await getUserContext(supabase, userId);
+  const ctx = await getWorkerContextForWorkItem(supabase, userId, workItemId);
   const workItem = await resolveWorkItemForWorker(supabase, userId, ctx.departmentId, workItemId);
   const todayBounds = { from: todayISODate(), to: todayISODate() };
   const [todaysApproved, todaysApprovedQuantity, overallStatus, statusCode] = await Promise.all([
@@ -775,6 +843,34 @@ export async function getWorkerDashboard(
   };
 }
 
+/**
+ * Server-side check for a Task the worker picked: the work item must be
+ * one this worker may act on (same department + Active assignment, via
+ * resolveWorkItemForWorker) AND the task id must be one of THAT work
+ * item's own defined tasks that is currently Active (a Contractor/
+ * Subcontractor-deactivated task can never be freshly selected, even by
+ * a crafted request — see WorkItemTask.status). Throws otherwise — the
+ * client's dropdown state is never trusted. `allTasks` (Active only) is
+ * returned alongside so the caller can run task-conflict detection
+ * against every OTHER currently-selectable task (see
+ * lib/construction.ts detectTaskConflict).
+ */
+export async function resolveTaskForWorker(
+  supabase: SupabaseClient,
+  workerId: string,
+  workItemId: string,
+  taskId: string
+): Promise<{ id: string; label: string; allTasks: WorkItemTask[] }> {
+  const ctx = await getWorkerContextForWorkItem(supabase, workerId, workItemId);
+  const workItem = await resolveWorkItemForWorker(supabase, workerId, ctx.departmentId, workItemId);
+  const allTasks = parseWorkItemTasks(workItem.additional_fields).filter((t) => t.status === "Active");
+  const task = allTasks.find((t) => t.id === taskId);
+  if (!task) {
+    throw new Error(`Task ${taskId} does not belong to work item ${workItemId}`);
+  }
+  return { id: task.id, label: task.label, allTasks };
+}
+
 export async function submitWorkerProgress(
   supabase: SupabaseClient,
   params: {
@@ -789,15 +885,30 @@ export async function submitWorkerProgress(
     completedQuantity?: number | null;
     progressPercentage: number;
     description: string;
+    /** Optional Task context — must be one of the selected work item's
+     * own tasks (validated below). Requires an explicit workItemId. */
+    taskId?: string | null;
   }
 ): Promise<void> {
-  const ctx = await getUserContext(supabase, params.workerId);
+  const ctx = await getWorkerContextForWorkItem(supabase, params.workerId, params.workItemId);
   const workItem = await resolveWorkItemForWorker(
     supabase,
     params.workerId,
     ctx.departmentId,
     params.workItemId
   );
+
+  let task: { id: string; label: string } | null = null;
+  if (params.taskId) {
+    if (!params.workItemId) {
+      throw new Error("A task can only be selected together with a work item.");
+    }
+    const found = parseWorkItemTasks(workItem.additional_fields).find((t) => t.id === params.taskId);
+    if (!found) {
+      throw new Error(`Task ${params.taskId} does not belong to work item ${workItem.work_item_id}`);
+    }
+    task = { id: found.id, label: found.label };
+  }
 
   const calculatedProgress = calculateProgressPercentage(
     params.completedQuantity,
@@ -806,6 +917,7 @@ export async function submitWorkerProgress(
   const progressPercentage = calculatedProgress ?? params.progressPercentage;
 
   const structured: ProgressData = {
+    ...(task ? { task } : {}),
     description: params.description,
     progress_percentage: progressPercentage,
     completed_quantity:
@@ -1820,6 +1932,149 @@ export async function updatePlannedQuantity(
 }
 
 // ------------------------------------------------------------------
+// Task configuration — the smallest addition needed to let the people
+// who actually understand the field work (Contractor/Supervisor/
+// Manager, Subcontractor/Foreman) define the real, project-specific
+// tasks under a work item, instead of only ever using the AI/report-
+// derived __tasks suggestions (see scripts/seed-work-item-tasks.mjs's
+// own doc: "Derived analysis, NOT confirmed project-defined tasks").
+// Reuses the EXACT SAME work_items.additional_fields.__tasks
+// representation WorkItemTask/parseWorkItemTasks already define — no
+// second/competing task storage, no new table. Worker is never
+// authorized here (same isAdminUser-first / own-department-FOREMAN-or-
+// CONTRACTOR_ROLES / delegated-WORK_ITEM_MANAGEMENT pattern as
+// updatePlannedQuantity above, so both share one authorization model
+// for "configure this work item").
+// ------------------------------------------------------------------
+
+async function assertCanManageWorkItemTasks(
+  supabase: SupabaseClient,
+  actorUserId: string,
+  workItem: WorkItemRecord
+): Promise<void> {
+  if (await isAdminUser(supabase, actorUserId)) return;
+
+  const ctx = await getUserContext(supabase, actorUserId);
+
+  const ownDepartment =
+    (ctx.role === "FOREMAN" || CONTRACTOR_ROLES.includes(ctx.role)) &&
+    workItem.department_id === ctx.departmentId;
+
+  const authorized =
+    ownDepartment ||
+    (CONTRACTOR_ROLES.includes(ctx.role) &&
+      (await hasDelegatedPermission(supabase, ctx.userId, "WORK_ITEM_MANAGEMENT", {
+        projectId: workItem.project_id,
+        departmentId: workItem.department_id,
+      })));
+
+  if (!authorized) {
+    throw new Error(
+      `${ctx.role} ${ctx.userId} is not authorized to configure tasks for work item ${workItem.work_item_id}`
+    );
+  }
+}
+
+/** Turns a task name into a stable, unique-within-this-work-item id —
+ * same slugging rule scripts/seed-work-item-tasks.mjs already uses, so
+ * a manually-created task's id looks exactly like a seeded one. */
+function slugTaskId(label: string, existingIds: Set<string>): string {
+  const base =
+    label
+      .toLowerCase()
+      .replace(/&/g, " and ")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "task";
+  if (!existingIds.has(base)) return base;
+  let n = 2;
+  while (existingIds.has(`${base}-${n}`)) n++;
+  return `${base}-${n}`;
+}
+
+/**
+ * Adds one new task to a work item's existing __tasks list — Contractor/
+ * Subcontractor (own department) or Admin only (see
+ * assertCanManageWorkItemTasks). New tasks are always created Active.
+ */
+export async function createWorkItemTask(
+  supabase: SupabaseClient,
+  params: { actorUserId: string; workItemId: string; label: string; conditional?: boolean }
+): Promise<WorkItemTask> {
+  const workItem = await getWorkItemById(supabase, params.workItemId);
+  await assertCanManageWorkItemTasks(supabase, params.actorUserId, workItem);
+
+  const label = params.label.trim();
+  if (!label) {
+    throw new Error("Task name is required.");
+  }
+
+  const existing = parseWorkItemTasks(workItem.additional_fields);
+  const newTask: WorkItemTask = {
+    id: slugTaskId(label, new Set(existing.map((t) => t.id))),
+    label,
+    conditional: params.conditional === true,
+    status: "Active",
+  };
+
+  const merged = { ...(workItem.additional_fields ?? {}), __tasks: [...existing, newTask] };
+  const { error } = await supabase
+    .from("work_items")
+    .update({ additional_fields: merged })
+    .eq("work_item_id", params.workItemId);
+  if (error) {
+    throw new Error(`Failed to create task: ${error.message}`);
+  }
+  return newTask;
+}
+
+/**
+ * Edits an existing task's name/conditional flag, or flips its
+ * Active/Inactive status (see WorkItemTask.status's doc — deactivate
+ * only, never a hard delete: a past submission already recorded this
+ * task's id/label at submit time and must keep displaying correctly).
+ * Same authorization as createWorkItemTask.
+ */
+export async function updateWorkItemTask(
+  supabase: SupabaseClient,
+  params: {
+    actorUserId: string;
+    workItemId: string;
+    taskId: string;
+    label?: string;
+    conditional?: boolean;
+    status?: "Active" | "Inactive";
+  }
+): Promise<void> {
+  const workItem = await getWorkItemById(supabase, params.workItemId);
+  await assertCanManageWorkItemTasks(supabase, params.actorUserId, workItem);
+
+  const tasks = parseWorkItemTasks(workItem.additional_fields);
+  const index = tasks.findIndex((t) => t.id === params.taskId);
+  if (index === -1) {
+    throw new Error(`Task ${params.taskId} not found on work item ${params.workItemId}`);
+  }
+
+  const updated: WorkItemTask = { ...tasks[index] };
+  if (params.label !== undefined) {
+    const label = params.label.trim();
+    if (!label) throw new Error("Task name is required.");
+    updated.label = label;
+  }
+  if (params.conditional !== undefined) updated.conditional = params.conditional;
+  if (params.status !== undefined) updated.status = params.status;
+  tasks[index] = updated;
+
+  const merged = { ...(workItem.additional_fields ?? {}), __tasks: tasks };
+  const { error } = await supabase
+    .from("work_items")
+    .update({ additional_fields: merged })
+    .eq("work_item_id", params.workItemId);
+  if (error) {
+    throw new Error(`Failed to update task: ${error.message}`);
+  }
+}
+
+// ------------------------------------------------------------------
 // Supervisor
 // ------------------------------------------------------------------
 
@@ -2114,7 +2369,7 @@ export async function supervisorApprove(
 ): Promise<void> {
   const { data: validation, error: fetchError } = await supabase
     .from("user_validations")
-    .select("submission_id, original_data, corrected_data")
+    .select("submission_id, original_data, corrected_data, approval_status")
     .eq("user_validations_id", params.validationId)
     .single();
 
@@ -2140,6 +2395,13 @@ export async function supervisorApprove(
     projectId: submission.project_id,
     departmentId: submission.department_id,
   });
+
+  // Checked after authorization so an unauthorized caller learns nothing
+  // about approval state. A rolled-back item has approval_status
+  // ROLLED_BACK, so re-approval after rollback still works.
+  if (validation.approval_status === "APPROVED") {
+    throw new Error("This submission is already approved.");
+  }
 
   const acceptedData =
     (validation.corrected_data as ProgressData | null) ??
@@ -2549,6 +2811,11 @@ export type WorkItemProgressView = {
   progress: number | null;
   estimatedAmount: number | null;
   isCompleted: boolean;
+  /** This work item's own task list (see WorkItemTask), Active and
+   * Inactive both — the Contractor's Work Summary view is where tasks
+   * get configured, so it needs to see (and reactivate) inactive ones
+   * too, unlike the Worker-facing view which shows Active only. */
+  tasks: WorkItemTask[];
 };
 
 /** Every Active work item in a department with its cumulative progress
@@ -2588,6 +2855,7 @@ async function getWorkItemCumulativeList(
         progress: status.progressPercentage,
         estimatedAmount: calculateEstimatedAmount(item.scheduled_value, status.progressPercentage),
         isCompleted: status.isCompleted,
+        tasks: parseWorkItemTasks(item.additional_fields),
       };
     })
   );
@@ -2679,5 +2947,154 @@ export async function getWorkSummary(
     pendingCount,
     rolledBackCount,
     workItems: mtdWorkItems,
+  };
+}
+
+// ------------------------------------------------------------------
+// Executive Summary — one reusable engine for Daily/Weekly/Monthly,
+// built entirely from data already computed above (listSubmissionsForDateRange
+// for period-bounded activity, getWorkItemCumulativeList for true
+// current progress). No AI-generated paragraph and no new table: this
+// is real, computed application data only, structured for a "few
+// seconds to understand" executive read rather than prose. Each period
+// queries its own [from, to] window exactly once, so a submission is
+// never counted in more than one bucket and never double-counted
+// within a bucket (listSubmissionsForDateRange already returns one row
+// per submission, not per work item).
+// ------------------------------------------------------------------
+
+export type ExecutiveSummaryPeriod = "daily" | "weekly" | "monthly";
+
+export type ExecutiveSummaryWorkItem = {
+  workItemCode: string;
+  workItemDescription: string;
+  /** True current cumulative progress (see getWorkItemCurrentStatus) —
+   * not bounded to the selected period; the period's activity is what
+   * updatesSubmitted/workItemsUpdated/approvedCount/pendingCount below
+   * describe. */
+  progress: number | null;
+  statusLabel: "Completed" | "In Progress" | "Not Started";
+};
+
+export type ExecutiveSummary = {
+  projectName: string;
+  departmentName: string;
+  period: ExecutiveSummaryPeriod;
+  periodLabel: string;
+  /** Department-wide average of each Active work item's own current
+   * progress % (unweighted — every work item counts equally regardless
+   * of scheduled value) — null only when no work item has any progress
+   * figure yet (percentage-only legacy items with no approved
+   * submission at all). */
+  overallProgress: number | null;
+  /** Count of individual submissions actually made within the period
+   * (see listSubmissionsForDateRange) — never a count of work items. */
+  updatesSubmitted: number;
+  /** Distinct work items touched by those submissions. */
+  workItemsUpdated: number;
+  approvedCount: number;
+  pendingCount: number;
+  rolledBackCount: number;
+  /** One short, human sentence naming what needs attention (pending
+   * approvals and/or returned work), or null when there is nothing to
+   * flag — never fabricated when both counts are zero. */
+  attentionRequired: string | null;
+  /** Every work item touched this period, or with active progress,
+   * highest-progress first, capped at a readable handful — never every
+   * Active work item in the department regardless of relevance. */
+  topWorkItems: ExecutiveSummaryWorkItem[];
+};
+
+function executiveSummaryPeriodBounds(period: ExecutiveSummaryPeriod): {
+  from: string;
+  to: string;
+  label: string;
+} {
+  const today = todayISODate();
+  if (period === "daily") {
+    return { from: today, to: today, label: "Today" };
+  }
+  if (period === "weekly") {
+    const from = isoDateOffset(-6);
+    return { from, to: today, label: `${formatDateUS(from)} – ${formatDateUS(today)} (last 7 days)` };
+  }
+  const from = currentMonthStartISODate();
+  return { from, to: today, label: `${formatDateUS(from)} – ${formatDateUS(today)} (month to date)` };
+}
+
+/**
+ * The Executive Summary for `callerUserId`'s own department — Foreman/
+ * Supervisor/Contractor, same authorization as the endpoint that serves
+ * this (app/api/workflow/daily-summary/route.ts). Reuses
+ * listSubmissionsForDateRange (period activity) and
+ * getWorkItemCumulativeList (true current per-work-item progress, same
+ * calculation the MTD/Work Summary tab already uses) — no separate/
+ * duplicated calculation for Daily vs Weekly vs Monthly, only a
+ * different date window.
+ */
+export async function getExecutiveSummary(
+  supabase: SupabaseClient,
+  callerUserId: string,
+  period: ExecutiveSummaryPeriod
+): Promise<ExecutiveSummary> {
+  const ctx = await getUserContext(supabase, callerUserId);
+  const bounds = executiveSummaryPeriodBounds(period);
+
+  const [periodItems, cumulativeWorkItems] = await Promise.all([
+    listSubmissionsForDateRange(supabase, ctx.departmentId, { from: bounds.from, to: bounds.to }),
+    getWorkItemCumulativeList(supabase, ctx.departmentId),
+  ]);
+
+  const touchedWorkItemCodes = new Set(periodItems.map((item) => item.workItemCode));
+
+  let approvedCount = 0;
+  let pendingCount = 0;
+  let rolledBackCount = 0;
+  for (const item of periodItems) {
+    if (item.approvalStatus === "APPROVED") approvedCount++;
+    else if (item.approvalStatus === "ROLLED_BACK") rolledBackCount++;
+    else pendingCount++;
+  }
+
+  const progressValues = cumulativeWorkItems
+    .map((w) => w.progress)
+    .filter((p): p is number => p !== null);
+  const overallProgress =
+    progressValues.length > 0
+      ? Math.round((progressValues.reduce((sum, p) => sum + p, 0) / progressValues.length) * 10) / 10
+      : null;
+
+  const attentionParts: string[] = [];
+  if (pendingCount > 0) {
+    attentionParts.push(`${pendingCount} approval${pendingCount === 1 ? "" : "s"} pending`);
+  }
+  if (rolledBackCount > 0) {
+    attentionParts.push(`${rolledBackCount} returned for correction`);
+  }
+
+  const topWorkItems: ExecutiveSummaryWorkItem[] = cumulativeWorkItems
+    .filter((w) => touchedWorkItemCodes.has(w.workItemCode) || (w.progress ?? 0) > 0)
+    .sort((a, b) => (b.progress ?? -1) - (a.progress ?? -1))
+    .slice(0, 8)
+    .map((w) => ({
+      workItemCode: w.workItemCode,
+      workItemDescription: w.workItemDescription,
+      progress: w.progress,
+      statusLabel: w.isCompleted ? "Completed" : (w.progress ?? 0) > 0 ? "In Progress" : "Not Started",
+    }));
+
+  return {
+    projectName: ctx.projectName,
+    departmentName: ctx.departmentName,
+    period,
+    periodLabel: bounds.label,
+    overallProgress,
+    updatesSubmitted: periodItems.length,
+    workItemsUpdated: touchedWorkItemCodes.size,
+    approvedCount,
+    pendingCount,
+    rolledBackCount,
+    attentionRequired: attentionParts.length > 0 ? attentionParts.join("; ") : null,
+    topWorkItems,
   };
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Bell } from "lucide-react";
 import { formatDateTimeUS } from "@/lib/format";
 import { SkeletonRows } from "@/components/ui/Skeleton";
@@ -29,6 +28,12 @@ type NotificationItem = {
   remarks: string | null;
   isRead: boolean;
   createdAt: string;
+  /** Server-resolved navigation target (see lib/notifications.ts
+   * resolveNotificationTarget) — an existing app route built only from
+   * this notification's own ids and the recipient's own role, or null
+   * when there's nowhere useful to send this recipient. */
+  actionHref: string | null;
+  actionLabel: string | null;
 };
 
 const POLL_INTERVAL_MS = 30_000;
@@ -126,7 +131,6 @@ function cardSubline(n: NotificationItem): string | null {
  * introducing a new dependency for one feature.
  */
 export default function NotificationBell({ userId }: { userId: string }) {
-  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -214,30 +218,35 @@ export default function NotificationBell({ userId }: { userId: string }) {
     }
   }
 
-  // Only the Worker-facing outcome types (a review decision reported
-  // back to the submitter) navigate anywhere — those always belong on
-  // /workflow/worker. The reviewer-facing types (SUBMISSION_PENDING_REVIEW/
-  // SUBMISSION_FORWARDED) are shown to Foremen/Supervisors, who also
-  // render this same bell on their own dashboards (app/workflow/foreman,
-  // supervisor pages) — navigating them to /workflow/worker would just
-  // bounce them straight back out (that page redirects non-Workers away).
-  // The item they'd want is already on the queue below on their own
-  // page, so clicking just marks it read.
-  const WORKER_FACING_TYPES = new Set([
-    "PROGRESS_APPROVED",
-    "PROGRESS_APPROVED_WITH_CHANGES",
-    "PROGRESS_CHANGED",
-    "PROGRESS_RETURNED",
-  ]);
-
+  // Navigation target is resolved server-side per recipient role (see
+  // lib/notifications.ts resolveNotificationTarget) — a Worker's own
+  // PROGRESS_*/SUBMISSION_FORWARDED notification points at their Worker
+  // Dashboard pre-selected on the work item; a Foreman/Supervisor's
+  // SUBMISSION_PENDING_REVIEW/SUBMISSION_FORWARDED points at their own
+  // review queue page. `actionHref` is null when there's nowhere useful
+  // to send this recipient, in which case clicking just marks it read.
+  //
+  // Deliberately a full page load (window.location), not router.push:
+  // the destination pages (ForemanTabs/ContractorTabs) keep their active
+  // tab in local component state, and a client-side navigation to a URL
+  // that only differs by query string can leave that pre-existing
+  // component instance (and its state) in place with no guarantee the
+  // navigation is even detected the same way in every Next.js version/
+  // caching configuration. A full navigation removes that uncertainty
+  // entirely: every destination page mounts fresh and reads its initial
+  // tab directly from the URL (see those components' own doc comments),
+  // which is unambiguously correct on every load, including the common
+  // case where the recipient is already sitting on that exact page.
   function handleClick(notification: NotificationItem) {
     if (!notification.isRead) markRead(notification.notificationId);
     setOpen(false);
-    if (notification.workItemId && WORKER_FACING_TYPES.has(notification.type)) {
-      // Destination is resolved from the session server-side (see
-      // app/workflow/worker/page.tsx) — this only ever carries
-      // workItemId, never an identity.
-      router.push(`/workflow/worker?workItemId=${notification.workItemId}`);
+    if (notification.actionHref) {
+      // .assign(), not a `window.location.href =` property write — same
+      // full-navigation behavior (see the comment above), but doesn't
+      // trip the react-hooks/immutability rule, which treats writing to
+      // `location.href` as mutating a variable defined outside this
+      // component.
+      window.location.assign(notification.actionHref);
     }
   }
 
@@ -302,9 +311,14 @@ export default function NotificationBell({ userId }: { userId: string }) {
                         )}
                         <p className="mt-0.5 text-sm font-medium text-foreground">{cardHighlight(n)}</p>
                         {subline && <p className="mt-0.5 text-xs text-foreground-secondary">{subline}</p>}
-                        <p className="mt-1 text-[11px] text-foreground-muted tabular-nums">
-                          {formatDateTimeUS(n.createdAt)}
-                        </p>
+                        <div className="mt-1 flex items-center justify-between gap-2">
+                          <p className="text-[11px] text-foreground-muted tabular-nums">
+                            {formatDateTimeUS(n.createdAt)}
+                          </p>
+                          {n.actionHref && n.actionLabel && (
+                            <span className="text-xs font-medium text-brand">{n.actionLabel} →</span>
+                          )}
+                        </div>
                       </button>
                     </li>
                   );

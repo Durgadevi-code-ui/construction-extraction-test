@@ -11,7 +11,7 @@ const VARIANT_STYLES: Record<BadgeVariant, string> = {
   warning: "bg-warning-soft text-warning border-warning-border",
   error: "bg-error-soft text-error border-error-border",
   info: "bg-info-soft text-info border-info-border",
-  neutral: "bg-gray-50 text-foreground-muted border-line",
+  neutral: "bg-surface-soft text-foreground-muted border-line",
   brand: "bg-brand-soft text-brand border-brand-border",
 };
 

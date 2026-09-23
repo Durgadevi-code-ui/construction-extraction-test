@@ -78,6 +78,7 @@ export default async function ForemanPage() {
     <main className="flex-1 flex flex-col">
       <ForemanTabs
           foremanUserId={userId}
+          userEmail={currentUser.email}
           departmentName={ctx.departmentName}
           kpis={kpis}
           board={
@@ -91,6 +92,11 @@ export default async function ForemanPage() {
                     description: w.description,
                     plannedQuantity: w.plannedQuantity,
                     unitOfMeasure: w.unitOfMeasure,
+                    // Every task, Active and Inactive — this is the
+                    // Subcontractor's own task management view (see
+                    // WorkItemTaskManager), unlike the Worker Dashboard
+                    // which only ever sees Active tasks.
+                    tasks: w.tasks,
                   })),
                   assignments: board.assignments,
                 }

@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { humanizeRole } from "./format";
 import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
+import { CONTRACTOR_ROLES } from "./authContext";
 
 /**
  * Worker progress-review notifications (see
@@ -45,7 +46,60 @@ export type NotificationRecord = {
   remarks: string | null;
   isRead: boolean;
   createdAt: string;
+  /** Where "View Update"/"View Queue" on this notification should
+   * navigate, or null when there is nowhere useful to send this
+   * recipient (see resolveNotificationTarget) — always an existing
+   * in-app route built only from this row's own ids, never a
+   * client-supplied or fabricated URL. Computed per-recipient by the
+   * caller (see app/api/workflow/notifications/route.ts), since the
+   * same notification `type` (e.g. SUBMISSION_FORWARDED) is sent to two
+   * different roles with two different correct destinations. */
+  actionHref: string | null;
+  actionLabel: string | null;
 };
+
+/**
+ * Resolves a notification's navigation target from data ALREADY on the
+ * row (workItemId) plus the resolved recipient's own role — never a
+ * client-supplied value, never an invented URL, only existing app
+ * routes:
+ *   - WORKER recipient (every PROGRESS_* outcome, plus their own copy of
+ *     SUBMISSION_FORWARDED): straight to their own Worker Dashboard,
+ *     pre-selected on the exact work item (same route the dashboard's
+ *     Work Item dropdown already uses).
+ *   - FOREMAN recipient (SUBMISSION_PENDING_REVIEW): their review queue.
+ *   - Contractor/Supervisor recipient (SUBMISSION_FORWARDED to
+ *     CONTRACTOR_ROLES): their review queue.
+ *   - Any other role (e.g. an Admin who somehow holds a notification):
+ *     no target — nothing for them to see on either dashboard.
+ * Authorization is unaffected by this: the destination page itself still
+ * enforces who may view what (see app/workflow/worker|foreman|supervisor
+ * pages) — this only decides which existing, already-authorized page to
+ * send a recipient to for their OWN notification.
+ */
+export function resolveNotificationTarget(
+  recipientRole: string,
+  workItemId: string | null
+): { href: string; label: string } | null {
+  if (recipientRole === "WORKER") {
+    return workItemId ? { href: `/workflow/worker?workItemId=${workItemId}`, label: "View Update" } : null;
+  }
+  // `?tab=` matters even though it's also each page's own default tab:
+  // ForemanTabs/ContractorTabs hold the active tab in local component
+  // state, not the URL, so navigating to the bare page while the
+  // recipient is already sitting on it (their only dashboard — the
+  // common case) would otherwise change nothing visible at all. Both
+  // components read this param on every navigation (not just on
+  // mount) specifically so this link works from anywhere, including a
+  // second click from the same page.
+  if (recipientRole === "FOREMAN") {
+    return { href: "/workflow/foreman?tab=reviews", label: "View Queue" };
+  }
+  if (CONTRACTOR_ROLES.includes(recipientRole)) {
+    return { href: "/workflow/supervisor?tab=today", label: "View Queue" };
+  }
+  return null;
+}
 
 function round1(n: number | null | undefined): number | null {
   if (n === null || n === undefined || !Number.isFinite(n)) return null;
@@ -329,7 +383,8 @@ type NotificationRow = {
 
 const one = <T,>(v: T | T[] | null): T | null => (Array.isArray(v) ? v[0] ?? null : v);
 
-function toNotification(row: NotificationRow): NotificationRecord {
+function toNotification(row: NotificationRow, recipientRole: string): NotificationRecord {
+  const target = resolveNotificationTarget(recipientRole, row.work_item_id);
   return {
     notificationId: row.notification_id,
     type: row.type,
@@ -350,6 +405,8 @@ function toNotification(row: NotificationRow): NotificationRecord {
     remarks: row.remarks,
     isRead: row.is_read,
     createdAt: row.created_at,
+    actionHref: target?.href ?? null,
+    actionLabel: target?.label ?? null,
   };
 }
 
@@ -364,6 +421,14 @@ function toNotification(row: NotificationRow): NotificationRecord {
 export async function listNotificationsForUser(
   supabase: SupabaseClient,
   userId: string,
+  /** The recipient's own role (ADMIN/WORKER/FOREMAN/SUPERVISOR/MANAGER)
+   * — resolved by the caller (see app/api/workflow/notifications/route.ts,
+   * via isAdminUser/getUserContext, the same resolution every other role
+   * check in this app uses) and used only to pick each notification's
+   * navigation target (see resolveNotificationTarget); never affects
+   * which rows are returned — that's still ownership alone
+   * (recipient_user_id = userId). */
+  recipientRole: string,
   options?: { unreadOnly?: boolean; limit?: number }
 ): Promise<NotificationRecord[]> {
   let query = getSupabaseServiceRoleClient()
@@ -377,7 +442,7 @@ export async function listNotificationsForUser(
 
   const { data, error } = await query;
   if (error) throw new Error(`Failed to load notifications: ${error.message}`);
-  return ((data ?? []) as unknown as NotificationRow[]).map(toNotification);
+  return ((data ?? []) as unknown as NotificationRow[]).map((row) => toNotification(row, recipientRole));
 }
 
 export async function getUnreadNotificationCount(

@@ -90,7 +90,7 @@ export default function BootstrapAdminForm({ departments }: Props) {
       >
         {submitting ? "Creating…" : "Create Admin User"}
       </button>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-error">{error}</p>}
     </form>
   );
 }

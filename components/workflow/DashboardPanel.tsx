@@ -5,6 +5,7 @@ import ProgressBar from "@/components/workflow/charts/ProgressBar";
 import ProgressRing from "@/components/workflow/charts/ProgressRing";
 import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
 import { formatDateUS, formatPercent } from "@/lib/format";
+import { progressColorClass } from "@/lib/progressColor";
 import Card from "@/components/ui/Card";
 import Badge, { type BadgeVariant } from "@/components/ui/Badge";
 import { Select } from "@/components/ui/Input";
@@ -227,7 +228,7 @@ export default function DashboardPanel({
 
       {/* Always visible — filtering options must be immediately visible,
           not hidden behind a click-to-expand dropdown. */}
-      <div className="rounded-xl border border-line bg-surface p-4 text-sm shadow-sm">
+      <div className="rounded-lg border border-line bg-surface p-4 text-sm shadow-sm">
         <p className="text-foreground-secondary font-medium mb-2">Filters</p>
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           <div>
@@ -396,7 +397,7 @@ export default function DashboardPanel({
                     <ProgressBar
                       percent={d.overallProgressPercent}
                       tooltip={`${d.departmentName}: ${d.completedCount} completed, ${d.pendingCount} pending, ${d.stuckCount} stuck (of ${d.totalWorkItems})`}
-                      colorClass={d.stuckCount > 0 ? "bg-warning" : "bg-brand"}
+                      colorClass={d.stuckCount > 0 ? "bg-warning" : progressColorClass(d.overallProgressPercent, "bg")}
                     />
                   </div>
                 ))}

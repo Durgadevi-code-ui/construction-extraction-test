@@ -277,7 +277,7 @@ export default function DelegationManager({
 
   return (
     <div className="space-y-4">
-      <div className="bg-brand-soft border border-brand-border rounded-xl p-3 text-xs text-foreground">
+      <div className="bg-brand-soft border border-brand-border rounded-lg p-3 text-xs text-foreground">
         Temporarily hand off selected administrative capabilities to a Contractor — e.g. while
         Admin is on leave. Access is scoped to exactly the project(s), department(s) and
         permission(s) selected below and expires automatically at the end time. Leaving
@@ -290,7 +290,7 @@ export default function DelegationManager({
       ) : (
         <form
           onSubmit={handleSubmit}
-          className="rounded-xl border border-line bg-surface p-5 shadow-sm space-y-3"
+          className="rounded-lg border border-line bg-surface p-5 shadow-sm space-y-3"
         >
           <h2 className="font-semibold text-foreground text-sm">New Delegation</h2>
 

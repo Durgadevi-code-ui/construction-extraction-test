@@ -3,7 +3,7 @@
 import { useState } from "react";
 import HandwritingUpload from "@/components/HandwritingUpload";
 import VoiceUpload from "@/components/VoiceUpload";
-import TextInput from "@/components/TextInput";
+import TextInput, { type ConfirmedWorkItem } from "@/components/TextInput";
 import WorkerSubmitForm from "@/components/workflow/WorkerSubmitForm";
 import {
   applyValidationResult,
@@ -21,6 +21,17 @@ type Props = {
   departmentName: string;
   plannedQuantity: number | null;
   unitOfMeasure: string | null;
+  /** Optional Task context picked for this work item (server re-verifies). */
+  taskId?: string | null;
+  taskLabel?: string | null;
+  /** Whether workItemId is the Worker's own explicit pick in
+   * WorkItemSelector, vs. the system's own auto-suggested default (see
+   * app/workflow/worker/page.tsx isAutoSuggested) — passed through to
+   * every input method so the similar-work-item ambiguity check
+   * (lib/construction.ts resolveWorkItemAmbiguity) only trusts the
+   * current work item silently when the Worker actually chose it.
+   * Defaults to true so any other caller keeps the old behavior. */
+  workItemExplicitlySelected?: boolean;
 };
 
 /**
@@ -45,15 +56,36 @@ export default function DailyWorkUpdate({
   departmentName,
   plannedQuantity,
   unitOfMeasure,
+  taskId = null,
+  taskLabel = null,
+  workItemExplicitlySelected = true,
 }: Props) {
   const [lockState, setLockState] = useState(initialLockState);
   const [reviewedText, setReviewedText] = useState<string | null>(null);
   const [submittedMessage, setSubmittedMessage] = useState<string | null>(null);
   const [showOtherMethods, setShowOtherMethods] = useState(false);
+  // Set only when the worker picked one of several similar work items
+  // (see TextInput) — the submission then targets that item instead of
+  // the dropdown's selection. Server re-verifies assignment on submit.
+  const [confirmedItem, setConfirmedItem] = useState<ConfirmedWorkItem | null>(null);
+  // Set when the worker explicitly resolved a strong task conflict by
+  // choosing "Use <suggested task>" (see TextInput's taskConflict UI) —
+  // the submission then targets THAT task instead of the dropdown's
+  // original selection. Server re-verifies it belongs to the work item
+  // on submit, same as every other task id.
+  const [confirmedTask, setConfirmedTask] = useState<{ id: string; label: string } | null>(null);
 
-  function handleResult(type: InputType, status: "VALID" | "INVALID", normalizedText?: string) {
+  function handleResult(
+    type: InputType,
+    status: "VALID" | "INVALID",
+    normalizedText?: string,
+    confirmed?: ConfirmedWorkItem,
+    effectiveTask?: { id: string; label: string }
+  ) {
     setLockState((prev) => applyValidationResult(prev, type, status));
     if (status === "VALID" && normalizedText) {
+      setConfirmedItem(confirmed ?? null);
+      setConfirmedTask(effectiveTask ?? null);
       setReviewedText(normalizedText);
       setSubmittedMessage(null);
     }
@@ -62,12 +94,26 @@ export default function DailyWorkUpdate({
   function handleReset() {
     setLockState(resetLock());
     setReviewedText(null);
+    setConfirmedItem(null);
+    setConfirmedTask(null);
   }
 
   function handleSubmitted() {
     setSubmittedMessage("Progress submitted to Subcontractor.");
     handleReset();
   }
+
+  // A task belongs to the work item it was picked under; if the worker
+  // confirmed a DIFFERENT similar work item, the task no longer applies.
+  const effectiveTaskId =
+    taskId && (!confirmedItem || confirmedItem.workItemId === workItemId) ? taskId : null;
+
+  // Once the worker resolves a strong task conflict by choosing "Use
+  // <suggested task>" (see TextInput's taskConflict UI), THAT task is
+  // what actually gets submitted — never silently overridden back to
+  // the dropdown's original selection.
+  const submittedTaskId = confirmedTask?.id ?? effectiveTaskId;
+  const submittedTaskLabel = confirmedTask?.label ?? taskLabel;
 
   return (
     <div className="space-y-4">
@@ -76,6 +122,9 @@ export default function DailyWorkUpdate({
         <p className="text-sm text-foreground-secondary">
           Type what you completed today, then review and submit.
         </p>
+        {submittedTaskId && submittedTaskLabel && (
+          <p className="text-xs text-foreground-secondary">Task: {submittedTaskLabel}</p>
+        )}
       </div>
 
       {submittedMessage && (
@@ -96,10 +145,14 @@ export default function DailyWorkUpdate({
       <div className="grid gap-4">
         <TextInput
           locked={isLocked(lockState, "TEXT")}
-          onResult={(status, text) => handleResult("TEXT", status, text)}
+          onResult={(status, text, confirmed, task) => handleResult("TEXT", status, text, confirmed, task)}
+          workItemId={workItemId}
+          taskId={effectiveTaskId}
+          taskLabel={taskLabel}
           workItemCode={workItemCode}
           workItemDescription={workItemDescription}
           departmentName={departmentName}
+          workItemExplicitlySelected={workItemExplicitlySelected}
         />
 
         {!showOtherMethods ? (
@@ -114,17 +167,25 @@ export default function DailyWorkUpdate({
           <>
             <HandwritingUpload
               locked={isLocked(lockState, "HANDWRITTEN")}
-              onResult={(status, text) => handleResult("HANDWRITTEN", status, text)}
+              onResult={(status, text, confirmed, task) => handleResult("HANDWRITTEN", status, text, confirmed, task)}
+              workItemId={workItemId}
+              taskId={effectiveTaskId}
+              taskLabel={taskLabel}
               workItemCode={workItemCode}
               workItemDescription={workItemDescription}
               departmentName={departmentName}
+              workItemExplicitlySelected={workItemExplicitlySelected}
             />
             <VoiceUpload
               locked={isLocked(lockState, "VOICE")}
-              onResult={(status, text) => handleResult("VOICE", status, text)}
+              onResult={(status, text, confirmed, task) => handleResult("VOICE", status, text, confirmed, task)}
+              workItemId={workItemId}
+              taskId={effectiveTaskId}
+              taskLabel={taskLabel}
               workItemCode={workItemCode}
               workItemDescription={workItemDescription}
               departmentName={departmentName}
+              workItemExplicitlySelected={workItemExplicitlySelected}
             />
           </>
         )}
@@ -132,11 +193,12 @@ export default function DailyWorkUpdate({
 
       {reviewedText && (
         <WorkerSubmitForm
-          key={reviewedText}
+          key={`${reviewedText}|${confirmedItem?.workItemId ?? ""}`}
           workerId={workerId}
-          workItemId={workItemId}
-          plannedQuantity={plannedQuantity}
-          unitOfMeasure={unitOfMeasure}
+          workItemId={confirmedItem?.workItemId ?? workItemId}
+          plannedQuantity={confirmedItem ? confirmedItem.plannedQuantity : plannedQuantity}
+          unitOfMeasure={confirmedItem ? confirmedItem.unitOfMeasure : unitOfMeasure}
+          taskId={submittedTaskId}
           initialDescription={reviewedText}
           onSubmitted={handleSubmitted}
         />

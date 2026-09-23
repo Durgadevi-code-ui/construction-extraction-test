@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { TrendingUp, ClipboardList, ListChecks, CheckCircle2, Clock, AlertTriangle } from "lucide-react";
 import { formatPercent, formatQuantity, humanizeApprovalStatus } from "@/lib/format";
 import StatusFlow from "@/components/workflow/StatusFlow";
 import PlannedQuantityEditor from "@/components/workflow/PlannedQuantityEditor";
+import WorkItemTaskManager from "@/components/workflow/WorkItemTaskManager";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -56,6 +58,9 @@ export type WorkItemProgressView = {
   progress: number | null;
   estimatedAmount: number | null;
   isCompleted: boolean;
+  /** This work item's own task list (Active and Inactive) — see
+   * lib/workflow.ts WorkItemTask. */
+  tasks?: { id: string; label: string; conditional: boolean; status: "Active" | "Inactive" }[];
 };
 
 export type WorkSummaryView = {
@@ -192,11 +197,250 @@ function SubmissionActivityCard({
   );
 }
 
-function StatCard({ label, value }: { label: string; value: number | string }) {
+type ExecutiveSummaryPeriod = "daily" | "weekly" | "monthly";
+
+type ExecutiveSummaryData = {
+  projectName: string;
+  departmentName: string;
+  periodLabel: string;
+  overallProgress: number | null;
+  updatesSubmitted: number;
+  workItemsUpdated: number;
+  approvedCount: number;
+  pendingCount: number;
+  rolledBackCount: number;
+  attentionRequired: string | null;
+  topWorkItems: {
+    workItemCode: string;
+    workItemDescription: string;
+    progress: number | null;
+    statusLabel: "Completed" | "In Progress" | "Not Started";
+  }[];
+};
+
+const PERIOD_TABS: { key: ExecutiveSummaryPeriod; label: string }[] = [
+  { key: "daily", label: "Daily" },
+  { key: "weekly", label: "Weekly" },
+  { key: "monthly", label: "Monthly" },
+];
+
+/** One at-a-glance KPI tile — the building block of the executive-
+ * friendly layout (see lib/workflow.ts getExecutiveSummary's doc): a
+ * label + a number, never a paragraph. */
+type KpiTone = "brand" | "success" | "warning";
+
+const KPI_ICON_CHIP: Record<KpiTone, string> = {
+  brand: "bg-brand text-white",
+  success: "bg-success text-white",
+  warning: "bg-warning text-white",
+};
+
+const KPI_CARD_TINT: Record<KpiTone, string> = {
+  brand: "border-line bg-white",
+  success: "border-line bg-white",
+  warning: "border-warning-border bg-warning-soft",
+};
+
+function KpiTile({
+  label,
+  value,
+  icon: Icon,
+  tone = "brand",
+}: {
+  label: string;
+  value: string;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+  tone?: KpiTone;
+}) {
   return (
-    <div className="rounded-lg border border-line bg-white p-3 text-center">
-      <p className="text-xl font-semibold text-foreground tabular-nums">{value}</p>
-      <p className="text-xs text-foreground-secondary">{label}</p>
+    <div className={`flex flex-col gap-2 rounded-lg border p-3 ${KPI_CARD_TINT[tone]}`}>
+      <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${KPI_ICON_CHIP[tone]}`}>
+        <Icon className="h-4 w-4" strokeWidth={2} />
+      </span>
+      <div>
+        <p className="text-lg font-bold tabular-nums text-foreground leading-tight">{value}</p>
+        <p className="text-xs text-foreground-secondary">{label}</p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Executive Summary — structured KPIs computed from real application
+ * data (see lib/workflow.ts getExecutiveSummary via
+ * app/api/workflow/daily-summary/route.ts), NOT an AI-written
+ * paragraph: a CEO/PM should understand project status within a few
+ * seconds. Daily/Weekly/Monthly share one fetch/render path, only the
+ * `period` sent to the API changes.
+ */
+function ExecutiveSummaryCard() {
+  const [period, setPeriod] = useState<ExecutiveSummaryPeriod>("daily");
+  const [summary, setSummary] = useState<ExecutiveSummaryData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // `loading`/`error` reset on a period switch happens in the button's
+  // own click handler below (a user event), not here — the effect only
+  // ever fetches and reports the result. This avoids a synchronous
+  // setState call inside the effect body itself (see
+  // react-hooks/set-state-in-effect) while still showing "Loading…"
+  // immediately on both the initial mount (loading starts true) and
+  // every subsequent tab switch.
+  useEffect(() => {
+    let ignore = false;
+    fetch("/api/workflow/daily-summary", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ period }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "Could not load the summary.");
+        if (!ignore) setSummary(data.summary);
+      })
+      .catch((err) => {
+        if (!ignore) setError(err instanceof Error ? err.message : "Could not load the summary.");
+      })
+      .finally(() => {
+        if (!ignore) setLoading(false);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [period]);
+
+  function selectPeriod(next: ExecutiveSummaryPeriod) {
+    setPeriod(next);
+    setLoading(true);
+    setError(null);
+  }
+
+  return (
+    <Card className="space-y-3 text-sm">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <h2 className="font-semibold text-foreground">Executive Summary</h2>
+        <div className="flex gap-1">
+          {PERIOD_TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => selectPeriod(t.key)}
+              className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors duration-150 ${
+                period === t.key
+                  ? "bg-brand text-white"
+                  : "bg-surface-soft text-foreground-secondary hover:bg-surface-hover"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading && <p className="text-foreground-muted">Loading…</p>}
+      {error && <p className="text-error">{error}</p>}
+
+      {summary && !loading && (
+        <div className="space-y-3">
+          <div>
+            <p className="font-semibold text-foreground">{summary.projectName}</p>
+            <p className="text-xs text-foreground-secondary">
+              {summary.departmentName} · {summary.periodLabel}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+            <KpiTile
+              icon={TrendingUp}
+              label="Progress"
+              value={summary.overallProgress !== null ? `${summary.overallProgress}%` : "—"}
+            />
+            <KpiTile icon={ClipboardList} label="Updates Submitted" value={String(summary.updatesSubmitted)} />
+            <KpiTile icon={ListChecks} label="Work Items Updated" value={String(summary.workItemsUpdated)} />
+            <KpiTile icon={CheckCircle2} label="Approved" value={String(summary.approvedCount)} tone="success" />
+            <KpiTile
+              icon={Clock}
+              label="Pending"
+              value={String(summary.pendingCount)}
+              tone={summary.pendingCount > 0 ? "warning" : "brand"}
+            />
+            <KpiTile
+              icon={AlertTriangle}
+              label="Attention Required"
+              value={summary.attentionRequired ? String(summary.pendingCount + summary.rolledBackCount) : "0"}
+              tone={summary.attentionRequired ? "warning" : "brand"}
+            />
+          </div>
+
+          {summary.attentionRequired && (
+            <p className="rounded-lg border border-warning-border bg-warning-soft px-3 py-2 text-xs text-warning">
+              ⚠ {summary.attentionRequired}
+            </p>
+          )}
+
+          {summary.topWorkItems.length > 0 && (
+            <div className="divide-y divide-line rounded-lg border border-line overflow-hidden">
+              {summary.topWorkItems.map((w) => (
+                <div key={w.workItemCode} className="flex items-center justify-between gap-2 px-3 py-2 bg-white">
+                  <div className="min-w-0">
+                    <p className="font-medium text-foreground truncate">{w.workItemDescription}</p>
+                    <p className="text-xs text-foreground-secondary">{w.workItemCode}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="font-semibold tabular-nums text-foreground">
+                      {w.progress !== null ? `${w.progress}%` : "—"}
+                    </p>
+                    <p
+                      className={`text-xs ${
+                        w.statusLabel === "Completed"
+                          ? "text-success"
+                          : w.statusLabel === "In Progress"
+                            ? "text-info"
+                            : "text-foreground-secondary"
+                      }`}
+                    >
+                      {w.statusLabel}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+type MtdStatTone = "brand" | "success" | "warning" | "error";
+
+const MTD_STAT_ICON_CHIP: Record<MtdStatTone, string> = {
+  brand: "bg-brand text-white",
+  success: "bg-success text-white",
+  warning: "bg-warning text-white",
+  error: "bg-error text-white",
+};
+
+function StatCard({
+  label,
+  value,
+  icon: Icon,
+  tone = "brand",
+}: {
+  label: string;
+  value: number | string;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+  tone?: MtdStatTone;
+}) {
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-line bg-white p-3">
+      <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${MTD_STAT_ICON_CHIP[tone]}`}>
+        <Icon className="h-4 w-4" strokeWidth={2} />
+      </span>
+      <div>
+        <p className="text-lg font-bold text-foreground tabular-nums leading-tight">{value}</p>
+        <p className="text-xs text-foreground-secondary">{label}</p>
+      </div>
     </div>
   );
 }
@@ -237,6 +481,12 @@ export default function SupervisorPanel({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  // Universal Approve: which queue items are ticked, plus a ref-based lock
+  // (state alone can lag a rapid double-click) so repeated clicks can
+  // never fire a second batch while one is in flight.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const bulkLock = useRef(false);
 
   // Completed + Approved work items are display-only history on this
   // dashboard — same queue data, same fields (isCompleted,
@@ -250,6 +500,53 @@ export default function SupervisorPanel({
   const currentItems = queue.filter(
     (item) => !(item.isCompleted && item.approvalStatus === "APPROVED")
   );
+
+  // Only items this panel can actually approve right now — has a
+  // validation row and isn't already APPROVED.
+  const eligibleIds = currentItems
+    .filter((item) => item.validationId && item.approvalStatus !== "APPROVED")
+    .map((item) => item.validationId as string);
+  const selectedEligible = eligibleIds.filter((id) => selectedIds.has(id));
+
+  function toggleSelected(validationId: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(validationId)) next.delete(validationId);
+      else next.add(validationId);
+      return next;
+    });
+  }
+
+  function selectAllEligible() {
+    setSelectedIds(new Set(eligibleIds));
+  }
+
+  // One button, one existing endpoint: each selected item goes through
+  // the same per-item "approve" action (and its server-side permission/
+  // validation checks) an individual Approve click uses.
+  async function approveSelected() {
+    if (bulkLock.current || selectedEligible.length === 0) return;
+    bulkLock.current = true;
+    setBulkBusy(true);
+    setError(null);
+    const failed: string[] = [];
+    for (const id of selectedEligible) {
+      try {
+        await post(id, { action: "approve" });
+      } catch (err) {
+        failed.push(err instanceof Error ? err.message : "Action failed.");
+      }
+    }
+    setSelectedIds(new Set());
+    if (failed.length > 0) {
+      setError(
+        `${selectedEligible.length - failed.length} approved, ${failed.length} failed: ${failed[0]}`
+      );
+    }
+    router.refresh();
+    setBulkBusy(false);
+    bulkLock.current = false;
+  }
 
   async function post(validationId: string, body: Record<string, unknown>) {
     const res = await fetch("/api/workflow/supervisor", {
@@ -286,6 +583,19 @@ export default function SupervisorPanel({
 
     return (
       <Card key={validationId} className="space-y-2 text-sm">
+        {eligibleIds.includes(validationId) && (
+          <label className="flex items-center gap-2 text-xs text-foreground-secondary">
+            <input
+              type="checkbox"
+              checked={selectedIds.has(validationId)}
+              onChange={() => toggleSelected(validationId)}
+              onDoubleClick={selectAllEligible}
+              disabled={bulkBusy}
+              title="Double-click to select all eligible items"
+            />
+            Select for approval
+          </label>
+        )}
         <p>
           <span className="text-foreground-secondary">Worker:</span>{" "}
           <span className="font-medium">{item.workerName}</span>
@@ -373,7 +683,7 @@ export default function SupervisorPanel({
         )}
 
         <div className="flex gap-2 pt-1 flex-wrap">
-          <Button size="sm" onClick={() => run(validationId, "approve")} disabled={busyId === validationId}>
+          <Button size="sm" onClick={() => run(validationId, "approve")} disabled={busyId === validationId || bulkBusy}>
             Approve
           </Button>
           {!isEditing ? (
@@ -466,6 +776,7 @@ export default function SupervisorPanel({
 
       {activeTab === "today" ? (
         <div className="space-y-6">
+          <ExecutiveSummaryCard />
           <div className="grid gap-4 sm:grid-cols-2">
             <SubmissionActivityCard
               title="Today's Progress"
@@ -498,7 +809,40 @@ export default function SupervisorPanel({
             ) : currentItems.length === 0 ? (
               <p className="text-sm text-foreground-muted">No current work items.</p>
             ) : (
-              <div className="space-y-4">{currentItems.map(renderQueueItem)}</div>
+              <div className="space-y-4">
+                {eligibleIds.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-surface-soft px-3 py-2 text-sm">
+                    <label
+                      className="flex items-center gap-2 text-foreground-secondary"
+                      title="Double-click to select all eligible items"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedEligible.length === eligibleIds.length}
+                        onChange={() =>
+                          selectedEligible.length === eligibleIds.length
+                            ? setSelectedIds(new Set())
+                            : selectAllEligible()
+                        }
+                        onDoubleClick={selectAllEligible}
+                        disabled={bulkBusy}
+                      />
+                      Select
+                    </label>
+                    <Button
+                      size="sm"
+                      onClick={approveSelected}
+                      disabled={bulkBusy || selectedEligible.length === 0}
+                    >
+                      {bulkBusy ? "Approving…" : `Approve${selectedEligible.length ? ` (${selectedEligible.length})` : ""}`}
+                    </Button>
+                    <span className="text-xs text-foreground-muted">
+                      Tick items to approve them together. Double-click the checkbox to select all.
+                    </span>
+                  </div>
+                )}
+                {currentItems.map(renderQueueItem)}
+              </div>
             )}
 
             {historyItems.length > 0 && (
@@ -564,6 +908,7 @@ export default function SupervisorPanel({
                       unitOfMeasure={item.unitOfMeasure}
                     />
                   </p>
+                  <WorkItemTaskManager workItemId={item.workItemId} tasks={item.tasks ?? []} />
                   {(item.progress !== null || item.approvedQuantity !== null) && (
                     <p className="flex flex-wrap items-center gap-1.5">
                       <span className="text-foreground-secondary">MTD Progress:</span>{" "}
@@ -597,7 +942,7 @@ export default function SupervisorPanel({
               <p className="text-xs text-foreground-secondary mb-1">
                 Distinct pieces of planned construction work — not a count of submissions.
               </p>
-              <StatCard label="Total Work Items" value={workSummary.totalWorkItems} />
+              <StatCard icon={ListChecks} label="Total Work Items" value={workSummary.totalWorkItems} />
             </div>
 
             <div className="pt-2">
@@ -605,9 +950,9 @@ export default function SupervisorPanel({
                 Workflow Summary
               </h3>
               <div className="grid grid-cols-3 gap-2">
-                <StatCard label="Approved" value={workSummary.approvedCount} />
-                <StatCard label="Pending" value={workSummary.pendingCount} />
-                <StatCard label="Rolled Back" value={workSummary.rolledBackCount} />
+                <StatCard icon={CheckCircle2} label="Approved" value={workSummary.approvedCount} tone="success" />
+                <StatCard icon={Clock} label="Pending" value={workSummary.pendingCount} tone="warning" />
+                <StatCard icon={AlertTriangle} label="Rolled Back" value={workSummary.rolledBackCount} tone="error" />
               </div>
             </div>
           </Card>

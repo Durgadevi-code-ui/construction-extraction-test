@@ -60,29 +60,105 @@ export type Project = {
   projectName: string;
   projectLocation: string | null;
   status: string;
+  /** Admin on/off switch for the Worker Dashboard's Project/Work Item/
+   * Task selection UI (see supabase/migrations/
+   * 00000000000020_project_task_context_toggle.sql) — never gates the
+   * underlying work-item assignment/eligibility/auto-suggestion logic,
+   * which always runs regardless. */
+  taskContextEnabled: boolean;
 };
 
 export async function listProjects(supabase: SupabaseClient): Promise<Project[]> {
-  const { data, error } = await supabase
-    .from("projects")
-    .select(
-      "project_id, company_id, project_code, project_name, project_location, status, companies(name)"
-    )
-    .order("project_name", { ascending: true });
+  const BASE_SELECT = "project_id, company_id, project_code, project_name, project_location, status, companies(name)";
+
+  // task_context_enabled (see supabase/migrations/
+  // 00000000000020_project_task_context_toggle.sql) is queried as a
+  // best-effort extra column: an environment where that migration
+  // hasn't been applied yet falls back to the base select below rather
+  // than breaking Admin Setup's whole Projects tab, defaulting every
+  // project's toggle to `true` (unchanged current behavior).
+  let data: Record<string, unknown>[] | null = null;
+  let error: { message: string } | null = null;
+  let hasToggleColumn = true;
+  {
+    const res = await supabase
+      .from("projects")
+      .select(`${BASE_SELECT}, task_context_enabled`)
+      .order("project_name", { ascending: true });
+    data = res.data;
+    error = res.error;
+  }
+  if (error) {
+    hasToggleColumn = false;
+    const res = await supabase.from("projects").select(BASE_SELECT).order("project_name", { ascending: true });
+    data = res.data;
+    error = res.error;
+  }
 
   if (error) throw new Error(`Failed to load projects: ${error.message}`);
 
   const one = <T,>(v: T | T[] | null): T | null => (Array.isArray(v) ? v[0] ?? null : v);
 
   return (data ?? []).map((p) => ({
-    projectId: p.project_id,
-    companyId: p.company_id,
+    projectId: p.project_id as string,
+    companyId: p.company_id as string,
     companyName: one(p.companies as { name: string } | { name: string }[] | null)?.name ?? "(unknown)",
-    projectCode: p.project_code,
-    projectName: p.project_name,
-    projectLocation: p.project_location,
-    status: p.status,
+    projectCode: p.project_code as string,
+    projectName: p.project_name as string,
+    projectLocation: p.project_location as string | null,
+    status: p.status as string,
+    taskContextEnabled: hasToggleColumn ? p.task_context_enabled !== false : true,
   }));
+}
+
+/**
+ * Flips the Project/Work Item/Task selection UI on/off for one project
+ * (see Project.taskContextEnabled's doc). Same authorization boundary as
+ * updateProject (PROJECT_MANAGEMENT, Admin or delegated) — enforced by
+ * the caller (app/api/admin/projects/route.ts), not here.
+ */
+export async function setProjectTaskContextEnabled(
+  supabase: SupabaseClient,
+  projectId: string,
+  enabled: boolean
+): Promise<void> {
+  const { error } = await supabase
+    .from("projects")
+    .update({ task_context_enabled: enabled })
+    .eq("project_id", projectId);
+  if (error) throw new Error(`Failed to update task context setting: ${error.message}`);
+}
+
+/**
+ * Read-only, best-effort lookup used ONLY by the Worker Dashboard (see
+ * app/workflow/worker/page.tsx) to decide whether to show the Project/
+ * Work Item/Task selection UI — deliberately NOT part of getUserContext
+ * (lib/authContext.ts), which every single page/route in this app calls
+ * on every request. Isolating this one narrow, additive lookup here (and
+ * defaulting to `true`, i.e. "keep showing the UI as it already does
+ * today") means that even if supabase/migrations/
+ * 00000000000020_project_task_context_toggle.sql has not been applied
+ * to a given environment yet, this fails open silently instead of
+ * throwing an error that would otherwise take down every page in the
+ * app that resolves a user's project context. Once the migration is
+ * applied, this starts honoring the real Admin-set value with no other
+ * code change.
+ */
+export async function getProjectTaskContextEnabled(
+  supabase: SupabaseClient,
+  projectId: string
+): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from("projects")
+      .select("task_context_enabled")
+      .eq("project_id", projectId)
+      .maybeSingle();
+    if (error || !data) return true;
+    return (data as { task_context_enabled?: boolean }).task_context_enabled !== false;
+  } catch {
+    return true;
+  }
 }
 
 export async function createProject(

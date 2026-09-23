@@ -9,7 +9,6 @@ import {
   listLiveUpdatesForWorker,
   type LiveUpdateType,
 } from "@/lib/liveUpdates";
-import { assessImageSubmissionRelevance, imageRelevanceRejection } from "@/lib/construction";
 
 /**
  * Review / Live Update evidence — entirely separate endpoint from the
@@ -123,37 +122,11 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // ------------------------------------------------------------
-    // Department relevance — a Live Update photo must show work
-    // belonging to the uploader's OWN department (resolved server-side
-    // from the authenticated session, never trusted from the client —
-    // see assessImageSubmissionRelevance). This is the exact same
-    // shared check + shared rejection messages the main "Today's
-    // Update" photo path uses (app/api/handwritten/route.ts /
-    // imageRelevanceRejection in lib/construction.ts) — not
-    // duplicated. Voice is untouched — this only runs for type ===
-    // "PHOTO". No work item description is passed: a Live Update photo
-    // is informational, not a progress claim against a specific work
-    // item (see createLiveUpdate's own doc), so only the department
-    // match is enforced here. Runs BEFORE storage upload / DB insert /
-    // notification — a rejected photo (wrong department, too unclear,
-    // or the classifier/provider itself failed) never reaches any of
-    // those. A "notChecked" result (no real Worker session) is the
-    // only case that falls through to normal acceptance, exactly as
-    // before.
-    // ------------------------------------------------------------
-    if (type === "PHOTO") {
-      const { relevance, ownDepartmentName } = await assessImageSubmissionRelevance(
-        supabase,
-        buffer,
-        file.type,
-        null
-      );
-      const rejection = imageRelevanceRejection(relevance, ownDepartmentName);
-      if (rejection) {
-        return NextResponse.json({ error: rejection.error }, { status: rejection.status });
-      }
-    }
+    // No department classification runs against a Live Update photo —
+    // department-based image blocking was intentionally removed. Any
+    // relevant construction/site photo is accepted; department/context
+    // validation continues to apply only to Live Update TEXT/VOICE
+    // captions where already implemented, untouched by this change.
 
     const ext = file.type.split("/")[1]?.split(";")[0] || "bin";
     // Prefixed by the uploader's own user id — never another user's, and

@@ -23,22 +23,22 @@ export default function Home() {
     <main className="min-h-screen py-10 px-4">
       <div className="max-w-3xl mx-auto space-y-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">
+          <h1 className="text-2xl font-bold text-foreground">
             Extraction Accuracy Test
           </h1>
-          <p className="text-gray-500 text-sm mt-1">
+          <p className="text-foreground-muted text-sm mt-1">
             Handwritten OCR (GPT-5 Vision) · Voice transcription (AssemblyAI) ·
             Typed text — accuracy testing only.
           </p>
         </div>
 
         {lockState.acceptedType && (
-          <div className="bg-green-50 border border-green-200 text-green-800 rounded-lg p-4 text-sm font-medium">
+          <div className="bg-success-soft border border-success-border text-success rounded-lg p-4 text-sm font-medium">
             One valid input has been accepted. Other input methods are now
             locked.
             <button
               onClick={() => setLockState(resetLock())}
-              className="ml-3 underline text-green-700"
+              className="ml-3 underline text-success"
             >
               Reset
             </button>

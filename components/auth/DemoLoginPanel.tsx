@@ -43,7 +43,7 @@ export default function DemoLoginPanel({ roles }: { roles: DemoRoleOption[] }) {
   if (roles.length === 0) return null;
 
   return (
-    <div className="bg-brand-soft border border-brand-border rounded-xl p-4 space-y-3">
+    <div className="bg-brand-soft border border-brand-border rounded-lg p-4 space-y-3">
       <div>
         <h2 className="text-sm font-semibold text-foreground">Demo Mode</h2>
         <p className="text-xs text-foreground-secondary">

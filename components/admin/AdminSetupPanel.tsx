@@ -15,7 +15,16 @@ import type { Delegation, DelegationPermission } from "@/lib/delegationTypes";
 import DelegationManager, { type ContractorOption } from "./DelegationManager";
 import ExcelImportPanel from "./ExcelImportPanel";
 import { formatPercent, formatQuantity } from "@/lib/format";
-import { Inbox, Building2, FolderKanban, ListChecks, Users as UsersIcon, ShieldCheck, MessageSquare } from "lucide-react";
+import {
+  Inbox,
+  Building2,
+  FolderKanban,
+  ListChecks,
+  Users as UsersIcon,
+  UserCheck,
+  ShieldCheck,
+  MessageSquare,
+} from "lucide-react";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
@@ -27,6 +36,9 @@ import ChatPanel from "@/components/workflow/ChatPanel";
 
 type Props = {
   adminUserId: string;
+  /** The signed-in caller's email — purely for the header's profile
+   * chip (see DashboardShell). */
+  userEmail?: string;
   /** False for a Contractor reached here only via an active
    * administrative delegation (see lib/delegation.ts
    * resolveAdminSetupAccess) — every tab below reads this to hide
@@ -127,6 +139,7 @@ const UOM_DATALIST_ID = "uom-suggestions";
 
 export default function AdminSetupPanel({
   adminUserId,
+  userEmail,
   isRealAdmin,
   delegatedPermissions,
   companies,
@@ -174,6 +187,8 @@ export default function AdminSetupPanel({
       heading={TAB_HEADING[activeTab]}
       subheading={isRealAdmin ? undefined : "Viewing under a temporary administrative delegation."}
       userId={adminUserId}
+      userEmail={userEmail}
+      roleLabel={isRealAdmin ? "Admin" : "Delegated Admin"}
       actions={
         // Relocated from the removed top nav bar (see
         // components/workflow/TopNav.tsx) — same two links, same
@@ -199,7 +214,12 @@ export default function AdminSetupPanel({
         </div>
       }
     >
-      {activeTab === "companies" && <CompaniesTab adminUserId={adminUserId} companies={companies} />}
+      {activeTab === "companies" && (
+        <div className="space-y-4">
+          <SystemOverviewStats companies={companies} projects={projects} users={users} />
+          <CompaniesTab adminUserId={adminUserId} companies={companies} />
+        </div>
+      )}
       {activeTab === "projects" && (
         <ProjectsTab
           adminUserId={adminUserId}
@@ -248,6 +268,46 @@ export default function AdminSetupPanel({
         <ChatPanel projects={projects.map((p) => ({ projectId: p.projectId, projectName: p.projectName }))} />
       )}
     </DashboardShell>
+  );
+}
+
+/** Top-of-dashboard summary row — counts derived from the same
+ * companies/projects/users lists already fetched for their own tabs
+ * (no new query), matching the reference design's "System Overview". */
+function SystemOverviewStats({
+  companies,
+  projects,
+  users,
+}: {
+  companies: Company[];
+  projects: Project[];
+  users: UserAccount[];
+}) {
+  const activeUsers = users.filter((u) => u.status === "Active").length;
+  const stats: { icon: typeof Building2; label: string; value: number; tone: "brand" | "success" }[] = [
+    { icon: Building2, label: "Total Companies", value: companies.length, tone: "brand" },
+    { icon: FolderKanban, label: "Total Projects", value: projects.length, tone: "brand" },
+    { icon: UsersIcon, label: "Total Users", value: users.length, tone: "brand" },
+    { icon: UserCheck, label: "Active Users", value: activeUsers, tone: "success" },
+  ];
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      {stats.map((s) => (
+        <div key={s.label} className="flex flex-col gap-2 rounded-lg border border-line bg-white p-3">
+          <span
+            className={`flex h-8 w-8 items-center justify-center rounded-lg ${
+              s.tone === "success" ? "bg-success text-white" : "bg-brand text-white"
+            }`}
+          >
+            <s.icon className="h-4 w-4" strokeWidth={2} />
+          </span>
+          <div>
+            <p className="text-lg font-bold tabular-nums text-foreground leading-tight">{s.value}</p>
+            <p className="text-xs text-foreground-secondary">{s.label}</p>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -422,6 +482,16 @@ function ProjectRow({ adminUserId, project }: { adminUserId: string; project: Pr
     if (ok) setEditing(false);
   }
 
+  const { submit: submitToggle, submitting: togglingContext } = useSubmit("/api/admin/projects", "PATCH");
+
+  async function handleToggleTaskContext() {
+    await submitToggle({
+      actorUserId: adminUserId,
+      projectId: project.projectId,
+      taskContextEnabled: !project.taskContextEnabled,
+    });
+  }
+
   return (
     <div className="px-4 py-3 border-b border-line last:border-0 text-sm transition-colors duration-150 hover:bg-surface-hover">
       <div className="flex items-start justify-between gap-2">
@@ -440,6 +510,21 @@ function ProjectRow({ adminUserId, project }: { adminUserId: string; project: Pr
           )}
         </div>
       </div>
+
+      <label className="mt-2 flex items-center gap-2 text-xs text-foreground-secondary">
+        <input
+          type="checkbox"
+          checked={project.taskContextEnabled}
+          disabled={togglingContext}
+          onChange={handleToggleTaskContext}
+        />
+        Project / Work Item / Task selection on Worker Dashboard
+        {togglingContext && " (saving…)"}
+      </label>
+      <p className="text-[11px] text-foreground-muted">
+        When off, workers are not shown the selection controls — their assigned work item is
+        still chosen automatically and every input method keeps working.
+      </p>
 
       <ExcelImportPanel projectId={project.projectId} />
 

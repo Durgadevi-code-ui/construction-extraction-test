@@ -1,20 +1,22 @@
 import type { ButtonHTMLAttributes } from "react";
 
 /**
- * Shared button primitive. Primary = amber brand action; secondary =
- * neutral/outline; danger = restrained (white/soft-red, never a solid
- * red block) — destructive actions like Remove/Rollback/Revoke must
- * never visually dominate over the primary action on the same row.
+ * Shared button primitive, per the project's UI Style Guide reference:
+ * primary = solid teal brand action; secondary = white with a teal
+ * border/text (View/Details/Cancel/Back-style actions, never filled);
+ * success/warning/danger = solid, for an explicit approve/pending/
+ * destructive action (Approve, Pending, Delete/Remove/Reject).
  */
-export type ButtonVariant = "primary" | "secondary" | "danger";
+export type ButtonVariant = "primary" | "secondary" | "success" | "warning" | "danger";
 export type ButtonSize = "sm" | "md";
 
 const VARIANT_STYLES: Record<ButtonVariant, string> = {
   primary: "bg-brand text-white hover:bg-brand-hover disabled:bg-brand/50",
   secondary:
-    "bg-white text-foreground-secondary border border-line hover:bg-surface-hover hover:text-foreground disabled:opacity-50",
-  danger:
-    "bg-white text-error border border-error-border hover:bg-error-soft disabled:opacity-50",
+    "bg-white text-brand border border-brand hover:bg-brand-soft disabled:opacity-50",
+  success: "bg-success text-white hover:bg-success/90 disabled:bg-success/50",
+  warning: "bg-warning text-white hover:bg-warning/90 disabled:bg-warning/50",
+  danger: "bg-error text-white hover:bg-error/90 disabled:bg-error/50",
 };
 
 const SIZE_STYLES: Record<ButtonSize, string> = {

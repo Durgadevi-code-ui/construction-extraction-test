@@ -40,7 +40,7 @@ export default function UpdatePasswordForm() {
         />
       </div>
 
-      {state?.error && <p className="text-sm text-red-600">{state.error}</p>}
+      {state?.error && <p className="text-sm text-error">{state.error}</p>}
 
       <button
         type="submit"

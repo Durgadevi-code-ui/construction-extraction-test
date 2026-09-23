@@ -146,6 +146,7 @@ export default async function AdminSetupPage() {
     <main className="flex-1 flex flex-col">
       <AdminSetupPanel
           adminUserId={userId}
+          userEmail={currentUser.email}
           isRealAdmin={access.isRealAdmin}
           delegatedPermissions={Array.from(access.permissions)}
           companies={visibleCompanies}

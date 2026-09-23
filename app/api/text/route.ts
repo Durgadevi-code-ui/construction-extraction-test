@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseClient } from "@/lib/supabase";
 import { normalizeText, validateTypedText } from "@/lib/validation";
-import { resolveConstructionContext, assessWorkerSubmissionRelevance } from "@/lib/construction";
+import {
+  resolveConstructionContext,
+  assessWorkerSubmissionRelevance,
+  resolveWorkItemAmbiguity,
+  textMatchesWorkItem,
+  detectTaskConflict,
+  type WorkItemAmbiguityResult,
+} from "@/lib/construction";
+
+import { getCurrentUser } from "@/lib/session";
+import { resolveTaskForWorker } from "@/lib/workflow";
 
 export const runtime = "nodejs";
 
@@ -35,6 +45,144 @@ export async function POST(request: NextRequest) {
 
     const normalized = normalizeText(originalText);
     const validation = validateTypedText(originalText);
+
+    // Similar work items: if the text can't single out ONE of the
+    // worker's assigned work items, ask instead of guessing — before
+    // anything is saved. Existing relevance rejections still take
+    // precedence (only an otherwise-valid text is ever asked). Both ids
+    // are optional and re-verified server-side against the worker's own
+    // assignments (resolveWorkItemAmbiguity).
+    const selectedWorkItemId: unknown = body?.workItemId;
+    const confirmedWorkItemId: unknown = body?.confirmedWorkItemId;
+    const hasSelectedWorkItem = typeof selectedWorkItemId === "string" && !!selectedWorkItemId;
+    // Whether the Worker actually clicked this work item in
+    // WorkItemSelector, vs. it being the system's own auto-suggested
+    // default (see app/workflow/worker/page.tsx isAutoSuggested) —
+    // defaults to true so any caller that omits it (e.g. the standalone
+    // Extraction Accuracy Test tool) keeps the old "trust it" behavior.
+    const hasExplicitSelection: boolean = body?.workItemExplicitlySelected !== false;
+
+    // Optional Task context: never trusted from the client — it must be
+    // one of the selected work item's own tasks AND that work item must be
+    // one this worker is assigned to (resolveTaskForWorker). The relevance
+    // and similar-work-item checks below still run regardless of task.
+    const taskId: unknown = body?.taskId;
+    // The worker's answer to a PREVIOUS taskConflict response from this
+    // same endpoint (see below) — "keep" = "Continue with <selected
+    // task>", "switch" = "Use <suggested task>" instead. Absent on a
+    // first attempt, exactly like confirmedWorkItemId's role in the
+    // work-item ambiguity flow below; nothing is ever saved until one
+    // of these resolves the conflict (or none existed in the first
+    // place).
+    const taskConflictDecision: unknown = body?.taskConflictDecision;
+    let task: { id: string; label: string } | null = null;
+    if (typeof taskId === "string" && taskId) {
+      const currentUser = await getCurrentUser();
+      if (!currentUser || !hasSelectedWorkItem) {
+        return NextResponse.json({ error: "A task requires a selected work item." }, { status: 400 });
+      }
+      let resolved;
+      try {
+        resolved = await resolveTaskForWorker(supabase, currentUser.userId, selectedWorkItemId as string, taskId);
+      } catch {
+        return NextResponse.json(
+          { error: "That task does not belong to the selected work item." },
+          { status: 400 }
+        );
+      }
+      task = { id: resolved.id, label: resolved.label };
+
+      // The selected Task is a structured claim, same as the selected
+      // Work Item below — never silently stored when the actual typed
+      // text clearly names a DIFFERENT task (see detectTaskConflict).
+      // "keep" (worker explicitly chose to continue with their
+      // original selection) skips this check entirely, same as
+      // resolveWorkItemAmbiguity's confirmedWorkItemId short-circuit.
+      if (taskConflictDecision !== "keep") {
+        const conflict = detectTaskConflict(originalText, task, resolved.allTasks);
+        if (conflict.status === "conflict") {
+          if (taskConflictDecision === "switch") {
+            // conflict.matchedTask already came from resolved.allTasks
+            // (every Active task of THIS work item, already
+            // authorization-checked above) — safe to use directly, no
+            // second resolveTaskForWorker round trip needed.
+            task = { id: conflict.matchedTask.id, label: conflict.matchedTask.label };
+          } else {
+            // Nothing saved yet — ask, exactly like the work-item
+            // ambiguity "ambiguous" response below. The worker picks
+            // Continue/Use suggested/Cancel; Cancel is purely a client-
+            // side no-op (nothing to tell the server).
+            return NextResponse.json({
+              taskConflict: {
+                selectedTask: task,
+                suggestedTask: conflict.matchedTask,
+              },
+            });
+          }
+        }
+      }
+    }
+
+    // Similar work items (only for a text that passed basic validation and
+    // a selected work item): the text either points at ONE assigned item
+    // (identified - possibly not the selected one - with strong evidence),
+    // ties between several (ask, never guess), or the worker has just
+    // confirmed one. Every candidate is re-verified against the worker's
+    // own assignments inside resolveWorkItemAmbiguity.
+    let selectedDescription = selectedWorkItemDescriptionOrNull;
+    let confirmedWorkItem = null;
+    let userConfirmed = false;
+    let resolution: WorkItemAmbiguityResult = { status: "clear" };
+    if (validation.status === "VALID" && hasSelectedWorkItem) {
+      resolution = await resolveWorkItemAmbiguity(
+        supabase,
+        originalText,
+        selectedWorkItemId as string,
+        typeof confirmedWorkItemId === "string" && confirmedWorkItemId ? confirmedWorkItemId : null,
+        hasExplicitSelection
+      );
+      if (resolution.status === "invalidConfirmation") {
+        return NextResponse.json(
+          { error: "That work item is not one of your assigned work items." },
+          { status: 400 }
+        );
+      }
+      if (resolution.status === "confirmed" || resolution.status === "resolved") {
+        confirmedWorkItem = resolution.workItem;
+        selectedDescription = resolution.workItem.description;
+        userConfirmed = resolution.status === "confirmed";
+      }
+    }
+
+    let relevance = await assessWorkerSubmissionRelevance(
+      supabase,
+      originalText,
+      selectedDescription,
+      hasSelectedWorkItem ? (selectedWorkItemId as string) : null
+    );
+
+    // A terse update ("Drywall work completed today.") is "vague" on its
+    // own, but once the worker has explicitly confirmed a specific
+    // assigned item AND the text names that item's subject, it is judged
+    // against that item instead. Wrong-department / mismatch results are
+    // never softened.
+    if (
+      relevance.status === "vague" &&
+      userConfirmed &&
+      confirmedWorkItem &&
+      textMatchesWorkItem(originalText, confirmedWorkItem.description)
+    ) {
+      relevance = { status: "valid" };
+    }
+
+    // Ask when the text ties between similar items - if it is otherwise
+    // valid, or merely terse but about the selected item's own family.
+    if (
+      resolution.status === "ambiguous" &&
+      (relevance.status === "valid" || (relevance.status === "vague" && resolution.selectedInTie))
+    ) {
+      return NextResponse.json({ ambiguity: { candidates: resolution.candidates } });
+    }
 
     // ------------------------------------------------------------
     // 2. Resolve project / department / work item / worker from the
@@ -122,7 +270,9 @@ export async function POST(request: NextRequest) {
       // assessWorkerSubmissionRelevance) — { status: "notChecked" } for
       // any caller with no real Worker session (e.g. the standalone
       // Extraction Accuracy Test tool), same as before.
-      relevance: await assessWorkerSubmissionRelevance(supabase, originalText, selectedWorkItemDescriptionOrNull),
+      relevance,
+      confirmedWorkItem,
+      task,
     });
   } catch (err) {
     console.error("Text pipeline error:", err);

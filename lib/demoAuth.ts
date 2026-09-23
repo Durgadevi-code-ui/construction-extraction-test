@@ -48,26 +48,32 @@ export type DemoRoleKey =
   | "supervisor_concrete"
   | "supervisor_electrical"
   | "supervisor_plumbing"
+  | "supervisor_finishes"
   | "foreman_concrete"
   | "foreman_electrical"
   | "foreman_plumbing"
+  | "foreman_finishes"
   | "worker_electrical"
   | "worker_plumbing"
   | "worker_hvac"
-  | "worker_concrete";
+  | "worker_concrete"
+  | "worker_finishes";
 
 const DEMO_ROLE_ENV_VARS: Record<DemoRoleKey, string> = {
   admin_all: "DEMO_USER_ADMIN_EMAIL",
   supervisor_concrete: "DEMO_USER_SUPERVISOR_CONCRETE_EMAIL",
   supervisor_electrical: "DEMO_USER_SUPERVISOR_ELECTRICAL_EMAIL",
   supervisor_plumbing: "DEMO_USER_SUPERVISOR_PLUMBING_EMAIL",
+  supervisor_finishes: "DEMO_USER_SUPERVISOR_FINISHES_EMAIL",
   foreman_concrete: "DEMO_USER_FOREMAN_CONCRETE_EMAIL",
   foreman_electrical: "DEMO_USER_FOREMAN_ELECTRICAL_EMAIL",
   foreman_plumbing: "DEMO_USER_FOREMAN_PLUMBING_EMAIL",
+  foreman_finishes: "DEMO_USER_FOREMAN_FINISHES_EMAIL",
   worker_electrical: "DEMO_USER_WORKER_ELECTRICAL_EMAIL",
   worker_plumbing: "DEMO_USER_WORKER_PLUMBING_EMAIL",
   worker_hvac: "DEMO_USER_WORKER_HVAC_EMAIL",
   worker_concrete: "DEMO_USER_WORKER_CONCRETE_EMAIL",
+  worker_finishes: "DEMO_USER_WORKER_FINISHES_EMAIL",
 };
 
 /** Descriptive label shown on the button — role AND department
@@ -78,13 +84,16 @@ const DEMO_ROLE_LABELS: Record<DemoRoleKey, string> = {
   supervisor_concrete: "Contractor — Concrete",
   supervisor_electrical: "Contractor — Electrical",
   supervisor_plumbing: "Contractor — Plumbing",
+  supervisor_finishes: "Contractor — Finishes",
   foreman_concrete: "Subcontractor — Concrete",
   foreman_electrical: "Subcontractor — Electrical",
   foreman_plumbing: "Subcontractor — Plumbing",
+  foreman_finishes: "Subcontractor — Finishes",
   worker_electrical: "Worker — Electrical",
   worker_plumbing: "Worker — Plumbing",
   worker_hvac: "Worker — HVAC",
   worker_concrete: "Worker — Concrete",
+  worker_finishes: "Worker — Finishes",
 };
 
 /** Section a slot belongs to, purely for grouping the demo panel's
@@ -99,13 +108,16 @@ const DEMO_ROLE_GROUPS: Record<DemoRoleKey, string> = {
   supervisor_concrete: "Contractor",
   supervisor_electrical: "Contractor",
   supervisor_plumbing: "Contractor",
+  supervisor_finishes: "Contractor",
   foreman_concrete: "Subcontractor",
   foreman_electrical: "Subcontractor",
   foreman_plumbing: "Subcontractor",
+  foreman_finishes: "Subcontractor",
   worker_electrical: "Worker",
   worker_plumbing: "Worker",
   worker_hvac: "Worker",
   worker_concrete: "Worker",
+  worker_finishes: "Worker",
 };
 
 // Fixed presentation order — Admin, then Contractors, then
@@ -116,13 +128,16 @@ const DEMO_ROLE_ORDER: DemoRoleKey[] = [
   "supervisor_concrete",
   "supervisor_electrical",
   "supervisor_plumbing",
+  "supervisor_finishes",
   "foreman_concrete",
   "foreman_electrical",
   "foreman_plumbing",
+  "foreman_finishes",
   "worker_electrical",
   "worker_plumbing",
   "worker_hvac",
   "worker_concrete",
+  "worker_finishes",
 ];
 
 export type DemoRoleOption = { key: DemoRoleKey; label: string; group: string };

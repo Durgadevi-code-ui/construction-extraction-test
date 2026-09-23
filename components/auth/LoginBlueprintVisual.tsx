@@ -18,7 +18,7 @@ export default function LoginBlueprintVisual() {
         className="absolute inset-0 h-full w-full object-cover object-center"
       />
       <div
-        className="absolute inset-0 bg-gradient-to-t from-[#18323F]/75 via-[#18323F]/15 to-[#159A9C]/10"
+        className="absolute inset-0 bg-gradient-to-t from-navy/75 via-navy/15 to-brand/10"
         aria-hidden="true"
       />
     </>

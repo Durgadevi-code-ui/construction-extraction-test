@@ -74,7 +74,7 @@ export default function DelegatedAdminPanel({ contractorUserId, scopes }: Props)
 
   return (
     <div className="space-y-4">
-      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+      <div className="bg-warning-soft border border-warning-border rounded-lg p-3 text-xs text-warning">
         You currently hold temporary delegated Admin capabilities. They apply only to the
         department(s) below and expire automatically — see the delegation banner above for exact
         timing.
@@ -187,7 +187,7 @@ function DelegatedProgressReviewQueue({
         <p className="text-xs text-foreground-secondary mt-0.5">Delegated Admin capability (temporary).</p>
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-error">{error}</p>}
 
       {reviewable.length === 0 ? (
         <p className="text-foreground-muted">No submissions to review.</p>
@@ -272,7 +272,7 @@ function DelegatedProgressReviewQueue({
                   <button
                     onClick={() => run(validationId, "approve")}
                     disabled={busyId === validationId}
-                    className="text-xs px-3 py-1.5 rounded bg-green-600 text-white disabled:opacity-50"
+                    className="text-xs px-3 py-1.5 rounded-lg bg-success hover:bg-success/90 text-white transition-colors duration-150 disabled:opacity-50"
                   >
                     Approve
                   </button>
@@ -336,7 +336,7 @@ function DelegatedProgressReviewQueue({
                     <button
                       onClick={() => run(validationId, "rollback")}
                       disabled={busyId === validationId}
-                      className="text-xs px-3 py-1.5 rounded border border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-50"
+                      className="text-xs px-3 py-1.5 rounded border border-error-border text-error hover:bg-error-soft disabled:opacity-50"
                     >
                       Rollback
                     </button>
@@ -453,7 +453,7 @@ function DelegatedWorkItemManager({
         >
           {submitting ? "Creating…" : "Create Work Item"}
         </button>
-        {error && <p className="col-span-2 text-sm text-red-600">{error}</p>}
+        {error && <p className="col-span-2 text-sm text-error">{error}</p>}
       </form>
 
       <div>
