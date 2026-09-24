@@ -8,7 +8,8 @@ import { formatDateUS, formatPercent } from "@/lib/format";
 import { progressColorClass } from "@/lib/progressColor";
 import Card from "@/components/ui/Card";
 import Badge, { type BadgeVariant } from "@/components/ui/Badge";
-import { Select } from "@/components/ui/Input";
+import Input, { Select } from "@/components/ui/Input";
+import { Search } from "lucide-react";
 
 type DashboardScopeOption = { projectId: string; projectName: string };
 type DashboardDepartmentOption = { departmentId: string; departmentName: string; projectId: string };
@@ -75,7 +76,7 @@ const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
 ];
 
 function money(v: number): string {
-  return `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  return `$${v.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
 }
 
 function statusBadge(item: DashboardWorkItemRow): { label: string; variant: BadgeVariant } {
@@ -107,6 +108,10 @@ export default function DashboardPanel({
   initialData,
   sections = ALL_SECTIONS,
   showLiveUpdatesColumn = false,
+  showSearch = false,
+  animateProgress = false,
+  initialProjectId,
+  lockProjectId,
 }: {
   userId: string;
   initialData: DashboardData;
@@ -125,7 +130,23 @@ export default function DashboardPanel({
    * column) for callers — like the standalone /workflow/dashboard page
    * — that have no per-row action for this. */
   showLiveUpdatesColumn?: boolean;
+  /** Adds a search box to the Work Items section (code, name or
+   * department; case-insensitive, client-side over the rows already
+   * loaded). Off by default — the standalone aggregate Dashboard is
+   * unchanged. */
+  showSearch?: boolean;
+  /** Count the Overall Progress ring up 0 → value on load (display only). */
+  animateProgress?: boolean;
+  /** Pre-select this project in the filters (the caller's current
+   * project context) — the user can still change it. */
+  initialProjectId?: string;
+  /** Pins every fetch to this one project (the page's selected project
+   * context) and hides the Project filter — the panel can then never
+   * show or request another project's data. Department/status/date
+   * filters still work within it. */
+  lockProjectId?: string;
 }) {
+  const [query, setQuery] = useState("");
   // Default scope = the caller's own data, not "All" (see design
   // brief section 8): when the server has already resolved exactly one
   // project/department for this caller (the common case for a
@@ -135,7 +156,12 @@ export default function DashboardPanel({
   // never a fabricated default beyond what the server already scoped
   // this response to.
   const [projectId, setProjectId] = useState(
-    initialData.scopeProjects.length === 1 ? initialData.scopeProjects[0].projectId : ""
+    lockProjectId ??
+    (initialProjectId && initialData.scopeProjects.some((p) => p.projectId === initialProjectId)
+      ? initialProjectId
+      : initialData.scopeProjects.length === 1
+        ? initialData.scopeProjects[0].projectId
+        : "")
   );
   const [departmentId, setDepartmentId] = useState(
     initialData.scopeDepartments.length === 1 ? initialData.scopeDepartments[0].departmentId : ""
@@ -191,7 +217,14 @@ export default function DashboardPanel({
   const remainingCount = data.workItems.length - completedCount;
   const stuckCount = data.workItems.filter((w) => w.isStuck).length;
 
-  const visibleWorkItems = showAllWorkItems ? data.workItems : data.workItems.slice(0, 8);
+  const needle = query.trim().toLowerCase();
+  const matchingWorkItems = needle
+    ? data.workItems.filter((w) =>
+        [w.code, w.description, w.departmentName].some((t) => t.toLowerCase().includes(needle))
+      )
+    : data.workItems;
+  // A search shows every match; otherwise the existing 8-row cap applies.
+  const visibleWorkItems = showAllWorkItems || needle ? matchingWorkItems : matchingWorkItems.slice(0, 8);
 
   return (
     <div className="space-y-6">
@@ -199,7 +232,7 @@ export default function DashboardPanel({
           words, before any number. */}
       <Card className="text-sm flex flex-wrap items-center gap-x-6 gap-y-1">
         <p>
-          <span className="text-foreground-secondary">Project: </span>
+          <span className="text-foreground-secondary">Current Project: </span>
           <span className="font-medium text-foreground">
             {projectId
               ? data.scopeProjects.find((p) => p.projectId === projectId)?.projectName
@@ -231,6 +264,7 @@ export default function DashboardPanel({
       <div className="rounded-lg border border-line bg-surface p-4 text-sm shadow-sm">
         <p className="text-foreground-secondary font-medium mb-2">Filters</p>
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          {!lockProjectId && (
           <div>
             <label className="block text-xs font-medium text-foreground-secondary mb-1">Project</label>
             <Select
@@ -248,6 +282,7 @@ export default function DashboardPanel({
               ))}
             </Select>
           </div>
+          )}
           <div>
             <label className="block text-xs font-medium text-foreground-secondary mb-1">Department</label>
             <Select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
@@ -301,10 +336,10 @@ export default function DashboardPanel({
             {to && <p className="text-[11px] text-foreground-muted mt-0.5">{formatDateUS(to)}</p>}
           </div>
         </div>
-        {(projectId || departmentId || status !== "ALL" || from || to) && (
+        {((projectId && !lockProjectId) || departmentId || status !== "ALL" || from || to) && (
           <button
             onClick={() => {
-              setProjectId("");
+              setProjectId(lockProjectId ?? "");
               setDepartmentId("");
               setStatus("ALL");
               setFrom("");
@@ -326,7 +361,7 @@ export default function DashboardPanel({
           <>
             {/* Level 1 — overall result, the one number that matters most. */}
             <Card className="flex flex-col sm:flex-row items-center gap-6">
-              <ProgressRing percent={data.kpis.overallProgressPercent} label="Overall Progress" size={112} />
+              <ProgressRing percent={data.kpis.overallProgressPercent} label="Overall Progress" size={112} animate={animateProgress} />
               <div className="flex-1 w-full space-y-2">
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-success-soft rounded-lg py-4 text-center">
@@ -411,9 +446,30 @@ export default function DashboardPanel({
             only. Capped at 8 rows by default (Level 4 detail, not the
             first thing a Contractor should have to scroll through). */
         <Card className="mt-6 !p-0 overflow-hidden">
-          <h2 className="font-semibold text-foreground text-sm px-5 py-3 border-b border-line">Work Items</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-b border-line">
+            <h2 className="font-semibold text-foreground text-sm">Work Items</h2>
+            {showSearch && (
+              <div className="relative w-full sm:w-72">
+                <Search
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground-muted"
+                  strokeWidth={2}
+                  aria-hidden
+                />
+                <Input
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search by code or name"
+                  aria-label="Search work items"
+                  className="pl-9 !py-2"
+                />
+              </div>
+            )}
+          </div>
           {data.workItems.length === 0 ? (
             <p className="text-sm text-foreground-muted px-5 py-4">No work items match the current filters.</p>
+          ) : matchingWorkItems.length === 0 ? (
+            <p className="text-sm text-foreground-muted px-5 py-4">No work items match “{query.trim()}”.</p>
           ) : (
             <>
               <div className="overflow-x-auto">
@@ -490,7 +546,7 @@ export default function DashboardPanel({
                   </tbody>
                 </table>
               </div>
-              {data.workItems.length > 8 && (
+              {!needle && data.workItems.length > 8 && (
                 <button
                   onClick={() => setShowAllWorkItems((v) => !v)}
                   className="block px-5 py-3 text-xs text-brand transition-colors duration-150 hover:underline"

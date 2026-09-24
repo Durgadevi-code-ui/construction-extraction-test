@@ -3,6 +3,7 @@ import { getSupabaseClient } from "@/lib/supabase";
 import {
   foremanAddComment,
   foremanForwardSubmission,
+  getUserContext,
   listForemanQueue,
 } from "@/lib/workflow";
 import { getCurrentUser } from "@/lib/session";
@@ -18,6 +19,14 @@ export async function GET() {
   const supabase = getSupabaseClient();
 
   try {
+    // Subcontractor review queue — Subcontractor (FOREMAN) only, same
+    // check as the Subcontractor page guard (app/workflow/foreman/page.tsx);
+    // a Worker gets 403, not their department's pending submissions.
+    const ctx = await getUserContext(supabase, currentUser.userId);
+    if (ctx.role !== "FOREMAN") {
+      return NextResponse.json({ error: "Not authorized." }, { status: 403 });
+    }
+
     const queue = await listForemanQueue(supabase, currentUser.userId);
     return NextResponse.json({ queue });
   } catch (err) {

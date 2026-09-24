@@ -4,7 +4,7 @@ import { getUserContext, isAdminUser, CONTRACTOR_ROLES } from "./authContext";
 import { getActiveDelegationsForUser } from "./delegation";
 import { listDepartments, listProjects, listWorkItems } from "./admin";
 import { getWorkItemCurrentStatus } from "./workflow";
-import { calculateEstimatedAmount } from "./calculations";
+import { calculateEstimatedAmount, calculateOverallProgress } from "./calculations";
 
 /**
  * Cross-department, cross-project aggregate Dashboard — the one view in
@@ -83,12 +83,11 @@ export type DashboardDepartmentSummary = {
   completedCount: number;
   stuckCount: number;
   pendingCount: number;
-  /** Value-weighted (scheduledValue) percent complete across this
-   * department's work items that have both a scheduledValue and a
-   * computed progress — the standard construction-industry way to pool
-   * percent-complete across items with different measurement units (m,
-   * m², LF, ...), since dollars (unlike raw quantity) are poolable.
-   * Null when no item in the department has both, never fabricated. */
+  /** Department Overall Progress — see lib/calculations.ts
+   * calculateOverallProgress (plain average of every Active work item in
+   * the department; an item with no approved progress yet counts as 0%),
+   * the same definition the Contractor brief and Subcontractor dashboard
+   * use. Null only when the department has no Active work items. */
   overallProgressPercent: number | null;
   totalEstimatedAmount?: number | null;
   totalApprovedValue?: number | null;
@@ -203,6 +202,15 @@ async function resolveDashboardScope(
 
   const projectIds = new Set<string>([ctx.projectId]);
   const departmentIds = new Set<string>([ctx.departmentId]);
+  // Every project/department the user holds a reviewer (non-Worker) role
+  // in — a Contractor with roles on several projects sees each of them,
+  // not only their first role's. Still only the user's own Active rows.
+  for (const row of ctx.availableProjects) {
+    if (row.role !== "WORKER") {
+      projectIds.add(row.projectId);
+      departmentIds.add(row.departmentId);
+    }
+  }
 
   // A delegated Contractor also sees the department(s)/project(s)
   // covered by their active delegation(s) — same expansion
@@ -372,8 +380,6 @@ export async function getDashboardData(
       const items = rows.filter((r) => r.departmentId === d.departmentId);
       const project = projectById.get(d.projectId);
 
-      let weightedValueSum = 0;
-      let weightTotal = 0;
       let totalEstimatedAmount = 0;
       let totalApprovedValue = 0;
       let currentMonthApprovedValue = 0;
@@ -386,8 +392,6 @@ export async function getDashboardData(
           totalEstimatedAmount += item.scheduledValue;
           if (item.estimatedAmount !== null && item.estimatedAmount !== undefined) {
             totalApprovedValue += item.estimatedAmount;
-            weightedValueSum += item.estimatedAmount;
-            weightTotal += item.scheduledValue;
           }
 
           if (item.plannedQuantity !== null && item.plannedQuantity > 0) {
@@ -408,7 +412,7 @@ export async function getDashboardData(
         completedCount: items.filter((i) => i.isCompleted).length,
         stuckCount: items.filter((i) => i.isStuck).length,
         pendingCount: items.filter((i) => !i.isCompleted && !i.isStuck).length,
-        overallProgressPercent: weightTotal > 0 ? round1((weightedValueSum / weightTotal) * 100) : null,
+        overallProgressPercent: calculateOverallProgress(items.map((i) => i.progressPercentage)),
         totalEstimatedAmount: scope.includeFinancials && hasFinancialData ? round2(totalEstimatedAmount) : null,
         totalApprovedValue: scope.includeFinancials && hasFinancialData ? round2(totalApprovedValue) : null,
         currentMonthApprovedValue:
@@ -426,19 +430,17 @@ export async function getDashboardData(
     return items.length > 0 && items.every((i) => i.isCompleted);
   }).length;
 
-  const kpiWeighted = rows.reduce(
+  const kpiFinancials = rows.reduce(
     (acc, r) => {
       if (scope.includeFinancials && r.scheduledValue !== null && r.scheduledValue !== undefined) {
         acc.totalEstimatedAmount += r.scheduledValue;
         if (r.estimatedAmount !== null && r.estimatedAmount !== undefined) {
           acc.totalApprovedValue += r.estimatedAmount;
-          acc.weightedSum += r.estimatedAmount;
-          acc.weightTotal += r.scheduledValue;
         }
       }
       return acc;
     },
-    { totalEstimatedAmount: 0, totalApprovedValue: 0, weightedSum: 0, weightTotal: 0 }
+    { totalEstimatedAmount: 0, totalApprovedValue: 0 }
   );
 
   const currentMonthTotal = departmentSummaries.reduce(
@@ -464,15 +466,14 @@ export async function getDashboardData(
       completedProjects,
       totalDepartments: accessibleDepartments.length,
       totalWorkItems: rows.length,
-      overallProgressPercent:
-        kpiWeighted.weightTotal > 0 ? round1((kpiWeighted.weightedSum / kpiWeighted.weightTotal) * 100) : null,
+      overallProgressPercent: calculateOverallProgress(rows.map((r) => r.progressPercentage)),
       totalEstimatedAmount:
-        scope.includeFinancials && anyFinancialData ? round2(kpiWeighted.totalEstimatedAmount) : null,
+        scope.includeFinancials && anyFinancialData ? round2(kpiFinancials.totalEstimatedAmount) : null,
       totalApprovedValue:
-        scope.includeFinancials && anyFinancialData ? round2(kpiWeighted.totalApprovedValue) : null,
+        scope.includeFinancials && anyFinancialData ? round2(kpiFinancials.totalApprovedValue) : null,
       remainingValue:
         scope.includeFinancials && anyFinancialData
-          ? round2(kpiWeighted.totalEstimatedAmount - kpiWeighted.totalApprovedValue)
+          ? round2(kpiFinancials.totalEstimatedAmount - kpiFinancials.totalApprovedValue)
           : null,
       currentMonthApprovedValue: scope.includeFinancials && anyFinancialData ? round2(currentMonthTotal) : null,
       previousMonthApprovedValue: scope.includeFinancials && anyFinancialData ? round2(previousMonthTotal) : null,
@@ -482,9 +483,6 @@ export async function getDashboardData(
   };
 }
 
-function round1(n: number): number {
-  return Math.round(n * 10) / 10;
-}
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }

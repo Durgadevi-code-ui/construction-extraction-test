@@ -15,8 +15,10 @@ const VARIANT_STYLES: Record<ButtonVariant, string> = {
   secondary:
     "bg-white text-brand border border-brand hover:bg-brand-soft disabled:opacity-50",
   success: "bg-success text-white hover:bg-success/90 disabled:bg-success/50",
-  warning: "bg-warning text-white hover:bg-warning/90 disabled:bg-warning/50",
-  danger: "bg-error text-white hover:bg-error/90 disabled:bg-error/50",
+  // Light status tints (not solid blocks) — attention/destructive actions
+  // stay clearly identifiable without heavy, high-contrast color.
+  warning: "bg-warning-soft text-warning border border-warning-border hover:bg-warning-border/40 disabled:opacity-50",
+  danger: "bg-error-soft text-error border border-error-border hover:bg-error-border/40 disabled:opacity-50",
 };
 
 const SIZE_STYLES: Record<ButtonSize, string> = {

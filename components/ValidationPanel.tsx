@@ -221,7 +221,7 @@ export default function ValidationPanel({
             <button
               onClick={onConfirm}
               disabled={busy}
-              className="px-3 py-1.5 bg-success hover:bg-success/90 text-white rounded-lg text-sm font-medium transition-colors duration-150 disabled:opacity-50"
+              className="px-3 py-1.5 bg-brand hover:bg-brand-hover text-white rounded-lg text-sm font-medium transition-colors duration-150 disabled:opacity-50"
             >
               Confirm &amp; Continue
             </button>

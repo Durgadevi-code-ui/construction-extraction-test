@@ -219,7 +219,7 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
                         <td className="px-2.5 py-1.5 text-foreground-secondary">{r.unitOfMeasure ?? "—"}</td>
                         <td className="px-2.5 py-1.5 text-right tabular-nums text-foreground">
                           {r.scheduledValue !== null
-                            ? `$${r.scheduledValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                            ? `$${r.scheduledValue.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
                             : "—"}
                         </td>
                         {hasAdditionalFields && (

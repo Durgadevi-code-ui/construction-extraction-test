@@ -247,7 +247,7 @@ function DelegatedProgressReviewQueue({
                     <span className="text-foreground-secondary">Estimated Amount:</span>{" "}
                     <span className="font-medium">
                       {item.estimatedAmount !== null
-                        ? `$${item.estimatedAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                        ? `$${item.estimatedAmount.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
                         : "—"}
                     </span>
                   </p>
@@ -272,7 +272,7 @@ function DelegatedProgressReviewQueue({
                   <button
                     onClick={() => run(validationId, "approve")}
                     disabled={busyId === validationId}
-                    className="text-xs px-3 py-1.5 rounded-lg bg-success hover:bg-success/90 text-white transition-colors duration-150 disabled:opacity-50"
+                    className="text-xs px-3 py-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white transition-colors duration-150 disabled:opacity-50"
                   >
                     Approve
                   </button>

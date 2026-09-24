@@ -37,7 +37,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export async function getUserContext(
   supabase: SupabaseClient,
   userId: string,
-  options?: { projectId?: string }
+  options?: { projectId?: string; departmentId?: string }
 ) {
   const { data, error } = await supabase
     .from("user_project_roles")
@@ -55,7 +55,17 @@ export async function getUserContext(
     throw new Error(`No active project/department assignment found for user ${userId}: no matching row`);
   }
 
-  const selected = (options?.projectId ? rows.find((row) => row.project_id === options.projectId) : null) ?? rows[0];
+  // departmentId (optional, additive) narrows within the chosen project
+  // for a user holding more than one department there; like projectId it
+  // only ever picks among the caller's OWN Active rows and falls back
+  // (to the project's first row, then the first row overall) rather than
+  // failing — it can never select a row the user doesn't hold.
+  const selected =
+    (options?.projectId && options?.departmentId
+      ? rows.find((row) => row.project_id === options.projectId && row.department_id === options.departmentId)
+      : null) ??
+    (options?.projectId ? rows.find((row) => row.project_id === options.projectId) : null) ??
+    rows[0];
 
   const projects = Array.isArray(selected.projects) ? selected.projects[0] : selected.projects;
   const departments = Array.isArray(selected.departments) ? selected.departments[0] : selected.departments;
@@ -76,6 +86,9 @@ export async function getUserContext(
       const p = Array.isArray(row.projects) ? row.projects[0] : row.projects;
       const d = Array.isArray(row.departments) ? row.departments[0] : row.departments;
       return {
+        /** This row's role — a user can hold different roles on different
+         * projects/departments (additive field). */
+        role: row.role as string,
         projectId: row.project_id as string,
         projectName: (p?.project_name as string) ?? "(unknown project)",
         departmentId: row.department_id as string,

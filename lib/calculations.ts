@@ -162,3 +162,27 @@ export function isWorkItemComplete(
 ): boolean {
   return progressPercentage !== null && progressPercentage !== undefined && progressPercentage >= 100;
 }
+
+/**
+ * Overall Progress % for a set of Active work items — the one shared
+ * definition used by every "Overall Progress" / "Department Progress"
+ * figure (Contractor brief, Subcontractor dashboard, Dashboard
+ * department roll-ups and KPI), so they can never disagree.
+ *
+ * Plain (unweighted) average of each work item's own current progress
+ * (see lib/workflow.ts getWorkItemCurrentStatus — unchanged). A work
+ * item with no approved progress yet (null) counts as 0%, not excluded:
+ * it is part of the scope and has no approved work, so leaving it out
+ * would overstate progress. Rounded to 1 decimal. Null only when there
+ * are no work items at all (nothing to average), never fabricated.
+ */
+export function calculateOverallProgress(
+  progressPercentages: (number | null | undefined)[]
+): number | null {
+  if (progressPercentages.length === 0) return null;
+  const sum = progressPercentages.reduce<number>(
+    (total, p) => total + (p !== null && p !== undefined && Number.isFinite(p) ? p : 0),
+    0
+  );
+  return Math.round((sum / progressPercentages.length) * 10) / 10;
+}

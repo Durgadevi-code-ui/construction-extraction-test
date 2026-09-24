@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getUserContext, isAdminUser, CONTRACTOR_ROLES } from "./authContext";
 import { listDepartments } from "./admin";
 import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
+import { humanizeRole } from "./format";
 import {
   type DelegationPermission,
   DELEGATION_PERMISSIONS,
@@ -72,7 +73,7 @@ export async function createDelegation(
   const delegateCtx = await getUserContext(supabase, params.delegateUserId);
   if (!CONTRACTOR_ROLES.includes(delegateCtx.role)) {
     throw new Error(
-      `Delegation is only supported to a Contractor (SUPERVISOR/MANAGER); ${params.delegateUserId} is ${delegateCtx.role}.`
+      `Delegation is only supported to a Contractor; ${params.delegateUserId} has role ${humanizeRole(delegateCtx.role)}.`
     );
   }
 

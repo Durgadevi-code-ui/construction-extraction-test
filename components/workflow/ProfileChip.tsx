@@ -4,14 +4,25 @@ import { ChevronDown } from "lucide-react";
  * "ramesh.kumar@x.com" -> "Ramesh Kumar") — purely cosmetic, never used
  * for identity/authorization (that's already resolved server-side
  * before this ever renders). Falls back to the email itself when it
- * doesn't look like a plain name. */
+ * doesn't look like a plain name.
+ *
+ * Role-named accounts (e.g. "electrical.foreman@…") would otherwise
+ * surface the legacy internal role codes, so those words are shown in
+ * the business terminology used everywhere else (lib/format.ts
+ * humanizeRole: FOREMAN = Subcontractor, SUPERVISOR = Contractor) —
+ * display text only, the email/account itself is untouched. */
+const LEGACY_ROLE_WORDS: Record<string, string> = {
+  foreman: "Subcontractor",
+  supervisor: "Contractor",
+};
+
 function displayNameFromEmail(email: string): string {
   const local = email.split("@")[0] ?? email;
   const words = local.replace(/[._-]+/g, " ").trim();
   if (!words) return email;
   return words
     .split(" ")
-    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .map((w) => LEGACY_ROLE_WORDS[w.toLowerCase()] ?? (w ? w[0].toUpperCase() + w.slice(1) : w))
     .join(" ");
 }
 
@@ -37,7 +48,7 @@ export default function ProfileChip({ email, roleLabel }: { email: string; roleL
         {initialsFromEmail(email)}
       </span>
       <span className="text-xs leading-tight">
-        <span className="block font-medium text-foreground truncate max-w-[120px]">
+        <span className="block font-medium text-foreground truncate max-w-[180px]">
           {displayNameFromEmail(email)}
         </span>
         <span className="block text-foreground-muted">{roleLabel}</span>

@@ -286,7 +286,7 @@ export default function DelegationManager({
       </div>
 
       {contractors.length === 0 ? (
-        <EmptyPrereq message="No Contractor (SUPERVISOR) users exist yet — create one in the Users tab first." />
+        <EmptyPrereq message="No Contractor users exist yet — create one in the Users tab first." />
       ) : (
         <form
           onSubmit={handleSubmit}

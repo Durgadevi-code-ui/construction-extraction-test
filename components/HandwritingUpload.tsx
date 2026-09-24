@@ -177,7 +177,7 @@ export default function HandwritingUpload({
       <button
         onClick={() => handleExtract()}
         disabled={locked || status === "PROCESSING"}
-        className="px-4 py-2 bg-success hover:bg-success/90 text-white rounded-lg text-sm font-semibold transition-colors duration-150 disabled:opacity-50"
+        className="px-4 py-2 bg-brand hover:bg-brand-hover text-white rounded-lg text-sm font-semibold transition-colors duration-150 disabled:opacity-50"
       >
         {status === "PROCESSING" ? "Extracting…" : "Extract Text"}
       </button>
@@ -203,7 +203,7 @@ export default function HandwritingUpload({
             type="button"
             onClick={() => handleExtract(pickedId)}
             disabled={!pickedId || status === "PROCESSING"}
-            className="px-3 py-1.5 bg-success hover:bg-success/90 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+            className="px-3 py-1.5 bg-brand hover:bg-brand-hover text-white rounded-lg text-sm font-semibold disabled:opacity-50"
           >
             Confirm
           </button>
@@ -220,7 +220,7 @@ export default function HandwritingUpload({
               type="button"
               onClick={() => handleExtract(undefined, "keep")}
               disabled={status === "PROCESSING"}
-              className="px-3 py-1.5 bg-success hover:bg-success/90 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+              className="px-3 py-1.5 bg-brand hover:bg-brand-hover text-white rounded-lg text-sm font-semibold disabled:opacity-50"
             >
               Continue with {taskConflict.selectedTask.label}
             </button>

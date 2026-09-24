@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import HandwritingUpload from "@/components/HandwritingUpload";
 import VoiceUpload from "@/components/VoiceUpload";
 import TextInput, { type ConfirmedWorkItem } from "@/components/TextInput";
 import WorkerSubmitForm from "@/components/workflow/WorkerSubmitForm";
+import LiveUpdateBar from "@/components/workflow/LiveUpdateBar";
 import {
   applyValidationResult,
   initialLockState,
@@ -64,6 +64,9 @@ export default function DailyWorkUpdate({
   const [reviewedText, setReviewedText] = useState<string | null>(null);
   const [submittedMessage, setSubmittedMessage] = useState<string | null>(null);
   const [showOtherMethods, setShowOtherMethods] = useState(false);
+  // Step 2 (after a successful submit): the work item to offer a photo
+  // for — see LiveUpdateBar. Null when no prompt is showing.
+  const [photoPromptFor, setPhotoPromptFor] = useState<string | null>(null);
   // Set only when the worker picked one of several similar work items
   // (see TextInput) — the submission then targets that item instead of
   // the dropdown's selection. Server re-verifies assignment on submit.
@@ -100,6 +103,7 @@ export default function DailyWorkUpdate({
 
   function handleSubmitted() {
     setSubmittedMessage("Progress submitted to Subcontractor.");
+    setPhotoPromptFor(confirmedItem?.workItemId ?? workItemId);
     handleReset();
   }
 
@@ -120,7 +124,7 @@ export default function DailyWorkUpdate({
       <div>
         <h2 className="font-semibold text-foreground">Today&apos;s Update</h2>
         <p className="text-sm text-foreground-secondary">
-          Type what you completed today, then review and submit.
+          Type or record what you completed today, then review and submit.
         </p>
         {submittedTaskId && submittedTaskLabel && (
           <p className="text-xs text-foreground-secondary">Task: {submittedTaskLabel}</p>
@@ -131,6 +135,10 @@ export default function DailyWorkUpdate({
         <p className="text-sm text-success bg-success-soft border border-success-border rounded-lg p-3 font-medium">
           {submittedMessage}
         </p>
+      )}
+
+      {photoPromptFor && (
+        <LiveUpdateBar workItemId={photoPromptFor} onDone={() => setPhotoPromptFor(null)} />
       )}
 
       {lockState.acceptedType && !reviewedText && (
@@ -161,22 +169,12 @@ export default function DailyWorkUpdate({
             onClick={() => setShowOtherMethods(true)}
             className="text-xs text-foreground-muted hover:text-foreground-secondary hover:underline self-start"
           >
-            Other ways to update (photo, voice) ▾
+            Or record a voice update ▾
           </button>
         ) : (
           <>
-            <HandwritingUpload
-              locked={isLocked(lockState, "HANDWRITTEN")}
-              onResult={(status, text, confirmed, task) => handleResult("HANDWRITTEN", status, text, confirmed, task)}
-              workItemId={workItemId}
-              taskId={effectiveTaskId}
-              taskLabel={taskLabel}
-              workItemCode={workItemCode}
-              workItemDescription={workItemDescription}
-              departmentName={departmentName}
-              workItemExplicitlySelected={workItemExplicitlySelected}
-            />
             <VoiceUpload
+              recordOnly
               locked={isLocked(lockState, "VOICE")}
               onResult={(status, text, confirmed, task) => handleResult("VOICE", status, text, confirmed, task)}
               workItemId={workItemId}

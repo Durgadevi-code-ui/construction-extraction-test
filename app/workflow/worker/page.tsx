@@ -11,6 +11,7 @@ import {
 } from "@/lib/workflow";
 import { getProjectTaskContextEnabled } from "@/lib/admin";
 import { requireCurrentUser } from "@/lib/session";
+import { formatUserDisplayName } from "@/lib/format";
 import { logout } from "@/app/login/actions";
 import WorkerTabs from "@/components/workflow/WorkerTabs";
 
@@ -29,17 +30,27 @@ function SignOutLink() {
 export default async function WorkerPage({
   searchParams,
 }: {
-  searchParams: Promise<{ workItemId?: string; projectId?: string }>;
+  searchParams: Promise<{ workItemId?: string; projectId?: string; departmentId?: string }>;
 }) {
   const currentUser = await requireCurrentUser("/workflow/worker");
   const userId = currentUser.userId;
   const supabase = getSupabaseClient();
-  const { workItemId: workItemIdParam, projectId: projectIdParam } = await searchParams;
+  const {
+    workItemId: workItemIdParam,
+    projectId: projectIdParam,
+    departmentId: departmentIdParam,
+  } = await searchParams;
 
   // A worker with more than one active project assignment can switch
   // via ?projectId=; omitted (the common case), this behaves exactly as
   // before — the first (only) active assignment (see getUserContext).
-  const ctx = await getUserContext(supabase, userId, { projectId: projectIdParam });
+  // ?departmentId= (with ?projectId=) picks between two departments the
+  // worker holds in the SAME project; like projectId it only selects
+  // among this worker's own Active roles and falls back safely.
+  const ctx = await getUserContext(supabase, userId, {
+    projectId: projectIdParam,
+    departmentId: departmentIdParam,
+  });
   // A logged-in Contractor/Subcontractor navigating straight to this
   // URL should see their own dashboard, not a Worker's — redirect to
   // the role router rather than rendering data that isn't theirs.
@@ -47,21 +58,32 @@ export default async function WorkerPage({
     redirect("/workflow");
   }
 
+  // One entry per role the worker holds (project + department) — a second
+  // department in the same project is its own entry, labelled with the
+  // department so the two are distinguishable.
+  const projectCounts = new Map<string, number>();
+  const workerRoles = ctx.availableProjects.filter((p) => p.role === "WORKER");
+  // With more than one Worker role, History follows the selected
+  // project/department (server-side filter); a single-role worker keeps
+  // seeing all of their own submissions exactly as before.
+  const historyScope =
+    workerRoles.length > 1 ? { projectId: ctx.projectId, departmentId: ctx.departmentId } : undefined;
+  for (const p of workerRoles) projectCounts.set(p.projectId, (projectCounts.get(p.projectId) ?? 0) + 1);
   const projectSwitcher =
-    ctx.availableProjects.length > 1 ? (
-      <div className="flex items-center gap-1 flex-wrap">
-        {ctx.availableProjects.map((p) => (
+    workerRoles.length > 1 ? (
+      <div className="flex items-center gap-1 flex-wrap min-w-0 max-w-full">
+        {workerRoles.map((p) => (
           <Link
-            key={p.projectId}
-            href={`/workflow/worker?projectId=${p.projectId}`}
+            key={`${p.projectId}:${p.departmentId}`}
+            href={`/workflow/worker?projectId=${p.projectId}&departmentId=${p.departmentId}`}
             className={
-              p.projectId === ctx.projectId
-                ? "rounded-lg bg-brand-soft px-2.5 py-1.5 text-xs font-semibold text-brand whitespace-nowrap"
-                : "rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground-secondary border border-line transition-colors duration-150 hover:bg-surface-hover hover:text-foreground whitespace-nowrap"
+              p.projectId === ctx.projectId && p.departmentId === ctx.departmentId
+                ? "rounded-lg bg-brand-soft px-2.5 py-1.5 text-xs font-semibold text-brand max-w-full truncate"
+                : "rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground-secondary border border-line transition-colors duration-150 hover:bg-surface-hover hover:text-foreground max-w-full truncate"
             }
             title={`${p.projectName} — ${p.departmentName}`}
           >
-            {p.projectName}
+            {(projectCounts.get(p.projectId) ?? 0) > 1 ? `${p.projectName} — ${p.departmentName}` : p.projectName}
           </Link>
         ))}
       </div>
@@ -69,24 +91,64 @@ export default async function WorkerPage({
 
   const workItems = await listAssignedWorkItemsForWorker(supabase, userId, ctx.departmentId);
 
+  // The worker's own users row, for the Profile tab only — same table/
+  // columns getUserDisplayName (lib/workflow.ts) already reads; never
+  // anyone else's record, never role/admin fields beyond what's shown.
+  const { data: userRow } = await supabase
+    .from("users")
+    .select("first_name, last_name, user_mail")
+    .eq("user_id", userId)
+    .maybeSingle();
+  const profile = {
+    displayName: formatUserDisplayName({
+      firstName: userRow?.first_name ?? null,
+      lastName: userRow?.last_name ?? null,
+      email: userRow?.user_mail ?? currentUser.email,
+    }),
+    email: userRow?.user_mail ?? currentUser.email,
+  };
+  // Current Project location — existing projects.project_location (set in
+  // Admin → Projects), display-only; omitted when not set.
+  const { data: projectRow } = await supabase
+    .from("projects")
+    .select("project_location")
+    .eq("project_id", ctx.projectId)
+    .maybeSingle();
+  const projectLocation = (projectRow?.project_location as string | null) ?? null;
+
+  const projects = [...new Map(ctx.availableProjects.map((p) => [p.projectId, p])).values()].map((p) => ({
+    projectId: p.projectId,
+    projectName: p.projectName,
+  }));
+
+  // No Active assignment in this project/department: still the normal
+  // Worker screen (History, Profile, Communication and Sign out stay
+  // reachable — past submissions don't disappear just because an
+  // assignment was removed), with an empty state instead of the
+  // current-work panels.
   if (workItems.length === 0) {
+    const [history, approvedWork] = await Promise.all([
+      getWorkerSubmissionHistory(supabase, userId, historyScope),
+      getWorkerApprovedWork(supabase, userId, historyScope),
+    ]);
     return (
-      <main className="min-h-screen py-10 px-4">
-        <div className="max-w-[1600px] mx-auto space-y-4">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold text-foreground">Worker Dashboard</h1>
-            <div className="flex items-center gap-3">
-              {projectSwitcher}
-              <SignOutLink />
-            </div>
-          </div>
-          <p className="text-sm text-foreground-secondary">
-            No work items are currently assigned to you in {ctx.projectName} — {ctx.departmentName}.
-            {ctx.availableProjects.length > 1
-              ? " Switch to another project above, or ask your Subcontractor/Contractor to assign one here."
-              : " Ask your Subcontractor/Contractor to assign one."}
-          </p>
-        </div>
+      <main className="flex-1 flex flex-col">
+        <WorkerTabs
+          workerId={userId}
+          userEmail={currentUser.email}
+          profile={profile}
+          projectLocation={projectLocation}
+          projectName={ctx.projectName}
+          departmentName={ctx.departmentName}
+          current={null}
+          workItems={[]}
+          history={history}
+          approvedWork={approvedWork}
+          projectSwitcher={projectSwitcher}
+          projects={projects}
+          activeProjectId={ctx.projectId}
+          taskContextEnabled={false}
+        />
       </main>
     );
   }
@@ -135,8 +197,8 @@ export default async function WorkerPage({
 
   const [dashboard, history, approvedWork, taskContextEnabled] = await Promise.all([
     getWorkerDashboard(supabase, userId, activeWorkItemId),
-    getWorkerSubmissionHistory(supabase, userId),
-    getWorkerApprovedWork(supabase, userId),
+    getWorkerSubmissionHistory(supabase, userId, historyScope),
+    getWorkerApprovedWork(supabase, userId, historyScope),
     getProjectTaskContextEnabled(supabase, ctx.projectId),
   ]);
 
@@ -190,41 +252,47 @@ export default async function WorkerPage({
       <WorkerTabs
         workerId={userId}
         userEmail={currentUser.email}
-          projectName={dashboard.projectName}
-          departmentName={dashboard.departmentName}
-          activeWorkItem={dashboard.workItem}
-          submittedQuantity={submittedQuantity}
-          approvedQuantity={dashboard.overallApprovedQuantity}
-          progressPercentage={dashboard.overallProgress}
-          isCompleted={dashboard.isCompleted}
-          todaysProgress={dashboard.todaysProgress}
-          latestSubmissionStatusLabel={dashboard.latestSubmissionStatusLabel}
-          latestSubmissionStatusCode={dashboard.latestSubmissionStatusCode}
-          noEligibleWorkNote={noEligibleWorkNote}
-          workItems={workItems.map((w) => ({
-            workItemId: w.workItemId,
-            code: w.code,
-            description: w.description,
-            isCompleted: w.isCompleted,
-            isEligible: w.isEligible,
-            // Only Active tasks are offered to a Worker — a Contractor/
-            // Subcontractor-deactivated task (see
-            // lib/workflow.ts WorkItemTask.status) is never shown here,
-            // even though the Contractor/Subcontractor management view
-            // still lists it (to allow reactivating).
-            tasks: w.tasks.filter((t) => t.status === "Active"),
-          }))}
-          activeWorkItemId={activeWorkItemId}
-          isAutoSuggested={isAutoSuggested}
-          suggestionNote={suggestionNote}
-          history={history}
-          approvedWork={approvedWork}
-          projects={[...new Map(ctx.availableProjects.map((p) => [p.projectId, p])).values()].map(
-            (p) => ({ projectId: p.projectId, projectName: p.projectName })
-          )}
-          activeProjectId={ctx.projectId}
-          taskContextEnabled={taskContextEnabled}
-        />
+        profile={profile}
+        projectLocation={projectLocation}
+        projectName={dashboard.projectName}
+        departmentName={dashboard.departmentName}
+        current={{
+          activeWorkItem: dashboard.workItem,
+          activeWorkItemId,
+          isAutoSuggested,
+          suggestionNote,
+          noEligibleWorkNote,
+          submittedQuantity,
+          approvedQuantity: dashboard.overallApprovedQuantity,
+          progressPercentage: dashboard.overallProgress,
+          isCompleted: dashboard.isCompleted,
+          todaysProgress: dashboard.todaysProgress,
+          latestSubmissionStatusLabel: dashboard.latestSubmissionStatusLabel,
+          latestSubmissionStatusCode: dashboard.latestSubmissionStatusCode,
+        }}
+        workItems={workItems.map((w) => ({
+          workItemId: w.workItemId,
+          code: w.code,
+          description: w.description,
+          isCompleted: w.isCompleted,
+          isEligible: w.isEligible,
+          // Same cumulative approved progress the rest of the app shows
+          // (WorkItemOption.progressPercentage, getWorkItemCurrentStatus).
+          progressPercentage: w.progressPercentage,
+          // Only Active tasks are offered to a Worker — a Contractor/
+          // Subcontractor-deactivated task (see
+          // lib/workflow.ts WorkItemTask.status) is never shown here,
+          // even though the Contractor/Subcontractor management view
+          // still lists it (to allow reactivating).
+          tasks: w.tasks.filter((t) => t.status === "Active"),
+        }))}
+        history={history}
+        approvedWork={approvedWork}
+        projectSwitcher={projectSwitcher}
+        projects={projects}
+        activeProjectId={ctx.projectId}
+        taskContextEnabled={taskContextEnabled}
+      />
     </main>
   );
 }

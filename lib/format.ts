@@ -77,7 +77,7 @@ export function humanizeRole(role: string): string {
 export function formatQuantity(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
   const rounded = Math.round(value * 100) / 100;
-  return rounded.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return rounded.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
 /**
@@ -93,7 +93,7 @@ export function formatQuantity(value: number | null | undefined): string {
 export function formatPercent(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
   const rounded = Math.round(value * 100) / 100;
-  return `${rounded.toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
+  return `${rounded.toLocaleString("en-US", { maximumFractionDigits: 2 })}%`;
 }
 
 /**

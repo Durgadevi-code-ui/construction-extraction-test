@@ -1,202 +1,122 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Camera, Mic, Square, Image as ImageIcon } from "lucide-react";
+import { Camera } from "lucide-react";
 import CameraCapture from "@/components/CameraCapture";
 
 type Props = {
-  /** Optional — associates the live update with the worker's current
-   * work item for reviewer context. Never required: a live update is
-   * informational, not a progress claim against any specific item. */
-  workItemId?: string | null;
+  /** The work item the worker just submitted progress for — the photo is
+   * attached to it so reviewers see it on that item's review card. */
+  workItemId: string;
+  /** Called when the worker is finished with the prompt (declined, or the
+   * photo was sent). */
+  onDone: () => void;
 };
 
 /**
- * "Review / Live Update" capture — visually its own small highlighted
- * panel (a live-status dot + heading + two action pills), NOT the
- * extraction pipeline (see components/workflow/DailyWorkUpdate.tsx for
- * that; its Handwriting/Voice inputs feed OCR/STT -> validation ->
- * progress submission and are completely untouched by this component).
- * A photo or voice note captured here goes straight to
- * /api/workflow/live-updates, is stored in its own live_updates table
- * (see lib/liveUpdates.ts), and never becomes a progress submission,
- * never enters validation/approval, and never affects progress %.
- *
- * Deliberately compact by requirement: one small card, no upload
- * modal, no dedicated page — visually distinct from "Today's Update"
- * above it, but never competing with it for attention.
+ * Second step of the Worker update (Priority 3 "Live Updates final flow"):
+ * after progress is submitted, ask "Do you want to capture a picture?".
+ *   - Yes → camera capture first (CameraCapture, rear camera); a small
+ *     "choose a photo" link remains only as a fallback for devices where
+ *     the in-page camera is unavailable (on phones the file picker still
+ *     offers the camera via capture="environment").
+ *   - No → continue, nothing sent.
+ * A photo goes to the existing /api/workflow/live-updates endpoint and
+ * live_updates table (lib/liveUpdates.ts) exactly as before — it shows up
+ * on the Subcontractor/Contractor review cards and Work Items, never
+ * becomes a progress submission and never affects progress %.
  */
-export default function LiveUpdateBar({ workItemId }: Props) {
-  const photoInputRef = useRef<HTMLInputElement>(null);
+export default function LiveUpdateBar({ workItemId, onDone }: Props) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [voiceMenuOpen, setVoiceMenuOpen] = useState(false);
-  const [recording, setRecording] = useState(false);
-  const [status, setStatus] = useState<"idle" | "uploading" | "sent" | "error">("idle");
+  const [status, setStatus] = useState<"ask" | "uploading" | "sent" | "error">("ask");
   const [message, setMessage] = useState<string | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
 
-  async function upload(file: File, type: "PHOTO" | "VOICE") {
+  async function upload(file: File) {
     setStatus("uploading");
     setMessage(null);
     try {
       const formData = new FormData();
       formData.append("file", file);
-      formData.append("type", type);
-      if (workItemId) formData.append("workItemId", workItemId);
-
+      formData.append("type", "PHOTO");
+      formData.append("workItemId", workItemId);
       const res = await fetch("/api/workflow/live-updates", { method: "POST", body: formData });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to send live update.");
-
+      if (!res.ok) throw new Error(data.error ?? "Failed to send the photo.");
       setStatus("sent");
-      setMessage(type === "PHOTO" ? "Photo sent to your reviewer." : "Voice note sent to your reviewer.");
-      setTimeout(() => setStatus((prev) => (prev === "sent" ? "idle" : prev)), 4000);
+      setMessage("Photo sent to your reviewer.");
     } catch (err) {
       setStatus("error");
-      setMessage(err instanceof Error ? err.message : "Failed to send live update.");
+      setMessage(err instanceof Error ? err.message : "Failed to send the photo.");
     }
   }
 
-  function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (file) upload(file, "PHOTO");
-  }
-
-  // Same upload path as the normal photo picker above — a photo captured
-  // live goes through the exact same /api/workflow/live-updates
-  // submission, no separate pipeline. Uses a real getUserMedia camera
-  // stream (see components/CameraCapture.tsx), not the HTML `capture`
-  // attribute — that attribute is unreliable on desktop browsers, which
-  // mostly just open the ordinary file picker instead of a live camera.
   function handleCameraCapture(file: File) {
     setCameraOpen(false);
-    upload(file, "PHOTO");
+    upload(file);
   }
 
-  async function startRecording() {
-    setMessage(null);
-    setVoiceMenuOpen(false);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      chunksRef.current = [];
-      recorder.ondataavailable = (e) => chunksRef.current.push(e.data);
-      recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        stream.getTracks().forEach((t) => t.stop());
-        upload(new File([blob], "live-update.webm", { type: "audio/webm" }), "VOICE");
-      };
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      setRecording(true);
-    } catch {
-      setStatus("error");
-      setMessage("Microphone access denied or unavailable.");
-    }
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) upload(file);
   }
-
-  function stopRecording() {
-    mediaRecorderRef.current?.stop();
-    setRecording(false);
-  }
-
-  const busy = status === "uploading";
 
   return (
-    <div className="rounded-lg border border-line bg-surface p-3.5 shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
-        <div className="flex items-center gap-2">
-          <span className="relative flex h-2 w-2" aria-hidden="true">
-            <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full bg-info opacity-60" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-info" />
-          </span>
-          <h3 className="text-sm font-semibold tracking-wide text-foreground">Live Update</h3>
-          <span className="text-xs text-foreground-muted">(optional)</span>
+    <div className="rounded-lg border border-info-border bg-info-soft p-4 text-sm space-y-3">
+      {cameraOpen && <CameraCapture onCapture={handleCameraCapture} onClose={() => setCameraOpen(false)} />}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={handleFileChange}
+        className="hidden"
+      />
+
+      {status === "sent" ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="font-medium text-success">{message}</p>
+          <button type="button" onClick={onDone} className="text-xs font-medium text-brand hover:underline">
+            Done
+          </button>
         </div>
-        {busy && <span className="text-xs text-foreground-muted">Sending…</span>}
-      </div>
-
-      <p className="text-xs text-foreground-secondary mb-3">
-        Share a quick photo or voice note from the field — separate from your typed update above.
-      </p>
-
-      <div className="flex flex-wrap items-center gap-2">
-        {cameraOpen && (
-          <CameraCapture onCapture={handleCameraCapture} onClose={() => setCameraOpen(false)} />
-        )}
-        <button
-          type="button"
-          onClick={() => setCameraOpen(true)}
-          disabled={busy}
-          className="inline-flex items-center gap-2 rounded-lg border border-line bg-surface-soft pl-2 pr-3.5 py-1.5 text-sm font-medium text-foreground-secondary transition-colors duration-150 hover:border-brand-border hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:opacity-50"
-        >
-          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-brand text-white">
-            <Camera className="h-3.5 w-3.5" strokeWidth={2} />
-          </span>
-          Capture
-        </button>
-
-        <input
-          ref={photoInputRef}
-          type="file"
-          accept="image/*"
-          onChange={handlePhotoChange}
-          className="hidden"
-        />
-        <button
-          type="button"
-          onClick={() => photoInputRef.current?.click()}
-          disabled={busy}
-          className="inline-flex items-center gap-2 rounded-lg border border-line bg-surface-soft pl-2 pr-3.5 py-1.5 text-sm font-medium text-foreground-secondary transition-colors duration-150 hover:border-brand-border hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:opacity-50"
-        >
-          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-info text-white">
-            <ImageIcon className="h-3.5 w-3.5" strokeWidth={2} />
-          </span>
-          Upload
-        </button>
-
-        <div className="relative">
+      ) : (
+        <>
+          <p className="font-medium text-foreground">Do you want to capture a picture?</p>
+          <p className="text-xs text-foreground-secondary">
+            Optional — a photo helps your Subcontractor and Contractor review this work.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCameraOpen(true)}
+              disabled={status === "uploading"}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
+            >
+              <Camera className="h-4 w-4" strokeWidth={2} />
+              {status === "uploading" ? "Sending…" : "Yes, capture photo"}
+            </button>
+            <button
+              type="button"
+              onClick={onDone}
+              disabled={status === "uploading"}
+              className="rounded-lg border border-line bg-white px-4 py-2 text-sm font-medium text-foreground-secondary transition-colors duration-150 hover:bg-surface-hover disabled:opacity-50"
+            >
+              No, continue
+            </button>
+          </div>
           <button
             type="button"
-            onClick={() => (recording ? stopRecording() : setVoiceMenuOpen((v) => !v))}
-            disabled={busy}
-            className={`inline-flex items-center gap-2 rounded-lg border pl-2 pr-3.5 py-1.5 text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:opacity-50 ${
-              recording
-                ? "border-error-border bg-error-soft text-error"
-                : "border-line bg-surface-soft text-foreground-secondary hover:border-info-border hover:bg-info-soft"
-            }`}
+            onClick={() => fileInputRef.current?.click()}
+            disabled={status === "uploading"}
+            className="text-xs text-foreground-muted hover:text-foreground-secondary hover:underline disabled:opacity-50"
           >
-            <span
-              className={`flex h-6 w-6 items-center justify-center rounded-md text-white ${
-                recording ? "bg-error" : "bg-info"
-              }`}
-            >
-              {recording ? <Square className="h-3.5 w-3.5" strokeWidth={2} /> : <Mic className="h-3.5 w-3.5" strokeWidth={2} />}
-            </span>
-            {recording ? "Stop" : "Voice"}
+            Camera not working? Choose a photo instead
           </button>
-
-          {voiceMenuOpen && !recording && (
-            <div className="absolute z-10 mt-1 w-36 animate-dropdown-in rounded-lg border border-line bg-surface p-1 shadow-lg">
-              <button
-                type="button"
-                onClick={startRecording}
-                className="block w-full rounded px-2 py-1.5 text-left text-sm text-foreground transition-colors duration-150 hover:bg-surface-hover"
-              >
-                Start recording
-              </button>
-            </div>
-          )}
-        </div>
-
-        {message && status !== "uploading" && (
-          <span className={`text-xs ${status === "error" ? "text-error" : "text-success"}`}>
-            {message}
-          </span>
-        )}
-      </div>
+          {status === "error" && message && <p className="text-xs text-error">{message}</p>}
+        </>
+      )}
     </div>
   );
 }

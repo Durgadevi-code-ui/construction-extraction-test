@@ -57,7 +57,18 @@ export async function createLiveUpdate(
     caption?: string | null;
   }
 ): Promise<void> {
-  const ctx = await getUserContext(supabase, params.workerId);
+  // With a work item, act under the worker's role row for THAT work
+  // item's project/department (a worker may hold several) — the checks
+  // below still require the department to match; without one, the first
+  // role as before.
+  const { data: target } = params.workItemId
+    ? await supabase.from("work_items").select("project_id, department_id").eq("work_item_id", params.workItemId).maybeSingle()
+    : { data: null };
+  const ctx = await getUserContext(
+    supabase,
+    params.workerId,
+    target ? { projectId: target.project_id as string, departmentId: target.department_id as string } : undefined
+  );
   assertRole(ctx.role, ["WORKER"]);
 
   if (params.workItemId) {
@@ -156,9 +167,12 @@ const RECENT_LIMIT = 50;
  */
 export async function listLiveUpdatesForReviewer(
   supabase: SupabaseClient,
-  reviewerUserId: string
+  reviewerUserId: string,
+  /** Optional project context (reviewer with roles on several projects);
+   * selects among the reviewer's own roles only. */
+  projectId?: string
 ): Promise<LiveUpdateRecord[]> {
-  const ctx = await getUserContext(supabase, reviewerUserId);
+  const ctx = await getUserContext(supabase, reviewerUserId, projectId ? { projectId } : undefined);
   if (ctx.role !== "FOREMAN" && !CONTRACTOR_ROLES.includes(ctx.role)) {
     throw new Error(`${ctx.role} ${reviewerUserId} is not authorized to view live updates.`);
   }

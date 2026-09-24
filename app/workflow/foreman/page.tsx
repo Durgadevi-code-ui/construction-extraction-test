@@ -1,14 +1,19 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabase";
 import {
   getCurrentWorkItemRecords,
   getForemanAssignmentBoard,
+  getSubmissionHistory,
+  withApproverNames,
   getUserContext,
+  getUserDisplayName,
   listForemanQueue,
 } from "@/lib/workflow";
 import { requireCurrentUser } from "@/lib/session";
 import ForemanTabs from "@/components/workflow/ForemanTabs";
-import { calculateEstimatedAmount } from "@/lib/calculations";
+import { submissionHistoryBounds } from "@/components/workflow/SubmissionHistoryTable";
+import { calculateEstimatedAmount, calculateOverallProgress } from "@/lib/calculations";
 
 export const dynamic = "force-dynamic";
 
@@ -21,18 +26,60 @@ export const dynamic = "force-dynamic";
  * Pending Reviews they must act on), then Awaiting Contractor Review
  * for visibility only (no action available to them at that stage).
  */
-export default async function ForemanPage() {
+export default async function ForemanPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ projectId?: string }>;
+}) {
   const currentUser = await requireCurrentUser("/workflow/foreman");
   const userId = currentUser.userId;
   const supabase = getSupabaseClient();
 
-  const ctx = await getUserContext(supabase, userId);
+  // Project context (?projectId=), same mechanism as the Contractor page —
+  // only selects among this user's own Active roles, falls back safely.
+  const { projectId: projectIdParam } = await searchParams;
+  const ctx = await getUserContext(supabase, userId, projectIdParam ? { projectId: projectIdParam } : undefined);
   if (ctx.role !== "FOREMAN") {
     redirect("/workflow");
   }
+  const projectId = ctx.projectId;
+  // Current Project location (existing projects.project_location) —
+  // display-only in the header, omitted when not set.
+  const { data: projectRow } = await supabase
+    .from("projects")
+    .select("project_location")
+    .eq("project_id", projectId)
+    .maybeSingle();
+  const projectLocation = (projectRow?.project_location as string | null) ?? null;
+  const ownProjects = [
+    ...new Map(ctx.availableProjects.filter((p) => p.role === "FOREMAN").map((p) => [p.projectId, p])).values(),
+  ];
+  const projectSwitcher =
+    ownProjects.length > 1 ? (
+      <div className="flex items-center gap-1 flex-wrap min-w-0 max-w-full">
+        {ownProjects.map((p) => (
+          <Link
+            key={p.projectId}
+            href={`/workflow/foreman?projectId=${p.projectId}`}
+            className={
+              p.projectId === projectId
+                ? "rounded-lg bg-brand-soft px-2.5 py-1.5 text-xs font-semibold text-brand max-w-full truncate"
+                : "rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground-secondary border border-line transition-colors duration-150 hover:bg-surface-hover hover:text-foreground max-w-full truncate"
+            }
+            title={`${p.projectName} — ${p.departmentName}`}
+          >
+            {p.projectName}
+          </Link>
+        ))}
+      </div>
+    ) : null;
 
-  const queue = await listForemanQueue(supabase, userId);
-  const board = await getForemanAssignmentBoard(supabase, userId).catch(() => null);
+  const queue = await listForemanQueue(supabase, userId, projectId);
+  const board = await getForemanAssignmentBoard(supabase, userId, projectId).catch(() => null);
+  const [history, displayName] = await Promise.all([
+    getSubmissionHistory(supabase, userId, submissionHistoryBounds(), projectId).then((rows) => withApproverNames(supabase, rows)),
+    getUserDisplayName(supabase, userId),
+  ]);
 
   // Same underlying records the Contractor's own queue is built from
   // (getCurrentWorkItemRecords — see lib/workflow.ts listSupervisorQueue),
@@ -57,12 +104,7 @@ export default async function ForemanPage() {
             : 0),
           0
         );
-        const avgProgress =
-          items.length > 0
-            ? Math.round(
-                (items.reduce((sum, w) => sum + (w.progressPercentage ?? 0), 0) / items.length) * 10
-              ) / 10
-            : 0;
+        const avgProgress = calculateOverallProgress(items.map((w) => w.progressPercentage)) ?? 0;
         return {
           totalWorkItems: items.length,
           completedCount,
@@ -76,10 +118,19 @@ export default async function ForemanPage() {
 
   return (
     <main className="flex-1 flex flex-col">
+      {/* key: remount on project switch — see ContractorTabs in the
+          Contractor page (no state carried across projects). */}
       <ForemanTabs
+          key={projectId}
           foremanUserId={userId}
           userEmail={currentUser.email}
+          profile={{ displayName, email: currentUser.email }}
+          projectName={ctx.projectName}
           departmentName={ctx.departmentName}
+          history={history}
+          projectId={projectId}
+          projectLocation={projectLocation}
+          projectSwitcher={projectSwitcher}
           kpis={kpis}
           board={
             board

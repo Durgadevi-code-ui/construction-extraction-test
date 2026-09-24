@@ -27,6 +27,10 @@ type Props = {
   departmentName?: string | null;
   /** See TextInput's prop doc — defaults to true (explicit). */
   workItemExplicitlySelected?: boolean;
+  /** Hide the audio-file picker — the Worker update flow records voice
+   * only (Priority 3: capture-first field workflow). Default false keeps
+   * the file picker for other callers (e.g. the extraction test page). */
+  recordOnly?: boolean;
 };
 
 export default function VoiceUpload({
@@ -39,6 +43,7 @@ export default function VoiceUpload({
   workItemDescription,
   departmentName,
   workItemExplicitlySelected = true,
+  recordOnly = false,
 }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [recording, setRecording] = useState(false);
@@ -183,21 +188,25 @@ export default function VoiceUpload({
         >
           {recording ? "Stop Recording" : "Record"}
         </button>
-        <span className="text-xs text-foreground-muted">or</span>
-        <input
-          ref={inputRef}
-          type="file"
-          accept="audio/*"
-          disabled={locked}
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          className="block text-sm text-foreground-muted"
-        />
+        {!recordOnly && (
+          <>
+            <span className="text-xs text-foreground-muted">or</span>
+            <input
+              ref={inputRef}
+              type="file"
+              accept="audio/*"
+              disabled={locked}
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              className="block text-sm text-foreground-muted"
+            />
+          </>
+        )}
       </div>
       {file && <p className="text-xs text-foreground-secondary">Ready: {file.name}</p>}
       <button
         onClick={() => handleTranscribe()}
         disabled={locked || status === "PROCESSING"}
-        className="px-4 py-2 bg-success hover:bg-success/90 text-white rounded-lg text-sm font-semibold transition-colors duration-150 disabled:opacity-50"
+        className="px-4 py-2 bg-brand hover:bg-brand-hover text-white rounded-lg text-sm font-semibold transition-colors duration-150 disabled:opacity-50"
       >
         {status === "PROCESSING" ? "Transcribing…" : "Convert to Text"}
       </button>
@@ -223,7 +232,7 @@ export default function VoiceUpload({
             type="button"
             onClick={() => handleTranscribe(pickedId)}
             disabled={!pickedId || status === "PROCESSING"}
-            className="px-3 py-1.5 bg-success hover:bg-success/90 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+            className="px-3 py-1.5 bg-brand hover:bg-brand-hover text-white rounded-lg text-sm font-semibold disabled:opacity-50"
           >
             Confirm
           </button>
@@ -240,7 +249,7 @@ export default function VoiceUpload({
               type="button"
               onClick={() => handleTranscribe(undefined, "keep")}
               disabled={status === "PROCESSING"}
-              className="px-3 py-1.5 bg-success hover:bg-success/90 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+              className="px-3 py-1.5 bg-brand hover:bg-brand-hover text-white rounded-lg text-sm font-semibold disabled:opacity-50"
             >
               Continue with {taskConflict.selectedTask.label}
             </button>

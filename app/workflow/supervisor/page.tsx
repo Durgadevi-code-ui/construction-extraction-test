@@ -1,9 +1,13 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabase";
 import {
   getMTDProgress,
+  getSubmissionHistory,
+  withApproverNames,
   getTodaysProgress,
   getUserContext,
+  getUserDisplayName,
   getWorkSummary,
   getYesterdaysProgress,
   listSupervisorQueue,
@@ -17,28 +21,72 @@ import { listDepartments } from "@/lib/admin";
 import { getDashboardData } from "@/lib/dashboard";
 import { requireCurrentUser } from "@/lib/session";
 import ContractorTabs from "@/components/workflow/ContractorTabs";
+import { submissionHistoryBounds } from "@/components/workflow/SubmissionHistoryTable";
 import { type DelegatedDepartmentScope } from "@/components/workflow/DelegatedAdminPanel";
 import { formatDateUS } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-export default async function SupervisorPage() {
+export default async function SupervisorPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ projectId?: string }>;
+}) {
   const currentUser = await requireCurrentUser("/workflow/supervisor");
   const userId = currentUser.userId;
   const supabase = getSupabaseClient();
 
-  const ctx = await getUserContext(supabase, userId);
+  // Project context: ?projectId= for a Contractor holding roles on more
+  // than one project (same mechanism as the Worker page). getUserContext
+  // only ever picks among this user's own Active roles and falls back to
+  // the first — a stale/tampered id can't widen anything. Every section
+  // below is then scoped to ctx.projectId.
+  const { projectId: projectIdParam } = await searchParams;
+  const ctx = await getUserContext(supabase, userId, projectIdParam ? { projectId: projectIdParam } : undefined);
   if (!CONTRACTOR_ROLES.includes(ctx.role)) {
     redirect("/workflow");
   }
+  const projectId = ctx.projectId;
+  // Current Project location (existing projects.project_location) —
+  // display-only in the header, omitted when not set.
+  const { data: projectRow } = await supabase
+    .from("projects")
+    .select("project_location")
+    .eq("project_id", projectId)
+    .maybeSingle();
+  const projectLocation = (projectRow?.project_location as string | null) ?? null;
+  const contractorProjects = [
+    ...new Map(
+      ctx.availableProjects.filter((p) => CONTRACTOR_ROLES.includes(p.role)).map((p) => [p.projectId, p])
+    ).values(),
+  ];
+  const projectSwitcher =
+    contractorProjects.length > 1 ? (
+      <div className="flex items-center gap-1 flex-wrap min-w-0 max-w-full">
+        {contractorProjects.map((p) => (
+          <Link
+            key={p.projectId}
+            href={`/workflow/supervisor?projectId=${p.projectId}`}
+            className={
+              p.projectId === projectId
+                ? "rounded-lg bg-brand-soft px-2.5 py-1.5 text-xs font-semibold text-brand max-w-full truncate"
+                : "rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground-secondary border border-line transition-colors duration-150 hover:bg-surface-hover hover:text-foreground max-w-full truncate"
+            }
+            title={`${p.projectName} — ${p.departmentName}`}
+          >
+            {p.projectName}
+          </Link>
+        ))}
+      </div>
+    ) : null;
 
-  const [queue, todaysProgress, yesterdaysProgress, mtdProgress, workSummary, activeDelegations, dashboardData] =
+  const [queue, todaysProgress, yesterdaysProgress, mtdProgress, workSummary, activeDelegations, dashboardData, history, displayName] =
     await Promise.all([
-      listSupervisorQueue(supabase, userId),
-      getTodaysProgress(supabase, userId),
-      getYesterdaysProgress(supabase, userId),
-      getMTDProgress(supabase, userId),
-      getWorkSummary(supabase, userId),
+      listSupervisorQueue(supabase, userId, projectId),
+      getTodaysProgress(supabase, userId, projectId),
+      getYesterdaysProgress(supabase, userId, projectId),
+      getMTDProgress(supabase, userId, projectId),
+      getWorkSummary(supabase, userId, projectId),
       // Best-effort: delegation is an optional add-on to this dashboard,
       // not something its core Progress/Review functionality depends
       // on — same tolerance as getForemanAssignmentBoard's .catch(() =>
@@ -50,7 +98,10 @@ export default async function SupervisorPage() {
       // page already uses (see lib/dashboard.ts) — reused unchanged for
       // this page's own Department Progress / Work Items tabs (see
       // ContractorTabs), never a second/duplicated calculation.
-      getDashboardData(supabase, userId, { status: "ALL" }),
+      // Scoped to the selected project on the server, not only in the UI.
+      getDashboardData(supabase, userId, { status: "ALL", projectId }),
+      getSubmissionHistory(supabase, userId, submissionHistoryBounds(), projectId).then((rows) => withApproverNames(supabase, rows)),
+      getUserDisplayName(supabase, userId),
     ]);
 
   // Build one DelegatedDepartmentScope per department actually covered
@@ -173,9 +224,20 @@ export default async function SupervisorPage() {
           </div>
         )}
 
+        {/* key: a project switch (client-side Link navigation to this same
+            route) remounts the tabs, so no component keeps the previous
+            project's state (filters, loaded summary). */}
         <ContractorTabs
+          key={projectId}
           userId={userId}
           userEmail={currentUser.email}
+          profile={{ displayName, email: currentUser.email }}
+          projectName={ctx.projectName}
+          departmentName={ctx.departmentName}
+          history={history}
+          projectId={projectId}
+          projectLocation={projectLocation}
+          projectSwitcher={projectSwitcher}
           dashboardData={dashboardData}
           queue={queue}
           todaysProgress={todaysProgress}

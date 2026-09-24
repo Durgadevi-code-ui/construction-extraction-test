@@ -9,8 +9,8 @@ import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import EmptyState from "@/components/ui/EmptyState";
-import { Select } from "@/components/ui/Input";
-import { Users } from "lucide-react";
+import Input, { Select } from "@/components/ui/Input";
+import { Search, Users } from "lucide-react";
 
 export type AssignmentWorkerOption = {
   userId: string;
@@ -77,6 +77,19 @@ export default function AssignmentManager({
   // (see /api/workflow/live-updates listLiveUpdatesForReviewer), so it
   // can never show another department's images.
   const [showLiveUpdates, setShowLiveUpdates] = useState(false);
+  // Search narrows the work item list and the active assignments below
+  // (case-insensitive, client-side over data already loaded) — the Assign
+  // form's pickers always keep the full list.
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const matches = (...texts: (string | null | undefined)[]) =>
+    !needle || texts.some((t) => (t ?? "").toLowerCase().includes(needle));
+  const shownWorkItems = workItems.filter((w) =>
+    matches(w.code, w.description, ...(w.tasks ?? []).map((t) => t.label))
+  );
+  const shownAssignments = assignments.filter((a) =>
+    matches(a.workItemCode, a.workItemDescription, a.workerDisplayName, a.workerEmail)
+  );
 
   async function post(body: Record<string, unknown>) {
     const res = await fetch("/api/workflow/foreman/assignments", {
@@ -138,23 +151,42 @@ export default function AssignmentManager({
       )}
 
       <div>
-        <h2 className="font-semibold text-foreground">Work Item Assignments</h2>
+        <h2 className="font-semibold text-foreground">Work Item Management</h2>
         <p className="text-xs text-foreground-secondary mt-0.5">
-          Assign work items to workers in your department.
+          Assign work items to workers, set planned quantities and manage tasks for your department.
         </p>
       </div>
+
+      <div className="relative max-w-md">
+        <Search
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground-muted"
+          strokeWidth={2}
+          aria-hidden
+        />
+        <Input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by code, name, task or worker"
+          aria-label="Search work items"
+          className="pl-9"
+        />
+      </div>
+      {needle && shownWorkItems.length === 0 && shownAssignments.length === 0 && (
+        <p className="text-foreground-muted">No work items or assignments match “{query.trim()}”.</p>
+      )}
 
       {error && (
         <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
       )}
 
-      {workItems.length > 0 && (
+      {shownWorkItems.length > 0 && (
         <div>
           <h3 className="text-xs font-medium text-foreground-secondary uppercase tracking-wide mb-2">
-            Planned Quantity
+            Work Items — Planned Quantity &amp; Tasks
           </h3>
           <div className="divide-y divide-line">
-            {workItems.map((w) => (
+            {shownWorkItems.map((w) => (
               <div key={w.workItemId} className="py-2 space-y-1">
                 <div className="flex items-center justify-between gap-2">
                   <span>
@@ -211,13 +243,15 @@ export default function AssignmentManager({
 
       <div>
         <h3 className="text-xs font-medium text-foreground-secondary uppercase tracking-wide mb-2">
-          Currently Assigned
+          Active Assignments{needle ? ` (${shownAssignments.length} of ${assignments.length})` : ` (${assignments.length})`}
         </h3>
         {assignments.length === 0 ? (
           <EmptyState icon={Users} title="No work items assigned yet" />
+        ) : shownAssignments.length === 0 ? (
+          <p className="text-foreground-muted">No assignments match “{query.trim()}”.</p>
         ) : (
           <div className="divide-y divide-line">
-            {assignments.map((row) => {
+            {shownAssignments.map((row) => {
               const key = `${row.workItemId}:${row.userId}`;
               return (
                 <div

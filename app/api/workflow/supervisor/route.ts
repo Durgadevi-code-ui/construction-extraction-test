@@ -4,6 +4,7 @@ import {
   getMTDProgress,
   getTodaysProgress,
   getWorkSummary,
+  getUserContext,
   getYesterdaysProgress,
   listSupervisorQueue,
   supervisorAddComment,
@@ -11,6 +12,7 @@ import {
   supervisorEditSubmission,
   supervisorRollback,
 } from "@/lib/workflow";
+import { CONTRACTOR_ROLES } from "@/lib/authContext";
 import { getCurrentUser } from "@/lib/session";
 
 export const runtime = "nodejs";
@@ -25,6 +27,15 @@ export async function GET() {
   const userId = currentUser.userId;
 
   try {
+    // Contractor review queue — Contractor roles only, same check as the
+    // Contractor page guard (app/workflow/supervisor/page.tsx) and the
+    // daily-summary route; a Worker/Subcontractor gets 403, not their
+    // department's queue.
+    const ctx = await getUserContext(supabase, userId);
+    if (!CONTRACTOR_ROLES.includes(ctx.role)) {
+      return NextResponse.json({ error: "Not authorized." }, { status: 403 });
+    }
+
     const [queue, todaysProgress, yesterdaysProgress, mtdProgress, workSummary] =
       await Promise.all([
         listSupervisorQueue(supabase, userId),

@@ -28,6 +28,8 @@ type Props = {
    * either to fall back to the previous plain-heading header. */
   userEmail?: string;
   roleLabel?: string;
+  /** Show a toast for newly arrived notifications (see NotificationBell). */
+  showNotificationToasts?: boolean;
   /** Optional extra controls rendered in the header row, left of the
    * date chip/notification bell — e.g. Admin's "Dashboard"/"Extraction
    * Test (Dev)" links, relocated here now that TopNav no longer renders
@@ -56,6 +58,7 @@ export default function DashboardShell({
   userId,
   userEmail,
   roleLabel,
+  showNotificationToasts = false,
   actions,
   children,
 }: Props) {
@@ -127,7 +130,7 @@ export default function DashboardShell({
             <h2 className="text-xl sm:text-2xl font-extrabold text-foreground tracking-tight">{heading}</h2>
             {subheading && <p className="text-sm text-foreground-secondary">{subheading}</p>}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3 min-w-0 max-w-full">
             {actions}
             <span
               suppressHydrationWarning
@@ -140,7 +143,7 @@ export default function DashboardShell({
                 day: "numeric",
               })}
             </span>
-            {userId && <NotificationBell userId={userId} />}
+            {userId && <NotificationBell userId={userId} showToasts={showNotificationToasts} />}
             {userEmail && roleLabel && <ProfileChip email={userEmail} roleLabel={roleLabel} />}
           </div>
         </div>

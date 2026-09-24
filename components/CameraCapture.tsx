@@ -98,7 +98,7 @@ export default function CameraCapture({ onCapture, onClose }: Props) {
               type="button"
               onClick={handleCapture}
               disabled={!ready}
-              className="px-4 py-1.5 bg-success hover:bg-success/90 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+              className="px-4 py-1.5 bg-brand hover:bg-brand-hover text-white rounded-lg text-sm font-semibold disabled:opacity-50"
             >
               Capture Photo
             </button>

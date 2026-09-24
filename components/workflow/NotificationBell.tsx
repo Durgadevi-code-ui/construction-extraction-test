@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Bell } from "lucide-react";
+import { Bell, X } from "lucide-react";
 import { formatDateTimeUS } from "@/lib/format";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 
@@ -13,13 +13,15 @@ import { SkeletonRows } from "@/components/ui/Skeleton";
 // item) were sitting unused in the response. Widening it to the real
 // shape is what lets the card below show "50% → 45%" directly instead
 // of parsing it back out of a sentence — no backend/API change.
-type NotificationItem = {
+export type NotificationItem = {
   notificationId: string;
   type: string;
   title: string;
   message: string;
   workItemId: string | null;
+  workItemCode?: string | null;
   workItemDescription: string | null;
+  submissionId?: string | null;
   submittedProgress: number | null;
   previousApprovedProgress: number | null;
   newApprovedProgress: number | null;
@@ -45,7 +47,7 @@ const POLL_INTERVAL_MS = 30_000;
  * only as the fallback for a type this switch doesn't recognize, so an
  * unanticipated future type still shows something rather than nothing.
  */
-function cardTitle(type: string): string {
+export function cardTitle(type: string): string {
   switch (type) {
     case "PROGRESS_APPROVED":
     case "PROGRESS_APPROVED_WITH_CHANGES":
@@ -68,7 +70,7 @@ function cardTitle(type: string): string {
  * API already sends for this notification. Never a fabricated value:
  * when the specific field this type needs is missing, falls back to
  * the existing message rather than guessing. */
-function cardHighlight(n: NotificationItem): string {
+export function cardHighlight(n: NotificationItem): string {
   switch (n.type) {
     case "PROGRESS_CHANGED":
       if (n.previousApprovedProgress !== null && n.newApprovedProgress !== null) {
@@ -106,7 +108,7 @@ function cardHighlight(n: NotificationItem): string {
 
 /** Who acted + (for a return) the actual reason, if the API sent one —
  * never invented when remarks is null. */
-function cardSubline(n: NotificationItem): string | null {
+export function cardSubline(n: NotificationItem): string | null {
   if (n.type === "PROGRESS_RETURNED") {
     return n.remarks ? `Reason: ${n.remarks}` : null;
   }
@@ -130,7 +132,38 @@ function cardSubline(n: NotificationItem): string | null {
  * on refresh and should update without a manual reload," without
  * introducing a new dependency for one feature.
  */
-export default function NotificationBell({ userId }: { userId: string }) {
+/** localStorage key holding the notification ids already shown as a
+ * toast for this user in this browser — so a toast appears once per
+ * notification, never again on every poll/refresh. Best-effort: storage
+ * may be unavailable (private mode), in which case nothing is toasted
+ * rather than repeating. */
+const toastedKey = (userId: string) => `notif-toasted:${userId}`;
+function readToasted(userId: string): Set<string> | null {
+  try {
+    return new Set(JSON.parse(window.localStorage.getItem(toastedKey(userId)) ?? "[]") as string[]);
+  } catch {
+    return null;
+  }
+}
+function writeToasted(userId: string, ids: Set<string>) {
+  try {
+    window.localStorage.setItem(toastedKey(userId), JSON.stringify([...ids].slice(-200)));
+  } catch {
+    // storage unavailable — ignore
+  }
+}
+
+export default function NotificationBell({
+  userId,
+  showToasts = false,
+}: {
+  userId: string;
+  /** Show a small toast for newly arrived unread notifications (once
+   * each), with an Open button to the related record. Opt-in, so every
+   * existing caller keeps its current behavior. */
+  showToasts?: boolean;
+}) {
+  const [toast, setToast] = useState<{ item: NotificationItem; more: number } | null>(null);
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -156,6 +189,17 @@ export default function NotificationBell({ userId }: { userId: string }) {
         if (ignore) return;
         setNotifications(data.notifications ?? []);
         setUnreadCount(data.unreadCount ?? 0);
+        if (showToasts) {
+          const seen = readToasted(userId);
+          const fresh = ((data.notifications ?? []) as NotificationItem[]).filter(
+            (n) => !n.isRead && seen !== null && !seen.has(n.notificationId)
+          );
+          if (fresh.length > 0 && seen !== null) {
+            setToast({ item: fresh[0], more: fresh.length - 1 });
+            for (const n of fresh) seen.add(n.notificationId);
+            writeToasted(userId, seen);
+          }
+        }
         setError(null);
       } catch (err) {
         if (!ignore) {
@@ -172,7 +216,14 @@ export default function NotificationBell({ userId }: { userId: string }) {
       ignore = true;
       clearInterval(interval);
     };
-  }, [userId]);
+  }, [userId, showToasts]);
+
+  // Auto-dismiss a shown toast after a few seconds — never lingers.
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 10_000);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -252,6 +303,49 @@ export default function NotificationBell({ userId }: { userId: string }) {
 
   return (
     <div className="relative" ref={containerRef}>
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed right-4 top-4 z-50 w-80 max-w-[calc(100vw-2rem)] animate-dropdown-in rounded-lg border border-warning-border bg-white p-3 shadow-lg"
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-warning">Needs your attention</p>
+              <p className="text-sm font-semibold text-foreground">{cardTitle(toast.item.type)}</p>
+              {toast.item.workItemDescription && (
+                <p className="text-xs text-foreground-secondary truncate">{toast.item.workItemDescription}</p>
+              )}
+              <p className="mt-0.5 text-sm font-medium text-foreground">{cardHighlight(toast.item)}</p>
+              <p className="text-[11px] text-foreground-muted tabular-nums">
+                {formatDateTimeUS(toast.item.createdAt)}
+                {toast.more > 0 ? ` · +${toast.more} more` : ""}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setToast(null)}
+              aria-label="Dismiss"
+              className="rounded p-0.5 text-foreground-muted hover:bg-surface-hover hover:text-foreground"
+            >
+              <X className="h-4 w-4" strokeWidth={2} />
+            </button>
+          </div>
+          {toast.item.actionHref && (
+            <button
+              type="button"
+              onClick={() => {
+                const item = toast.item;
+                setToast(null);
+                handleClick(item);
+              }}
+              className="mt-2 text-xs font-semibold text-brand hover:underline"
+            >
+              {toast.item.actionLabel ?? "Open"} →
+            </button>
+          )}
+        </div>
+      )}
       <button
         onClick={() => setOpen((v) => !v)}
         aria-label="Notifications"

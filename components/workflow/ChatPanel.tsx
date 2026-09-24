@@ -5,6 +5,7 @@ import { Send, MessageSquare, ArrowLeft, Users as UsersIcon } from "lucide-react
 import Card from "@/components/ui/Card";
 import { Select } from "@/components/ui/Input";
 import EmptyState from "@/components/ui/EmptyState";
+import { humanizeRole } from "@/lib/format";
 
 type ChatMessage = {
   chatMessageId: string;
@@ -19,14 +20,6 @@ type ChatContact = {
   userId: string;
   name: string;
   role: string;
-};
-
-const ROLE_LABEL: Record<string, string> = {
-  WORKER: "Worker",
-  FOREMAN: "Subcontractor",
-  SUPERVISOR: "Contractor",
-  MANAGER: "Contractor",
-  ADMIN: "Admin",
 };
 
 /** Sentinel conversation id for the project-wide broadcast thread —
@@ -178,7 +171,7 @@ export default function ChatPanel({
     selectedPeer === TEAM_THREAD
       ? "Everyone in this project"
       : selectedContact
-        ? ROLE_LABEL[selectedContact.role] ?? selectedContact.role
+        ? humanizeRole(selectedContact.role)
         : undefined;
 
   return (
@@ -250,7 +243,7 @@ export default function ChatPanel({
                   <span className="min-w-0">
                     <span className="block font-medium text-foreground truncate">{c.name}</span>
                     <span className="block text-xs text-foreground-muted truncate">
-                      {ROLE_LABEL[c.role] ?? c.role}
+                      {humanizeRole(c.role)}
                     </span>
                   </span>
                 </button>
@@ -311,7 +304,7 @@ export default function ChatPanel({
                     <p className="text-[11px] font-semibold mb-0.5 text-info">
                       {m.senderName}{" "}
                       <span className="font-normal text-foreground-muted">
-                        · {ROLE_LABEL[m.senderRole] ?? m.senderRole}
+                        · {humanizeRole(m.senderRole)}
                       </span>
                     </p>
                   )}
@@ -338,7 +331,7 @@ export default function ChatPanel({
           <button
             type="submit"
             disabled={needsProject || sending || !text.trim()}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-success hover:bg-success/90 text-white px-4 py-2 text-sm font-semibold transition-colors duration-150 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white px-4 py-2 text-sm font-semibold transition-colors duration-150 disabled:opacity-50"
           >
             <Send className="h-4 w-4" strokeWidth={2} />
             Send

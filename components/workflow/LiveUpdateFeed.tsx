@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ImageOff } from "lucide-react";
 import TabNav from "@/components/workflow/TabNav";
 import { formatDateTimeUS, formatDateUS } from "@/lib/format";
@@ -97,6 +98,11 @@ export default function LiveUpdateFeed({
   // a re-render of an already-mounted instance.
   const [filterCode, setFilterCode] = useState<string | null>(initialFilterCode);
 
+  // The page's project context (?projectId=, set by the Contractor/Worker
+  // project switcher) — forwarded so a user with roles on several
+  // projects sees only the current project's field updates.
+  const contextProjectId = useSearchParams().get("projectId");
+
   useEffect(() => {
     let ignore = false;
 
@@ -108,7 +114,11 @@ export default function LiveUpdateFeed({
     // selected tab (`view`) is separate state, untouched by any refresh.
     async function load(background: boolean) {
       try {
-        const res = await fetch("/api/workflow/live-updates");
+        const res = await fetch(
+          contextProjectId
+            ? `/api/workflow/live-updates?projectId=${encodeURIComponent(contextProjectId)}`
+            : "/api/workflow/live-updates"
+        );
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "Failed to load live updates.");
         if (!ignore) {
@@ -130,7 +140,7 @@ export default function LiveUpdateFeed({
       ignore = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [contextProjectId]);
 
   const { todayItems, historyGroups, scopedCount } = useMemo(() => {
     const todayKey = localDayKey(new Date());

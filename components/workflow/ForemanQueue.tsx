@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
 import StatusFlow from "@/components/workflow/StatusFlow";
 import { formatPercent } from "@/lib/format";
 import Card from "@/components/ui/Card";
@@ -26,6 +27,12 @@ export type ForemanQueueItem = {
 type Props = {
   foremanUserId: string;
   items: ForemanQueueItem[];
+  /** Submission to scroll to and lightly highlight (from a notification's
+   * "View Queue" link) — display only. */
+  focusSubmissionId?: string | null;
+  /** Fallback focus when the notification carries no submission: this
+   * work item's card(s). */
+  focusWorkItemCode?: string | null;
 };
 
 /** Local, not-yet-forwarded edits for one submission — held in the UI
@@ -35,7 +42,27 @@ type Props = {
  * Forward call rather than saved independently. */
 type Draft = { progress?: number; comment?: string };
 
-export default function ForemanQueue({ foremanUserId, items }: Props) {
+export default function ForemanQueue({
+  foremanUserId,
+  items,
+  focusSubmissionId = null,
+  focusWorkItemCode = null,
+}: Props) {
+  const focusBySubmission = !!focusSubmissionId && items.some((i) => i.submissionId === focusSubmissionId);
+  const isFocused = (item: ForemanQueueItem) =>
+    focusBySubmission
+      ? item.submissionId === focusSubmissionId
+      : !!focusWorkItemCode && item.workItemCode === focusWorkItemCode;
+  // Which card has its Live Updates expanded (one at a time).
+  const [liveUpdatesFor, setLiveUpdatesFor] = useState<string | null>(null);
+  // Bring a notification's target record into view once rendered.
+  useEffect(() => {
+    if (!focusSubmissionId && !focusWorkItemCode) return;
+    const timer = setTimeout(() => {
+      document.querySelector("[data-focused=true]")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [focusSubmissionId, focusWorkItemCode]);
   const router = useRouter();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [commentingId, setCommentingId] = useState<string | null>(null);
@@ -174,7 +201,16 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
         const displayedProgress = isEditing ? progressDraft : currentProgress;
 
         return (
-          <Card key={item.submissionId} className="space-y-2 text-sm">
+          <div
+            key={item.submissionId}
+            id={`review-${item.submissionId}`}
+            data-focused={isFocused(item) ? "true" : undefined}
+            className={`scroll-mt-4 rounded-lg ${
+              isFocused(item) ? "ring-2 ring-warning-border ring-offset-2 ring-offset-background" : ""
+            }`}
+          >
+          <Card className="space-y-2 text-sm">
+            {isFocused(item) && <Badge variant="warning">From your notification</Badge>}
             <label className="flex items-center gap-2 text-xs text-foreground-secondary">
               <input
                 type="checkbox"
@@ -258,7 +294,7 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
                 <span className="text-foreground-secondary">Estimated Amount:</span>{" "}
                 <span className="font-medium tabular-nums">
                   {item.estimatedAmount !== null
-                    ? `$${item.estimatedAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                    ? `$${item.estimatedAmount.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
                     : "—"}
                 </span>
               </p>
@@ -338,8 +374,23 @@ export default function ForemanQueue({ foremanUserId, items }: Props) {
               <Button size="sm" onClick={() => handleForward(item)} disabled={busyId === item.submissionId || bulkBusy}>
                 {busyId === item.submissionId ? "Forwarding…" : "Forward to Contractor"}
               </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setLiveUpdatesFor((v) => (v === item.submissionId ? null : item.submissionId))}
+              >
+                {liveUpdatesFor === item.submissionId ? "Hide live updates" : "Live updates"}
+              </Button>
             </div>
+            {/* Worker photos/voice notes for THIS work item — the existing
+                reviewer feed, filtered to the item (read-only evidence). */}
+            {liveUpdatesFor === item.submissionId && (
+              <div className="border-t border-line pt-3">
+                <LiveUpdateFeed initialFilterCode={item.workItemCode} />
+              </div>
+            )}
           </Card>
+          </div>
         );
       })}
     </div>

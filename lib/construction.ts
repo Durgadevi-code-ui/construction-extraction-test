@@ -428,16 +428,20 @@ export async function assessWorkerSubmissionRelevance(
     // work item they selected, not always their first one. A work item
     // outside their own projects just falls back to the default context
     // (getUserContext ignores a project the user has no Active role in).
+    // Same for a worker holding two departments in one project: judge
+    // against the selected work item's own department, not their first.
     let projectId: string | undefined;
+    let departmentId: string | undefined;
     if (selectedWorkItemId) {
       const { data } = await supabase
         .from("work_items")
-        .select("project_id")
+        .select("project_id, department_id")
         .eq("work_item_id", selectedWorkItemId)
         .maybeSingle();
       projectId = (data?.project_id as string | undefined) ?? undefined;
+      departmentId = (data?.department_id as string | undefined) ?? undefined;
     }
-    const ctx = await getUserContext(supabase, currentUser.userId, projectId ? { projectId } : undefined);
+    const ctx = await getUserContext(supabase, currentUser.userId, projectId ? { projectId, departmentId } : undefined);
     if (ctx.role !== "WORKER") return { status: "notChecked" };
 
     const departments = await getProjectDepartmentVocabulary(supabase, ctx.projectId);

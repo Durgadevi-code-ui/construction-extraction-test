@@ -38,6 +38,9 @@ export type NotificationRecord = {
   workItemId: string | null;
   workItemCode: string | null;
   workItemDescription: string | null;
+  /** notifications.submission_id — the exact submission this is about,
+   * used to focus/highlight that record in the recipient's review queue. */
+  submissionId: string | null;
   submittedProgress: number | null;
   previousApprovedProgress: number | null;
   newApprovedProgress: number | null;
@@ -79,9 +82,44 @@ export type NotificationRecord = {
  */
 export function resolveNotificationTarget(
   recipientRole: string,
-  workItemId: string | null
+  workItemId: string | null,
+  /** Optional — when present, the reviewer link also carries which
+   * record to focus (`focus`, the submission) and which notification
+   * opened it (`n`), so the Reviews tab can scroll to and highlight that
+   * exact record instead of just opening the page. Both ids come from
+   * this recipient's own notification row. */
+  focus?: {
+    submissionId: string | null;
+    workItemCode: string | null;
+    notificationId: string;
+    /** The notification's own project/department — opens the recipient's
+     * page in that context when they hold roles on several. */
+    projectId?: string | null;
+    departmentId?: string | null;
+  }
 ): { href: string; label: string } | null {
+  const projectQuery = focus?.projectId ? `&projectId=${focus.projectId}` : "";
+  const workerContextQuery = `${projectQuery}${focus?.departmentId ? `&departmentId=${focus.departmentId}` : ""}`;
   if (recipientRole === "WORKER") {
+    // Same focus mechanism as the reviewer links below: the exact
+    // submission in the Worker's own History when the notification
+    // carries one (every current Worker notification type does), else
+    // the work item's card on Work Items; the old pre-selected-work-item
+    // link only when neither is known. The Worker page still re-checks
+    // everything server-side (own data only).
+    if (focus?.submissionId) {
+      const item = focus.workItemCode ? `&item=${encodeURIComponent(focus.workItemCode)}` : "";
+      return {
+        href: `/workflow/worker?tab=history&focus=${focus.submissionId}${item}&n=${focus.notificationId}${workerContextQuery}`,
+        label: "View Update",
+      };
+    }
+    if (focus?.workItemCode) {
+      return {
+        href: `/workflow/worker?tab=workItems&item=${encodeURIComponent(focus.workItemCode)}&n=${focus.notificationId}${workerContextQuery}`,
+        label: "View Update",
+      };
+    }
     return workItemId ? { href: `/workflow/worker?workItemId=${workItemId}`, label: "View Update" } : null;
   }
   // `?tab=` matters even though it's also each page's own default tab:
@@ -92,11 +130,16 @@ export function resolveNotificationTarget(
   // components read this param on every navigation (not just on
   // mount) specifically so this link works from anywhere, including a
   // second click from the same page.
+  const focusQuery = focus
+    ? `${focus.submissionId ? `&focus=${focus.submissionId}` : ""}${
+        focus.workItemCode ? `&item=${encodeURIComponent(focus.workItemCode)}` : ""
+      }&n=${focus.notificationId}`
+    : "";
   if (recipientRole === "FOREMAN") {
-    return { href: "/workflow/foreman?tab=reviews", label: "View Queue" };
+    return { href: `/workflow/foreman?tab=reviews${focusQuery}${projectQuery}`, label: "View Queue" };
   }
   if (CONTRACTOR_ROLES.includes(recipientRole)) {
-    return { href: "/workflow/supervisor?tab=today", label: "View Queue" };
+    return { href: `/workflow/supervisor?tab=reviews${focusQuery}${projectQuery}`, label: "View Queue" };
   }
   return null;
 }
@@ -355,7 +398,7 @@ export async function createProgressNotification(
 }
 
 const NOTIFICATION_SELECT =
-  "notification_id, type, title, message, project_id, projects(project_name), department_id, departments(department_name), work_item_id, work_items(description_of_work), submitted_progress, previous_approved_progress, new_approved_progress, reviewer_name, reviewer_role, remarks, is_read, created_at";
+  "notification_id, type, title, message, project_id, projects(project_name), department_id, departments(department_name), work_item_id, work_items(line_item_no, description_of_work), submission_id, submitted_progress, previous_approved_progress, new_approved_progress, reviewer_name, reviewer_role, remarks, is_read, created_at";
 
 type NotificationRow = {
   notification_id: string;
@@ -368,9 +411,10 @@ type NotificationRow = {
   departments: { department_name: string } | { department_name: string }[] | null;
   work_item_id: string | null;
   work_items:
-    | { description_of_work: string }
-    | { description_of_work: string }[]
+    | { line_item_no: string; description_of_work: string }
+    | { line_item_no: string; description_of_work: string }[]
     | null;
+  submission_id: string | null;
   submitted_progress: number | null;
   previous_approved_progress: number | null;
   new_approved_progress: number | null;
@@ -384,7 +428,13 @@ type NotificationRow = {
 const one = <T,>(v: T | T[] | null): T | null => (Array.isArray(v) ? v[0] ?? null : v);
 
 function toNotification(row: NotificationRow, recipientRole: string): NotificationRecord {
-  const target = resolveNotificationTarget(recipientRole, row.work_item_id);
+  const target = resolveNotificationTarget(recipientRole, row.work_item_id, {
+    submissionId: row.submission_id,
+    workItemCode: one(row.work_items)?.line_item_no ?? null,
+    notificationId: row.notification_id,
+    projectId: row.project_id,
+    departmentId: row.department_id,
+  });
   return {
     notificationId: row.notification_id,
     type: row.type,
@@ -395,8 +445,9 @@ function toNotification(row: NotificationRow, recipientRole: string): Notificati
     departmentId: row.department_id,
     departmentName: one(row.departments)?.department_name ?? null,
     workItemId: row.work_item_id,
-    workItemCode: null,
+    workItemCode: one(row.work_items)?.line_item_no ?? null,
     workItemDescription: one(row.work_items)?.description_of_work ?? null,
+    submissionId: row.submission_id,
     submittedProgress: row.submitted_progress,
     previousApprovedProgress: row.previous_approved_progress,
     newApprovedProgress: row.new_approved_progress,

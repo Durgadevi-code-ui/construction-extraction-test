@@ -14,7 +14,7 @@ import type {
 import type { Delegation, DelegationPermission } from "@/lib/delegationTypes";
 import DelegationManager, { type ContractorOption } from "./DelegationManager";
 import ExcelImportPanel from "./ExcelImportPanel";
-import { formatPercent, formatQuantity } from "@/lib/format";
+import { formatPercent, formatQuantity, humanizeRole } from "@/lib/format";
 import {
   Inbox,
   Building2,
@@ -112,18 +112,6 @@ const ROLE_OPTIONS = ["WORKER", "FOREMAN", "SUPERVISOR", "ADMIN"];
  * app/api/admin/users/route.ts), this is the matching UI-level guard so
  * a delegate is never even shown the option. */
 const DELEGATED_ROLE_OPTIONS = ["WORKER", "FOREMAN", "SUPERVISOR"];
-
-/** Display-only labels for the Role dropdown below — the underlying
- * database role values (ROLE_OPTIONS) are unchanged. Same business
- * terminology as lib/format.ts humanizeRole (Contractor/Subcontractor/
- * Worker/Admin), just not reusable here since this maps a full option
- * list, not one value read back from the DB. */
-const ROLE_OPTION_LABEL: Record<string, string> = {
-  WORKER: "Worker",
-  FOREMAN: "Subcontractor",
-  SUPERVISOR: "Contractor",
-  ADMIN: "Admin",
-};
 
 /** Suggested Unit of Measure values via <datalist> — the field stays
  * plain free text (see UOM_DATALIST_ID usages below), so a
@@ -804,16 +792,68 @@ function WorkItemsTab({
           )}
       </form>
 
+      {/* Project → Department → Work Items: the same work items as before,
+          grouped by the department (and that department's project) each
+          one actually belongs to — every work item still appears exactly
+          once, with the same row/edit controls. Departments start
+          collapsed so a large import stays scannable. */}
       <ListSection title="Existing Work Items" empty={workItems.length === 0}>
-        {workItems.map((w) => (
-          <WorkItemRow
-            key={w.workItemId}
-            adminUserId={adminUserId}
-            item={w}
-            allWorkItems={workItems}
-            dependencies={workItemDependencies}
-          />
-        ))}
+        {[...new Set(departments.map((d) => d.projectId))].map((projectId) => {
+          const projectDepartments = departments.filter(
+            (d) => d.projectId === projectId && workItems.some((w) => w.departmentId === d.departmentId)
+          );
+          if (projectDepartments.length === 0) return null;
+          const projectItemCount = workItems.filter((w) =>
+            projectDepartments.some((d) => d.departmentId === w.departmentId)
+          ).length;
+          return (
+            <div key={projectId}>
+              <p className="px-4 py-2 bg-surface-soft text-xs font-semibold uppercase tracking-wide text-foreground-secondary">
+                {projectDepartments[0].projectName} · {projectDepartments.length} department
+                {projectDepartments.length === 1 ? "" : "s"} · {projectItemCount} work item
+                {projectItemCount === 1 ? "" : "s"}
+              </p>
+              {projectDepartments.map((d) => {
+                const items = workItems.filter((w) => w.departmentId === d.departmentId);
+                return (
+                  <details key={d.departmentId} className="group border-t border-line">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-2.5 text-sm hover:bg-surface-hover">
+                      <span className="font-medium text-foreground">{d.departmentName}</span>
+                      <span className="text-xs text-foreground-muted">
+                        {items.length} work item{items.length === 1 ? "" : "s"}
+                        <span className="ml-1 inline-block transition-transform group-open:rotate-180">▾</span>
+                      </span>
+                    </summary>
+                    <div className="border-t border-line-soft pl-3">
+                      {items.map((w) => (
+                        <WorkItemRow
+                          key={w.workItemId}
+                          adminUserId={adminUserId}
+                          item={w}
+                          allWorkItems={workItems}
+                          dependencies={workItemDependencies}
+                        />
+                      ))}
+                    </div>
+                  </details>
+                );
+              })}
+            </div>
+          );
+        })}
+        {/* Any work item whose department isn't in the loaded list (not
+            expected) still shows, so nothing is ever hidden. */}
+        {workItems
+          .filter((w) => !departments.some((d) => d.departmentId === w.departmentId))
+          .map((w) => (
+            <WorkItemRow
+              key={w.workItemId}
+              adminUserId={adminUserId}
+              item={w}
+              allWorkItems={workItems}
+              dependencies={workItemDependencies}
+            />
+          ))}
       </ListSection>
     </div>
   );
@@ -929,7 +969,7 @@ function WorkItemRow({
         <p className="text-foreground-secondary mt-1 tabular-nums">
           Scheduled Value:{" "}
           {item.scheduledValue !== null
-            ? `$${item.scheduledValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+            ? `$${item.scheduledValue.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
             : "Not set"}{" "}
           · Planned Quantity:{" "}
           {item.plannedQuantity !== null ? formatQuantity(item.plannedQuantity) : "Not set"}{" "}
@@ -1028,7 +1068,7 @@ function UsersTab({
           label="Role"
           value={role}
           onChange={setRole}
-          options={roleOptions.map((r) => ({ value: r, label: ROLE_OPTION_LABEL[r] ?? r }))}
+          options={roleOptions.map((r) => ({ value: r, label: humanizeRole(r) }))}
         />
         <SubmitButton submitting={submitting} label="Create User" />
         {error && (
@@ -1048,7 +1088,7 @@ function UsersTab({
                   {u.firstName || u.lastName ? `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim() : u.email}
                 </span>
                 <span className="text-foreground-secondary">({u.email})</span>
-                <span className="text-foreground-muted">{u.role}</span>
+                <span className="text-foreground-muted">{humanizeRole(u.role)}</span>
                 <StatusBadge status={u.status} />
                 <Badge variant={u.isLinked ? "success" : "neutral"}>
                   {u.isLinked ? "Can log in" : "No login yet"}
@@ -1069,7 +1109,7 @@ function UsersTab({
                 {u.projectRoles.map((r) => (
                   <div key={r.userProjectRoleId} className="flex items-center justify-between gap-2">
                     <p className="text-foreground-secondary">
-                      {r.role} — {r.projectName} / {r.departmentName}
+                      {humanizeRole(r.role)} — {r.projectName} / {r.departmentName}
                     </p>
                     {/* A delegate can never remove an ADMIN's assignment
                      * — hidden here to match the server-side guard in

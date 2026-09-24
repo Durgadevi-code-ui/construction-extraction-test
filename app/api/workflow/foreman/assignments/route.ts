@@ -23,7 +23,10 @@ export async function GET() {
   } catch (err) {
     console.error("Failed to load assignment board:", err);
     const message = err instanceof Error ? err.message : "Failed to load assignment board.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    // Role/scope rejection (assertRole: board is Subcontractor-only) is a
+    // 403, not a server error — same mapping as app/api/workflow/dashboard.
+    const unauthorized = message.includes("not authorized");
+    return NextResponse.json({ error: message }, { status: unauthorized ? 403 : 500 });
   }
 }
 
@@ -63,6 +66,9 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error("Assignment action failed:", err);
     const message = err instanceof Error ? err.message : "Action failed.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    // Caller not allowed to manage this assignment (assertCanManageAssignments)
+    // is a 403, not a server error — same mapping as app/api/workflow/dashboard.
+    const unauthorized = message.includes("not authorized");
+    return NextResponse.json({ error: message }, { status: unauthorized ? 403 : 500 });
   }
 }

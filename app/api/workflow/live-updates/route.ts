@@ -53,7 +53,7 @@ function errorStatus(message: string): number {
     : 500;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const currentUser = await getCurrentUser();
   if (!currentUser) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
@@ -62,11 +62,14 @@ export async function GET() {
   const supabase = getSupabaseServiceRoleClient();
 
   try {
-    const ctx = await getUserContext(supabase, currentUser.userId);
+    // Optional ?projectId= — the reviewer page's current project context;
+    // only ever selects among the caller's own Active roles.
+    const projectId = request.nextUrl.searchParams.get("projectId") || undefined;
+    const ctx = await getUserContext(supabase, currentUser.userId, projectId ? { projectId } : undefined);
     const updates =
       ctx.role === "WORKER"
         ? await listLiveUpdatesForWorker(supabase, currentUser.userId)
-        : await listLiveUpdatesForReviewer(supabase, currentUser.userId);
+        : await listLiveUpdatesForReviewer(supabase, currentUser.userId, ctx.projectId);
 
     return NextResponse.json({ updates });
   } catch (err) {

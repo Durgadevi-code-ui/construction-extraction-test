@@ -1,4 +1,7 @@
+"use client";
+
 import { progressColorClass } from "@/lib/progressColor";
+import { useCountUp } from "@/components/workflow/useCountUp";
 
 /**
  * Reusable SVG donut ring for a single KPI percentage (e.g. "Overall
@@ -14,6 +17,7 @@ export default function ProgressRing({
   size = 88,
   strokeWidth = 10,
   colorClass,
+  animate = false,
 }: {
   /** 0-100, or null when there's nothing to compute yet — renders an
    * empty ring with "—", never a fabricated 0%. */
@@ -22,10 +26,14 @@ export default function ProgressRing({
   size?: number;
   strokeWidth?: number;
   colorClass?: string;
+  /** Count up 0 → percent when shown (display only, see useCountUp).
+   * Off by default so existing rings render exactly as before. */
+  animate?: boolean;
 }) {
+  const shown = useCountUp(percent, animate);
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
-  const clamped = percent === null ? 0 : Math.max(0, Math.min(100, percent));
+  const clamped = shown === null ? 0 : Math.max(0, Math.min(100, shown));
   const offset = circumference * (1 - clamped / 100);
   const resolvedColorClass = colorClass ?? progressColorClass(percent);
 
@@ -56,7 +64,7 @@ export default function ProgressRing({
           )}
         </svg>
         <span className="absolute inset-0 flex items-center justify-center text-sm font-semibold text-foreground">
-          {percent !== null ? `${percent}%` : "—"}
+          {shown !== null ? `${shown}%` : "—"}
         </span>
       </div>
       {label && <span className="text-xs text-foreground-secondary text-center">{label}</span>}
