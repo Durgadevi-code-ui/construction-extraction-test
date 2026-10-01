@@ -35,7 +35,9 @@ export default function ProgressRing({
   const circumference = 2 * Math.PI * radius;
   const clamped = shown === null ? 0 : Math.max(0, Math.min(100, shown));
   const offset = circumference * (1 - clamped / 100);
-  const resolvedColorClass = colorClass ?? progressColorClass(percent);
+  // Color follows the value currently shown, so it steps through the
+  // bands while counting up (identical to `percent` when not animating).
+  const resolvedColorClass = colorClass ?? progressColorClass(shown);
 
   return (
     <div className="flex flex-col items-center gap-1" title={label}>

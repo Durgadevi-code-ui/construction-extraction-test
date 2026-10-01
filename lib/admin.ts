@@ -1101,7 +1101,7 @@ export async function createUserWithRole(
 
   const { data: existingRole, error: roleFindError } = await supabase
     .from("user_project_roles")
-    .select("user_project_role_id")
+    .select("user_project_role_id, status")
     .eq("user_id", userId)
     .eq("project_id", params.projectId)
     .eq("department_id", params.departmentId)
@@ -1111,7 +1111,22 @@ export async function createUserWithRole(
   if (roleFindError) {
     throw new Error(`Failed to look up existing role assignment: ${roleFindError.message}`);
   }
-  if (existingRole) return; // already assigned — nothing to do
+  if (existingRole) {
+    if (existingRole.status === "Active") return; // already assigned — nothing to do
+
+    // Previously removed (see deactivateUserProjectRole): reactivate that
+    // SAME row rather than silently ignoring the request or inserting a
+    // duplicate for the same user/project/department/role.
+    const { error: reactivateError } = await supabase
+      .from("user_project_roles")
+      .update({ status: "Active" })
+      .eq("user_project_role_id", existingRole.user_project_role_id);
+
+    if (reactivateError) {
+      throw new Error(`Failed to reactivate role assignment: ${reactivateError.message}`);
+    }
+    return;
+  }
 
   const { error: roleInsertError } = await supabase.from("user_project_roles").insert({
     user_id: userId,

@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabase";
 import {
@@ -14,8 +13,9 @@ import {
   listWorkItemsForDepartment,
   getDelegatedAssignmentBoard,
   getDelegatedProgressReviewQueue,
+  getReviewFocusState,
 } from "@/lib/workflow";
-import { CONTRACTOR_ROLES } from "@/lib/authContext";
+import { CONTRACTOR_ROLES, projectSwitchOptions } from "@/lib/authContext";
 import { getActiveDelegationsForUser } from "@/lib/delegation";
 import { listDepartments } from "@/lib/admin";
 import { getDashboardData } from "@/lib/dashboard";
@@ -30,7 +30,7 @@ export const dynamic = "force-dynamic";
 export default async function SupervisorPage({
   searchParams,
 }: {
-  searchParams: Promise<{ projectId?: string }>;
+  searchParams: Promise<{ projectId?: string; departmentId?: string; focus?: string }>;
 }) {
   const currentUser = await requireCurrentUser("/workflow/supervisor");
   const userId = currentUser.userId;
@@ -40,13 +40,28 @@ export default async function SupervisorPage({
   // than one project (same mechanism as the Worker page). getUserContext
   // only ever picks among this user's own Active roles and falls back to
   // the first — a stale/tampered id can't widen anything. Every section
-  // below is then scoped to ctx.projectId.
-  const { projectId: projectIdParam } = await searchParams;
-  const ctx = await getUserContext(supabase, userId, projectIdParam ? { projectId: projectIdParam } : undefined);
+  // below is then scoped to ctx.projectId. ?departmentId= (with
+  // ?projectId=) picks between departments the Contractor holds in the
+  // SAME project — same own-roles-only selection the Worker page uses;
+  // department-level sections (brief, reviews, history) follow it.
+  const { projectId: projectIdParam, departmentId: departmentIdParam, focus: focusParam } = await searchParams;
+  const ctx = await getUserContext(
+    supabase,
+    userId,
+    projectIdParam ? { projectId: projectIdParam, departmentId: departmentIdParam } : undefined
+  );
   if (!CONTRACTOR_ROLES.includes(ctx.role)) {
     redirect("/workflow");
   }
   const projectId = ctx.projectId;
+  const departmentId = ctx.departmentId;
+  // A notification's focused submission (?focus=), checked server-side
+  // with the same authorization the review actions use — lets Reviews
+  // say clearly when it was already handled, can't be found, or isn't
+  // accessible, instead of just showing an unhighlighted queue.
+  const reviewFocus = focusParam
+    ? await getReviewFocusState(supabase, userId, focusParam, { projectId, departmentId, reviewer: "CONTRACTOR" })
+    : null;
   // Current Project location (existing projects.project_location) —
   // display-only in the header, omitted when not set.
   const { data: projectRow } = await supabase
@@ -55,38 +70,20 @@ export default async function SupervisorPage({
     .eq("project_id", projectId)
     .maybeSingle();
   const projectLocation = (projectRow?.project_location as string | null) ?? null;
-  const contractorProjects = [
-    ...new Map(
-      ctx.availableProjects.filter((p) => CONTRACTOR_ROLES.includes(p.role)).map((p) => [p.projectId, p])
-    ).values(),
-  ];
-  const projectSwitcher =
-    contractorProjects.length > 1 ? (
-      <div className="flex items-center gap-1 flex-wrap min-w-0 max-w-full">
-        {contractorProjects.map((p) => (
-          <Link
-            key={p.projectId}
-            href={`/workflow/supervisor?projectId=${p.projectId}`}
-            className={
-              p.projectId === projectId
-                ? "rounded-lg bg-brand-soft px-2.5 py-1.5 text-xs font-semibold text-brand max-w-full truncate"
-                : "rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground-secondary border border-line transition-colors duration-150 hover:bg-surface-hover hover:text-foreground max-w-full truncate"
-            }
-            title={`${p.projectName} — ${p.departmentName}`}
-          >
-            {p.projectName}
-          </Link>
-        ))}
-      </div>
-    ) : null;
+  // Options for the shared header Project dropdown (ProjectSelect) — one
+  // per project + department this user holds an Active role in, across
+  // all their roles (a project where they're e.g. Subcontractor opens
+  // that role's page), so switching back is always possible. Only their
+  // own role rows, never other projects — see projectSwitchOptions.
+  const projectOptions = projectSwitchOptions(ctx.availableProjects);
 
   const [queue, todaysProgress, yesterdaysProgress, mtdProgress, workSummary, activeDelegations, dashboardData, history, displayName] =
     await Promise.all([
-      listSupervisorQueue(supabase, userId, projectId),
-      getTodaysProgress(supabase, userId, projectId),
-      getYesterdaysProgress(supabase, userId, projectId),
-      getMTDProgress(supabase, userId, projectId),
-      getWorkSummary(supabase, userId, projectId),
+      listSupervisorQueue(supabase, userId, projectId, departmentId),
+      getTodaysProgress(supabase, userId, projectId, departmentId),
+      getYesterdaysProgress(supabase, userId, projectId, departmentId),
+      getMTDProgress(supabase, userId, projectId, departmentId),
+      getWorkSummary(supabase, userId, projectId, departmentId),
       // Best-effort: delegation is an optional add-on to this dashboard,
       // not something its core Progress/Review functionality depends
       // on — same tolerance as getForemanAssignmentBoard's .catch(() =>
@@ -100,7 +97,7 @@ export default async function SupervisorPage({
       // ContractorTabs), never a second/duplicated calculation.
       // Scoped to the selected project on the server, not only in the UI.
       getDashboardData(supabase, userId, { status: "ALL", projectId }),
-      getSubmissionHistory(supabase, userId, submissionHistoryBounds(), projectId).then((rows) => withApproverNames(supabase, rows)),
+      getSubmissionHistory(supabase, userId, submissionHistoryBounds(), projectId, departmentId).then((rows) => withApproverNames(supabase, rows)),
       getUserDisplayName(supabase, userId),
     ]);
 
@@ -186,8 +183,11 @@ export default async function SupervisorPage({
             description: w.description,
             plannedQuantity: w.plannedQuantity,
             unitOfMeasure: w.unitOfMeasure,
+            progressPercentage: w.progressPercentage,
+            isCompleted: w.isCompleted,
           })) ?? [],
         assignments: board?.assignments ?? [],
+        assignmentInactiveWorkItems: board?.inactiveWorkItems ?? [],
         progressReviewQueue: reviewQueue.map((q) => ({
           submissionId: q.submissionId,
           workerName: q.workerName,
@@ -228,7 +228,7 @@ export default async function SupervisorPage({
             route) remounts the tabs, so no component keeps the previous
             project's state (filters, loaded summary). */}
         <ContractorTabs
-          key={projectId}
+          key={`${projectId}:${departmentId}`}
           userId={userId}
           userEmail={currentUser.email}
           profile={{ displayName, email: currentUser.email }}
@@ -236,8 +236,10 @@ export default async function SupervisorPage({
           departmentName={ctx.departmentName}
           history={history}
           projectId={projectId}
+          departmentId={departmentId}
+          reviewFocus={reviewFocus}
           projectLocation={projectLocation}
-          projectSwitcher={projectSwitcher}
+          projectOptions={projectOptions}
           dashboardData={dashboardData}
           queue={queue}
           todaysProgress={todaysProgress}

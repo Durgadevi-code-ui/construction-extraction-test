@@ -170,9 +170,12 @@ export async function listLiveUpdatesForReviewer(
   reviewerUserId: string,
   /** Optional project context (reviewer with roles on several projects);
    * selects among the reviewer's own roles only. */
-  projectId?: string
+  projectId?: string,
+  /** Optional department within that project (reviewer with several
+   * departments there); same own-roles-only selection. */
+  departmentId?: string
 ): Promise<LiveUpdateRecord[]> {
-  const ctx = await getUserContext(supabase, reviewerUserId, projectId ? { projectId } : undefined);
+  const ctx = await getUserContext(supabase, reviewerUserId, projectId ? { projectId, departmentId } : undefined);
   if (ctx.role !== "FOREMAN" && !CONTRACTOR_ROLES.includes(ctx.role)) {
     throw new Error(`${ctx.role} ${reviewerUserId} is not authorized to view live updates.`);
   }
@@ -196,15 +199,21 @@ export async function listLiveUpdatesForReviewer(
  * posts were actually saved, never another worker's. */
 export async function listLiveUpdatesForWorker(
   supabase: SupabaseClient,
-  workerUserId: string
+  workerUserId: string,
+  /** The Worker page's current project/department — a worker with roles
+   * on several projects sees only that context's own posts. Same own-
+   * roles-only selection as everywhere else; omitted = first role. */
+  scope?: { projectId: string; departmentId?: string }
 ): Promise<LiveUpdateRecord[]> {
-  const ctx = await getUserContext(supabase, workerUserId);
+  const ctx = await getUserContext(supabase, workerUserId, scope);
   assertRole(ctx.role, ["WORKER"]);
 
   const { data, error } = await supabase
     .from("live_updates")
     .select(LIVE_UPDATE_SELECT)
     .eq("worker_id", workerUserId)
+    .eq("project_id", ctx.projectId)
+    .eq("department_id", ctx.departmentId)
     .eq("status", "Active")
     .order("created_at", { ascending: false })
     .limit(20);

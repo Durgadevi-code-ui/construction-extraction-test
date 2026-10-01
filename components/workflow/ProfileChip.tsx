@@ -1,5 +1,3 @@
-import { ChevronDown } from "lucide-react";
-
 /** Best-effort display name derived from an email's local-part (e.g.
  * "ramesh.kumar@x.com" -> "Ramesh Kumar") — purely cosmetic, never used
  * for identity/authorization (that's already resolved server-side
@@ -34,26 +32,48 @@ function initialsFromEmail(email: string): string {
 }
 
 /**
- * Header profile pill — avatar initials + display name + role label,
- * shared by every dashboard's header (see DashboardShell/WorkerTabs).
- * Purely presentational: the name is a cosmetic best-effort guess from
- * the already-verified session email, never a new identity source, and
- * the chevron is decorative (no menu — Sign out already lives in the
- * sidebar, unchanged).
+ * Profile control in the shared sidebar, directly above Sign out (see
+ * DashboardShell) — avatar initials + display name + role label, one per
+ * page for every role. With `onClick` it opens that role's Profile tab
+ * (`active` while it's open); without, it's display-only (e.g. Admin,
+ * which has no Profile tab). The name is a cosmetic best-effort guess
+ * from the already-verified session email, never a new identity source.
  */
-export default function ProfileChip({ email, roleLabel }: { email: string; roleLabel: string }) {
-  return (
-    <div className="hidden md:flex items-center gap-2 rounded-full border border-line bg-white pl-1.5 pr-3 py-1.5">
-      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-brand text-white text-xs font-semibold">
+export default function ProfileChip({
+  email,
+  roleLabel,
+  onClick,
+  active = false,
+}: {
+  email: string;
+  roleLabel: string;
+  onClick?: () => void;
+  active?: boolean;
+}) {
+  const content = (
+    <>
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-brand text-xs font-semibold">
         {initialsFromEmail(email)}
       </span>
-      <span className="text-xs leading-tight">
-        <span className="block font-medium text-foreground truncate max-w-[180px]">
-          {displayNameFromEmail(email)}
-        </span>
-        <span className="block text-foreground-muted">{roleLabel}</span>
+      <span className="min-w-0 text-left text-xs leading-tight">
+        <span className="block font-medium truncate">{displayNameFromEmail(email)}</span>
+        <span className="block text-white/60 truncate">{roleLabel}</span>
       </span>
-      <ChevronDown className="h-3.5 w-3.5 text-foreground-muted" strokeWidth={2} />
-    </div>
+    </>
+  );
+  const className = `w-full min-w-0 flex items-center gap-2.5 rounded-lg px-2 py-2 transition-colors duration-150 ${
+    active ? "bg-brand text-white shadow-sm" : "text-white/90"
+  }`;
+  if (!onClick) return <div className={className}>{content}</div>;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      aria-label={`Profile — ${displayNameFromEmail(email)}, ${roleLabel}`}
+      className={`${className} ${active ? "" : "hover:bg-white/10 hover:text-white"}`}
+    >
+      {content}
+    </button>
   );
 }

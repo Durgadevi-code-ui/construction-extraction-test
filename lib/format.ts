@@ -97,6 +97,16 @@ export function formatPercent(value: number | null | undefined): string {
 }
 
 /**
+ * Display-only whole-dollar amount ("$12,500") — the convention every
+ * dashboard amount already used via local money()/formatMoney() helpers
+ * (DashboardPanel, SupervisorPanel), now shared from one place.
+ */
+export function formatMoney(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  return `$${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+}
+
+/**
  * US date format (MM-DD-YYYY, 4-digit year) for every user-facing date
  * in this app — display only, never touches how a date is stored
  * (still ISO/timestamptz in the database) or compared/queried.
@@ -119,15 +129,18 @@ export function formatPercent(value: number | null | undefined): string {
  * correct, intentional behavior there (e.g. "approved at 11pm UTC"
  * should read as whatever day that is for the viewer), so that path
  * is unchanged.
+ *
+ * `separator` defaults to "-" (every existing caller); the History
+ * From/To filters pass "/" for MM/DD/YYYY (see components/ui/DateInput).
  */
-export function formatDateUS(input: string | Date | null | undefined): string {
+export function formatDateUS(input: string | Date | null | undefined, separator = "-"): string {
   if (!input) return "—";
 
   if (typeof input === "string") {
     const dateOnly = input.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (dateOnly) {
       const [, yyyy, mm, dd] = dateOnly;
-      return `${mm}-${dd}-${yyyy}`;
+      return [mm, dd, yyyy].join(separator);
     }
   }
 
@@ -136,7 +149,7 @@ export function formatDateUS(input: string | Date | null | undefined): string {
   const mm = String(date.getMonth() + 1).padStart(2, "0");
   const dd = String(date.getDate()).padStart(2, "0");
   const yyyy = date.getFullYear();
-  return `${mm}-${dd}-${yyyy}`;
+  return [mm, dd, yyyy].join(separator);
 }
 
 /**

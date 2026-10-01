@@ -194,29 +194,27 @@ async function resolveDashboardScope(
   }
 
   const ctx = await getUserContext(supabase, userId);
-  if (ctx.role === "WORKER") {
+  // Scope = only the project/department rows where the user holds a
+  // reviewer (non-Worker) role — a Contractor with roles on several
+  // projects/departments sees each of them, and a department where the
+  // same user is only a Worker never enters this aggregate view (it used
+  // to, via the first role row, whatever its role). Still only the
+  // user's own Active rows.
+  const reviewerRows = ctx.availableProjects.filter((row) => row.role !== "WORKER");
+  if (reviewerRows.length === 0) {
     throw new Error(
       "Workers are not authorized for the aggregate Dashboard — use your Worker Dashboard instead."
     );
   }
 
-  const projectIds = new Set<string>([ctx.projectId]);
-  const departmentIds = new Set<string>([ctx.departmentId]);
-  // Every project/department the user holds a reviewer (non-Worker) role
-  // in — a Contractor with roles on several projects sees each of them,
-  // not only their first role's. Still only the user's own Active rows.
-  for (const row of ctx.availableProjects) {
-    if (row.role !== "WORKER") {
-      projectIds.add(row.projectId);
-      departmentIds.add(row.departmentId);
-    }
-  }
+  const projectIds = new Set<string>(reviewerRows.map((row) => row.projectId));
+  const departmentIds = new Set<string>(reviewerRows.map((row) => row.departmentId));
 
   // A delegated Contractor also sees the department(s)/project(s)
   // covered by their active delegation(s) — same expansion
   // app/workflow/supervisor/page.tsx already does for its own delegated
   // panel, reused here rather than re-derived.
-  if (CONTRACTOR_ROLES.includes(ctx.role)) {
+  if (reviewerRows.some((row) => CONTRACTOR_ROLES.includes(row.role))) {
     const activeDelegations = await getActiveDelegationsForUser(supabase, userId).catch(() => []);
     if (activeDelegations.length > 0) {
       const allDepartments = await listDepartments(supabase);

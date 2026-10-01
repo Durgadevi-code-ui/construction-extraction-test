@@ -9,6 +9,7 @@ import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import Badge from "@/components/ui/Badge";
 
+import { errorMessage, readApiJson } from "@/lib/apiClient";
 type Props = {
   workerId: string;
   workItemId: string;
@@ -19,6 +20,10 @@ type Props = {
   /** Optional Task context, sent with the submission; the server
    * re-verifies it belongs to this work item. */
   taskId?: string | null;
+  /** This work item's current approved total % (percentage mode), shown
+   * so the Worker enters only today's ADDITIONAL progress. Omitted when
+   * not known for this work item — then no figure is shown. */
+  approvedProgress?: number | null;
 };
 
 export default function WorkerSubmitForm({
@@ -29,6 +34,7 @@ export default function WorkerSubmitForm({
   initialDescription,
   onSubmitted,
   taskId = null,
+  approvedProgress,
 }: Props) {
   const router = useRouter();
 
@@ -83,14 +89,11 @@ export default function WorkerSubmitForm({
           description,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error ?? "Submit failed.");
-      }
+      await readApiJson(res, "Your update wasn't submitted. Please try again.");
       router.refresh();
       onSubmitted();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Submit failed.");
+      setError(errorMessage(err, "Submit failed."));
     } finally {
       setSubmitting(false);
     }
@@ -155,6 +158,27 @@ export default function WorkerSubmitForm({
             value={progress ?? ""}
             onChange={(e) => setProgress(e.target.value === "" ? null : Number(e.target.value))}
           />
+          {/* The % is ADDITIONAL progress completed today; on approval it's
+              added to the approved total (capped at 100%). */}
+          <p className="text-xs text-foreground-secondary mt-1">
+            Enter the additional progress completed today.
+            {approvedProgress !== undefined && (
+              <>
+                {" "}
+                Currently approved: <span className="font-medium">{formatPercent(approvedProgress ?? 0)}</span>.
+                {progress !== null && (
+                  <>
+                    {" "}
+                    If approved:{" "}
+                    <span className="font-medium">
+                      {formatPercent(Math.min(100, Math.round(((approvedProgress ?? 0) + progress) * 100) / 100))}
+                    </span>{" "}
+                    total.
+                  </>
+                )}
+              </>
+            )}
+          </p>
           {detectedPercentage !== null ? (
             <p className="text-xs text-foreground-secondary mt-1">
               Detected from your update: {detectedPercentage}%. You can edit this value before
@@ -162,8 +186,8 @@ export default function WorkerSubmitForm({
             </p>
           ) : (
             <p className="text-xs text-foreground-secondary mt-1">
-              Enter today&apos;s progress percentage. (No planned quantity is configured for this
-              work item yet — set one in Admin Setup to calculate this automatically.)
+              (No planned quantity is configured for this work item yet — set one in Admin Setup to
+              calculate this automatically.)
             </p>
           )}
         </div>

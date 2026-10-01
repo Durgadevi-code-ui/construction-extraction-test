@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabase";
 import {
@@ -9,8 +8,10 @@ import {
   getUserContext,
   getUserDisplayName,
   listForemanQueue,
+  getReviewFocusState,
 } from "@/lib/workflow";
 import { requireCurrentUser } from "@/lib/session";
+import { projectSwitchOptions } from "@/lib/authContext";
 import ForemanTabs from "@/components/workflow/ForemanTabs";
 import { submissionHistoryBounds } from "@/components/workflow/SubmissionHistoryTable";
 import { calculateEstimatedAmount, calculateOverallProgress } from "@/lib/calculations";
@@ -29,7 +30,7 @@ export const dynamic = "force-dynamic";
 export default async function ForemanPage({
   searchParams,
 }: {
-  searchParams: Promise<{ projectId?: string }>;
+  searchParams: Promise<{ projectId?: string; departmentId?: string; focus?: string }>;
 }) {
   const currentUser = await requireCurrentUser("/workflow/foreman");
   const userId = currentUser.userId;
@@ -37,12 +38,26 @@ export default async function ForemanPage({
 
   // Project context (?projectId=), same mechanism as the Contractor page —
   // only selects among this user's own Active roles, falls back safely.
-  const { projectId: projectIdParam } = await searchParams;
-  const ctx = await getUserContext(supabase, userId, projectIdParam ? { projectId: projectIdParam } : undefined);
+  // ?departmentId= (with ?projectId=) picks between departments held in
+  // the SAME project, like the Worker and Contractor pages.
+  const { projectId: projectIdParam, departmentId: departmentIdParam, focus: focusParam } = await searchParams;
+  const ctx = await getUserContext(
+    supabase,
+    userId,
+    projectIdParam ? { projectId: projectIdParam, departmentId: departmentIdParam } : undefined
+  );
   if (ctx.role !== "FOREMAN") {
     redirect("/workflow");
   }
   const projectId = ctx.projectId;
+  const departmentId = ctx.departmentId;
+  // A notification's focused submission (?focus=), checked server-side
+  // with the same authorization the review actions use — lets Reviews
+  // say clearly when it was already handled, can't be found, or isn't
+  // accessible, instead of just showing an unhighlighted queue.
+  const reviewFocus = focusParam
+    ? await getReviewFocusState(supabase, userId, focusParam, { projectId, departmentId, reviewer: "FOREMAN" })
+    : null;
   // Current Project location (existing projects.project_location) —
   // display-only in the header, omitted when not set.
   const { data: projectRow } = await supabase
@@ -51,33 +66,23 @@ export default async function ForemanPage({
     .eq("project_id", projectId)
     .maybeSingle();
   const projectLocation = (projectRow?.project_location as string | null) ?? null;
-  const ownProjects = [
-    ...new Map(ctx.availableProjects.filter((p) => p.role === "FOREMAN").map((p) => [p.projectId, p])).values(),
-  ];
-  const projectSwitcher =
-    ownProjects.length > 1 ? (
-      <div className="flex items-center gap-1 flex-wrap min-w-0 max-w-full">
-        {ownProjects.map((p) => (
-          <Link
-            key={p.projectId}
-            href={`/workflow/foreman?projectId=${p.projectId}`}
-            className={
-              p.projectId === projectId
-                ? "rounded-lg bg-brand-soft px-2.5 py-1.5 text-xs font-semibold text-brand max-w-full truncate"
-                : "rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground-secondary border border-line transition-colors duration-150 hover:bg-surface-hover hover:text-foreground max-w-full truncate"
-            }
-            title={`${p.projectName} — ${p.departmentName}`}
-          >
-            {p.projectName}
-          </Link>
-        ))}
-      </div>
-    ) : null;
+  // Options for the shared header Project dropdown (ProjectSelect) — one
+  // per project + department this user holds an Active role in, across
+  // all their roles (a project where they're e.g. Contractor opens that
+  // role's page), so switching back is always possible. Only their own
+  // role rows, never other projects — see projectSwitchOptions.
+  const projectOptions = projectSwitchOptions(ctx.availableProjects);
 
-  const queue = await listForemanQueue(supabase, userId, projectId);
-  const board = await getForemanAssignmentBoard(supabase, userId, projectId).catch(() => null);
+  const queue = await listForemanQueue(supabase, userId, projectId, departmentId);
+  // A failed board load leaves the rest of the page usable — the
+  // Dashboard KPIs and Work Item Management then show an error with
+  // Retry (see ForemanTabs) — and is logged here, never swallowed.
+  const board = await getForemanAssignmentBoard(supabase, userId, projectId, departmentId).catch((err) => {
+    console.error("Failed to load the Subcontractor assignment board:", err);
+    return null;
+  });
   const [history, displayName] = await Promise.all([
-    getSubmissionHistory(supabase, userId, submissionHistoryBounds(), projectId).then((rows) => withApproverNames(supabase, rows)),
+    getSubmissionHistory(supabase, userId, submissionHistoryBounds(), projectId, departmentId).then((rows) => withApproverNames(supabase, rows)),
     getUserDisplayName(supabase, userId),
   ]);
 
@@ -121,7 +126,7 @@ export default async function ForemanPage({
       {/* key: remount on project switch — see ContractorTabs in the
           Contractor page (no state carried across projects). */}
       <ForemanTabs
-          key={projectId}
+          key={`${projectId}:${departmentId}`}
           foremanUserId={userId}
           userEmail={currentUser.email}
           profile={{ displayName, email: currentUser.email }}
@@ -129,8 +134,10 @@ export default async function ForemanPage({
           departmentName={ctx.departmentName}
           history={history}
           projectId={projectId}
+          departmentId={departmentId}
+          reviewFocus={reviewFocus}
           projectLocation={projectLocation}
-          projectSwitcher={projectSwitcher}
+          projectOptions={projectOptions}
           kpis={kpis}
           board={
             board
@@ -148,8 +155,14 @@ export default async function ForemanPage({
                     // WorkItemTaskManager), unlike the Worker Dashboard
                     // which only ever sees Active tasks.
                     tasks: w.tasks,
+                    // Shown in the shared Work Items list — the same
+                    // progress/earned value the KPI cards above use.
+                    progressPercentage: w.progressPercentage,
+                    isCompleted: w.isCompleted,
+                    earnedAmount: calculateEstimatedAmount(w.scheduledValue, w.progressPercentage),
                   })),
                   assignments: board.assignments,
+                  inactiveWorkItems: board.inactiveWorkItems,
                 }
               : null
           }

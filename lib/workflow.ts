@@ -115,7 +115,7 @@ export async function listSelectableUsers(
 export { getUserContext };
 
 const WORK_ITEM_SELECT =
-  "work_item_id, project_id, department_id, line_item_no, description_of_work, scheduled_value, planned_quantity, unit_of_measure, additional_fields";
+  "work_item_id, project_id, department_id, line_item_no, description_of_work, scheduled_value, planned_quantity, unit_of_measure, additional_fields, status";
 
 type WorkItemRecord = {
   work_item_id: string;
@@ -127,6 +127,8 @@ type WorkItemRecord = {
   planned_quantity: number | null;
   unit_of_measure: string | null;
   additional_fields: Record<string, unknown> | null;
+  /** "Active", or "Removed" once deactivated (see setWorkItemActive). */
+  status: string;
 };
 
 /**
@@ -323,6 +325,12 @@ async function resolveWorkItemForWorker(
     throw new Error(
       `Work item ${workItemId} does not belong to department ${departmentId}`
     );
+  }
+  // A deactivated work item is never offered to a Worker (every Worker
+  // list filters work_items.status = 'Active'); this closes the same gap
+  // for an explicitly requested id.
+  if (workItem.status !== "Active") {
+    throw new Error(`Work item ${workItemId} is inactive`);
   }
   if (!(await isWorkItemAssignedToWorker(supabase, workerId, workItemId))) {
     throw new Error(
@@ -560,6 +568,29 @@ async function getLatestApprovedRecord(
 }
 
 /**
+ * Percentage-only mode (no planned_quantity) — what an approval stores.
+ * A Worker's percentage submission is the ADDITIONAL progress completed
+ * that day ("Progress today (%)"), while every approved unified_records
+ * row holds the work item's CUMULATIVE approved total (what
+ * getWorkItemCurrentStatus reads as "latest approved % = current
+ * progress", and what every existing approved row already holds). So an
+ * approval stores min(100, previous approved total + that day's %) —
+ * 95 + 2 = 97, 97 + 3 = 100, 95 + 10 = 100. Quantity mode is returned
+ * unchanged: there each approval's accepted_quantity is summed (see
+ * getCumulativeApprovedQuantity). Only ever applied to the record being
+ * approved/corrected now; no existing approved row is rewritten.
+ */
+function toApprovedTotalData(
+  plannedQuantity: number | null,
+  submitted: ProgressData | null,
+  previousApprovedTotal: number | null
+): ProgressData | null {
+  if (!submitted || (plannedQuantity !== null && plannedQuantity > 0)) return submitted;
+  const total = Math.min(100, (previousApprovedTotal ?? 0) + (submitted.progress_percentage ?? 0));
+  return { ...submitted, progress_percentage: Math.round(total * 100) / 100 };
+}
+
+/**
  * Sum of accepted_quantity across every APPROVED (non-rolled-back)
  * unified_records row for a work item, all-time (not date-bounded) —
  * the running total of physical quantity actually completed so far.
@@ -773,12 +804,18 @@ export type WorkerDashboard = {
  */
 async function getLatestSubmissionStatus(
   supabase: SupabaseClient,
-  workerId: string
+  workerId: string,
+  /** The dashboard's current project/department — a worker holding roles
+   * on several projects must not see another project's latest status.
+   * Identical result for a single-role worker. */
+  scope: { projectId: string; departmentId: string }
 ): Promise<WorkerSubmissionStatusCode | null> {
   const { data: submission, error } = await supabase
     .from("extraction_submissions")
     .select("extraction_submission_id, created_at")
     .eq("worker_id", workerId)
+    .eq("project_id", scope.projectId)
+    .eq("department_id", scope.departmentId)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -788,10 +825,21 @@ async function getLatestSubmissionStatus(
   }
   if (!submission) return null;
 
+  return getSubmissionStatusCode(supabase, submission.extraction_submission_id);
+}
+
+/** Where one submission currently sits in the review pipeline — no
+ * validation row yet = awaiting the Subcontractor; otherwise read from
+ * user_validations.approval_status. Shared by getLatestSubmissionStatus
+ * and getReviewFocusState. */
+async function getSubmissionStatusCode(
+  supabase: SupabaseClient,
+  submissionId: string
+): Promise<WorkerSubmissionStatusCode> {
   const { data: validation, error: valError } = await supabase
     .from("user_validations")
     .select("approval_status")
-    .eq("submission_id", submission.extraction_submission_id)
+    .eq("submission_id", submissionId)
     .maybeSingle();
 
   if (valError) {
@@ -801,6 +849,69 @@ async function getLatestSubmissionStatus(
   if (validation.approval_status === "APPROVED") return "APPROVED";
   if (validation.approval_status === "ROLLED_BACK") return "ROLLED_BACK";
   return "AWAITING_SUPERVISOR_APPROVAL";
+}
+
+/** What a reviewer's notification link points at, checked server-side
+ * before the Reviews tab renders it (see NotificationFocusBanner). */
+export type ReviewFocusState =
+  | { kind: "found"; statusCode: WorkerSubmissionStatusCode; statusLabel: string }
+  | { kind: "notFound" }
+  | { kind: "forbidden" }
+  | { kind: "otherContext" }
+  | { kind: "error" };
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolves a notification's focused submission for the Reviews tab of
+ * the page currently open (`context` = that page's own project/
+ * department and reviewer kind). Uses the SAME authorization the review
+ * actions use — a Subcontractor must hold the FOREMAN role for the
+ * submission's department; a Contractor must pass assertCanReviewProgress
+ * (own department or an active delegation) — so this can never reveal a
+ * submission's state to someone who couldn't act on it. Never throws:
+ * any failure becomes { kind: "error" } (no raw database message reaches
+ * the UI). Read-only.
+ */
+export async function getReviewFocusState(
+  supabase: SupabaseClient,
+  userId: string,
+  submissionId: string,
+  context: { projectId: string; departmentId: string; reviewer: "FOREMAN" | "CONTRACTOR" }
+): Promise<ReviewFocusState> {
+  try {
+    if (!UUID_PATTERN.test(submissionId)) return { kind: "notFound" };
+
+    const { data, error } = await supabase
+      .from("extraction_submissions")
+      .select("project_id, department_id")
+      .eq("extraction_submission_id", submissionId)
+      .maybeSingle();
+    if (error) return { kind: "error" };
+    if (!data) return { kind: "notFound" };
+    const scope = { projectId: data.project_id as string, departmentId: data.department_id as string };
+
+    let allowed: boolean;
+    if (context.reviewer === "FOREMAN") {
+      const ctx = await getUserContext(supabase, userId, scope);
+      allowed = ctx.role === "FOREMAN" && ctx.projectId === scope.projectId && ctx.departmentId === scope.departmentId;
+    } else {
+      allowed = await assertCanReviewProgress(supabase, userId, scope).then(
+        () => true,
+        () => false
+      );
+    }
+    if (!allowed) return { kind: "forbidden" };
+
+    if (scope.projectId !== context.projectId || scope.departmentId !== context.departmentId) {
+      return { kind: "otherContext" };
+    }
+
+    const statusCode = await getSubmissionStatusCode(supabase, submissionId);
+    return { kind: "found", statusCode, statusLabel: humanizeWorkerSubmissionStatus(statusCode) };
+  } catch {
+    return { kind: "error" };
+  }
 }
 
 export async function getWorkerDashboard(
@@ -815,7 +926,7 @@ export async function getWorkerDashboard(
     getLatestApprovedRecord(supabase, workItem.work_item_id, todayBounds),
     getApprovedQuantityInRange(supabase, workItem.work_item_id, todayBounds),
     getWorkItemCurrentStatus(supabase, workItem.work_item_id, workItem.planned_quantity),
-    getLatestSubmissionStatus(supabase, userId),
+    getLatestSubmissionStatus(supabase, userId, { projectId: ctx.projectId, departmentId: ctx.departmentId }),
   ]);
 
   return {
@@ -1015,6 +1126,13 @@ export type QueueItem = {
    * in ProgressData.task) — stays readable in History even if that task
    * is later deactivated or renamed. Null when no task was picked. */
   taskLabel: string | null;
+  /** True when the work item has no planned quantity — its submitted %
+   * is that day's additional progress (see toApprovedTotalData). */
+  percentageMode: boolean;
+  /** The work item's current approved total % (getWorkItemCurrentStatus)
+   * where the caller already loaded it (the Contractor review queue);
+   * null otherwise. Lets the review card show previous → new. */
+  approvedProgress: number | null;
 };
 
 type SubmissionRow = {
@@ -1069,7 +1187,9 @@ function toQueueItem(
    * knows the work item's planned_quantity and history. Omitted by
    * listForemanQueue, which keeps the original per-submission reading
    * since a Foreman card is about reviewing one specific report. */
-  cumulativeIsCompleted?: boolean
+  cumulativeIsCompleted?: boolean,
+  /** The work item's current approved total % (see QueueItem). */
+  approvedProgress: number | null = null
 ): QueueItem {
   const structured = row.structured_output;
   const worker = one(row.users);
@@ -1124,6 +1244,8 @@ function toQueueItem(
     scheduledValue,
     estimatedAmount: calculateEstimatedAmount(scheduledValue, displayedProgress),
     isCompleted: cumulativeIsCompleted ?? isWorkItemComplete(displayedProgress),
+    percentageMode: !((one(row.work_items)?.planned_quantity ?? 0) > 0),
+    approvedProgress,
   };
 }
 
@@ -1144,9 +1266,13 @@ export async function listForemanQueue(
   foremanUserId: string,
   /** Optional project context (Subcontractor with roles on several
    * projects); omitted = first role, the unchanged behavior. */
-  projectId?: string
+  projectId?: string,
+  /** Optional department within that project, for a role holder with
+   * several departments there — like projectId, only ever selects among
+   * the caller's own Active roles. Omitted = the project's first role. */
+  departmentId?: string
 ): Promise<QueueItem[]> {
-  const ctx = await getUserContext(supabase, foremanUserId, projectId ? { projectId } : undefined);
+  const ctx = await getUserContext(supabase, foremanUserId, projectId ? { projectId, departmentId } : undefined);
 
   const { data: submissions, error } = await supabase
     .from("extraction_submissions")
@@ -1677,10 +1803,42 @@ async function listWorkItemAssignmentsForDepartment(
   });
 }
 
+export type InactiveWorkItemView = {
+  workItemId: string;
+  code: string;
+  description: string;
+};
+
+/** Deactivated work items in a department (status set away from
+ * 'Active' — see setWorkItemActive) — listed separately so Work Item
+ * Management can show and reactivate them; every other view keeps
+ * reading Active work items only (listWorkItemsForDepartment). */
+async function listInactiveWorkItemsForDepartment(
+  supabase: SupabaseClient,
+  departmentId: string
+): Promise<InactiveWorkItemView[]> {
+  const { data, error } = await supabase
+    .from("work_items")
+    .select("work_item_id, line_item_no, description_of_work")
+    .eq("department_id", departmentId)
+    .neq("status", "Active")
+    .order("line_item_no", { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to load inactive work items: ${error.message}`);
+  }
+  return (data ?? []).map((w) => ({
+    workItemId: w.work_item_id as string,
+    code: w.line_item_no as string,
+    description: w.description_of_work as string,
+  }));
+}
+
 export type ForemanAssignmentBoard = {
   departmentName: string;
   workers: DepartmentWorker[];
   workItems: WorkItemOption[];
+  inactiveWorkItems: InactiveWorkItemView[];
   assignments: WorkItemAssignmentView[];
 };
 
@@ -1692,18 +1850,23 @@ export async function getForemanAssignmentBoard(
   supabase: SupabaseClient,
   subcontractorUserId: string,
   /** Optional project context (see listForemanQueue). */
-  projectId?: string
+  projectId?: string,
+  /** Optional department within that project, for a role holder with
+   * several departments there — like projectId, only ever selects among
+   * the caller's own Active roles. Omitted = the project's first role. */
+  departmentId?: string
 ): Promise<ForemanAssignmentBoard> {
-  const ctx = await getUserContext(supabase, subcontractorUserId, projectId ? { projectId } : undefined);
+  const ctx = await getUserContext(supabase, subcontractorUserId, projectId ? { projectId, departmentId } : undefined);
   assertRole(ctx.role, ["FOREMAN"]);
 
-  const [workers, workItems, assignments] = await Promise.all([
+  const [workers, workItems, inactiveWorkItems, assignments] = await Promise.all([
     listDepartmentWorkers(supabase, ctx.departmentId, ctx.projectId),
     listWorkItemsForDepartment(supabase, ctx.departmentId),
+    listInactiveWorkItemsForDepartment(supabase, ctx.departmentId),
     listWorkItemAssignmentsForDepartment(supabase, ctx.departmentId),
   ]);
 
-  return { departmentName: ctx.departmentName, workers, workItems, assignments };
+  return { departmentName: ctx.departmentName, workers, workItems, inactiveWorkItems, assignments };
 }
 
 /**
@@ -1743,13 +1906,14 @@ export async function getDelegatedAssignmentBoard(
     throw new Error(`Department not found: ${error?.message ?? params.departmentId}`);
   }
 
-  const [workers, workItems, assignments] = await Promise.all([
+  const [workers, workItems, inactiveWorkItems, assignments] = await Promise.all([
     listDepartmentWorkers(supabase, params.departmentId, params.projectId),
     listWorkItemsForDepartment(supabase, params.departmentId),
+    listInactiveWorkItemsForDepartment(supabase, params.departmentId),
     listWorkItemAssignmentsForDepartment(supabase, params.departmentId),
   ]);
 
-  return { departmentName: deptRow.department_name as string, workers, workItems, assignments };
+  return { departmentName: deptRow.department_name as string, workers, workItems, inactiveWorkItems, assignments };
 }
 
 /**
@@ -1857,6 +2021,9 @@ export async function assignWorkItemToWorker(
 ): Promise<void> {
   const workItem = await getWorkItemById(supabase, params.workItemId);
   await assertCanManageAssignments(supabase, params.subcontractorUserId, workItem);
+  if (workItem.status !== "Active") {
+    throw new Error("This work item is inactive — activate it before assigning workers.");
+  }
 
   // Resolve the worker under the work item's own project — a worker with
   // Active roles on more than one project would otherwise be checked
@@ -2021,6 +2188,35 @@ async function assertCanManageWorkItemTasks(
     throw new Error(
       `${ctx.role} ${ctx.userId} is not authorized to configure tasks for work item ${workItem.work_item_id}`
     );
+  }
+}
+
+/**
+ * Activates or deactivates a work item — a soft status flip on the same
+ * row ('Active' <-> 'Removed', the deactivated value every status field
+ * in this schema uses), never a delete and never a new row. Deactivating
+ * takes the work item out of every view that reads Active work items
+ * (Worker lists, dashboards, progress roll-ups) while its submissions,
+ * approvals, tasks and worker assignments stay untouched — so
+ * reactivating restores it exactly as it was. Same "configure this work
+ * item" authorization as tasks and Planned Quantity
+ * (assertCanManageWorkItemTasks): Admin, the work item's own
+ * Subcontractor/Contractor, or a delegated WORK_ITEM_MANAGEMENT
+ * Contractor.
+ */
+export async function setWorkItemActive(
+  supabase: SupabaseClient,
+  params: { actorUserId: string; workItemId: string; active: boolean }
+): Promise<void> {
+  const workItem = await getWorkItemById(supabase, params.workItemId);
+  await assertCanManageWorkItemTasks(supabase, params.actorUserId, workItem);
+
+  const { error } = await supabase
+    .from("work_items")
+    .update({ status: params.active ? "Active" : "Removed" })
+    .eq("work_item_id", params.workItemId);
+  if (error) {
+    throw new Error(`Failed to ${params.active ? "activate" : "deactivate"} work item: ${error.message}`);
   }
 }
 
@@ -2229,7 +2425,7 @@ export async function getCurrentWorkItemRecords(
       const winner = pool[0];
       const plannedQuantity = one(winner.row.work_items)?.planned_quantity ?? null;
       const status = await getWorkItemCurrentStatus(supabase, workItemId, plannedQuantity);
-      return toQueueItem(winner.row, winner.validation, status.isCompleted);
+      return toQueueItem(winner.row, winner.validation, status.isCompleted, status.progressPercentage);
     })
   );
 
@@ -2248,9 +2444,13 @@ export async function listSupervisorQueue(
    * than one project (see app/workflow/supervisor/page.tsx ?projectId=);
    * omitted = first role, the unchanged single-project behavior. Only
    * ever selects among the caller's own Active roles. */
-  projectId?: string
+  projectId?: string,
+  /** Optional department within that project, for a role holder with
+   * several departments there — like projectId, only ever selects among
+   * the caller's own Active roles. Omitted = the project's first role. */
+  departmentId?: string
 ): Promise<QueueItem[]> {
-  const ctx = await getUserContext(supabase, supervisorUserId, projectId ? { projectId } : undefined);
+  const ctx = await getUserContext(supabase, supervisorUserId, projectId ? { projectId, departmentId } : undefined);
   return getCurrentWorkItemRecords(supabase, ctx.departmentId);
 }
 
@@ -2332,7 +2532,7 @@ export async function supervisorEditSubmission(
   // stale pre-correction value displayed as Today's/MTD Progress.
   const { data: unified, error: unifiedFetchError } = await supabase
     .from("unified_records")
-    .select("unified_record_id, status, accepted_data")
+    .select("unified_record_id, status, accepted_data, accepted_at")
     .eq("user_validation_id", params.validationId)
     .maybeSingle();
 
@@ -2346,12 +2546,34 @@ export async function supervisorEditSubmission(
     const previousApprovedProgress =
       (unified.accepted_data as ProgressData | null)?.progress_percentage ?? null;
 
+    // Percentage mode: the corrected value is that day's %, so this
+    // record's total = the approved total just before it + the corrected
+    // day's % (same rule as supervisorApprove). Quantity mode unchanged.
+    let totalBefore: number | null = null;
+    if (!(workItemForEdit.planned_quantity !== null && workItemForEdit.planned_quantity > 0) && unified.accepted_at) {
+      const { data: before, error: beforeError } = await supabase
+        .from("unified_records")
+        .select("accepted_data")
+        .eq("work_item_id", submissionForEdit.work_item_id)
+        .eq("status", "APPROVED")
+        .neq("unified_record_id", unified.unified_record_id)
+        .lt("accepted_at", unified.accepted_at)
+        .order("accepted_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (beforeError) {
+        throw new Error(`Failed to load approved progress: ${beforeError.message}`);
+      }
+      totalBefore = (before?.accepted_data as ProgressData | null)?.progress_percentage ?? null;
+    }
+    const approvedData = toApprovedTotalData(workItemForEdit.planned_quantity, correctedData, totalBefore) ?? correctedData;
+
     const { error: updateUnifiedError } = await supabase
       .from("unified_records")
       .update({
-        accepted_data: correctedData,
-        accepted_quantity: correctedData.completed_quantity,
-        accepted_unit: correctedData.unit,
+        accepted_data: approvedData,
+        accepted_quantity: approvedData.completed_quantity,
+        accepted_unit: approvedData.unit,
       })
       .eq("unified_record_id", unified.unified_record_id);
 
@@ -2365,7 +2587,7 @@ export async function supervisorEditSubmission(
     // the worker must be notified a second time, per the spec's exact
     // "later changed from 70% to 80%" scenario. Skipped entirely when
     // the correction doesn't actually move the approved percentage.
-    if (previousApprovedProgress !== correctedData.progress_percentage) {
+    if (previousApprovedProgress !== approvedData.progress_percentage) {
       const [reviewerRole, reviewerName, notifCtx] = await Promise.all([
         resolveActorRole(supabase, params.supervisorUserId),
         getUserDisplayName(supabase, params.supervisorUserId),
@@ -2390,7 +2612,7 @@ export async function supervisorEditSubmission(
         submittedProgress:
           (validation.original_data as ProgressData | null)?.progress_percentage ?? null,
         previousApprovedProgress,
-        newApprovedProgress: correctedData.progress_percentage,
+        newApprovedProgress: approvedData.progress_percentage,
         reviewerUserId: params.supervisorUserId,
         reviewerRole,
         reviewerName,
@@ -2457,16 +2679,27 @@ export async function supervisorApprove(
     throw new Error("This submission is already approved.");
   }
 
-  const acceptedData =
+  const reviewedData =
     (validation.corrected_data as ProgressData | null) ??
     (validation.original_data as ProgressData | null);
 
   // Captured before this approval writes anything, so the notification
-  // can report the true "previous approved progress" (e.g. 70% -> 80%)
-  // rather than a value already overwritten by this same call.
+  // can report the true "previous approved progress" (e.g. 95% -> 97%)
+  // rather than a value already overwritten by this same call. (A
+  // rolled-back earlier approval of this same submission isn't APPROVED,
+  // so re-approval builds on the total before it.)
   const previousApproved = await getLatestApprovedRecord(supabase, submission.work_item_id);
   const previousApprovedProgress =
     (previousApproved?.accepted_data as ProgressData | null)?.progress_percentage ?? null;
+
+  // Percentage mode: the submission is that day's additional %, the
+  // approved record stores the new cumulative total (toApprovedTotalData).
+  const workItemForApproval = await getWorkItemById(supabase, submission.work_item_id);
+  const acceptedData = toApprovedTotalData(
+    workItemForApproval.planned_quantity,
+    reviewedData,
+    previousApprovedProgress
+  );
 
   const now = new Date().toISOString();
 
@@ -2678,9 +2911,13 @@ export async function getTodaysProgress(
    * than one project (see app/workflow/supervisor/page.tsx ?projectId=);
    * omitted = first role, the unchanged single-project behavior. Only
    * ever selects among the caller's own Active roles. */
-  projectId?: string
+  projectId?: string,
+  /** Optional department within that project, for a role holder with
+   * several departments there — like projectId, only ever selects among
+   * the caller's own Active roles. Omitted = the project's first role. */
+  departmentId?: string
 ): Promise<QueueItem[]> {
-  const ctx = await getUserContext(supabase, supervisorUserId, projectId ? { projectId } : undefined);
+  const ctx = await getUserContext(supabase, supervisorUserId, projectId ? { projectId, departmentId } : undefined);
   const today = todayISODate();
   return listSubmissionsForDateRange(supabase, ctx.departmentId, { from: today, to: today });
 }
@@ -2693,9 +2930,13 @@ export async function getYesterdaysProgress(
    * than one project (see app/workflow/supervisor/page.tsx ?projectId=);
    * omitted = first role, the unchanged single-project behavior. Only
    * ever selects among the caller's own Active roles. */
-  projectId?: string
+  projectId?: string,
+  /** Optional department within that project, for a role holder with
+   * several departments there — like projectId, only ever selects among
+   * the caller's own Active roles. Omitted = the project's first role. */
+  departmentId?: string
 ): Promise<QueueItem[]> {
-  const ctx = await getUserContext(supabase, supervisorUserId, projectId ? { projectId } : undefined);
+  const ctx = await getUserContext(supabase, supervisorUserId, projectId ? { projectId, departmentId } : undefined);
   const yesterday = isoDateOffset(-1);
   return listSubmissionsForDateRange(supabase, ctx.departmentId, {
     from: yesterday,
@@ -2718,9 +2959,13 @@ export async function getSubmissionHistory(
    * than one project (see app/workflow/supervisor/page.tsx ?projectId=);
    * omitted = first role, the unchanged single-project behavior. Only
    * ever selects among the caller's own Active roles. */
-  projectId?: string
+  projectId?: string,
+  /** Optional department within that project, for a role holder with
+   * several departments there — like projectId, only ever selects among
+   * the caller's own Active roles. Omitted = the project's first role. */
+  departmentId?: string
 ): Promise<QueueItem[]> {
-  const ctx = await getUserContext(supabase, supervisorUserId, projectId ? { projectId } : undefined);
+  const ctx = await getUserContext(supabase, supervisorUserId, projectId ? { projectId, departmentId } : undefined);
   return listSubmissionsForDateRange(supabase, ctx.departmentId, bounds);
 }
 
@@ -2788,8 +3033,12 @@ export async function getWorkerSubmissionHistory(
    * the selected context. Omitted = every submission (unchanged). */
   scope?: { projectId: string; departmentId: string }
 ): Promise<QueueItem[]> {
-  const ctx = await getUserContext(supabase, workerUserId);
-  assertRole(ctx.role, ["WORKER"]);
+  // Role check against the selected project/department's role row (or,
+  // unscoped, any Worker role the user holds) — not whichever role row
+  // happens to come first for a user with roles on several projects.
+  const ctx = await getUserContext(supabase, workerUserId, scope);
+  const holdsWorkerRole = scope ? ctx.role === "WORKER" : ctx.availableProjects.some((r) => r.role === "WORKER");
+  assertRole(holdsWorkerRole ? "WORKER" : ctx.role, ["WORKER"]);
 
   let historyQuery = supabase
     .from("extraction_submissions")
@@ -2879,8 +3128,12 @@ export async function getWorkerApprovedWork(
    * the selected context. Omitted = every submission (unchanged). */
   scope?: { projectId: string; departmentId: string }
 ): Promise<WorkerApprovedItem[]> {
-  const ctx = await getUserContext(supabase, workerUserId);
-  assertRole(ctx.role, ["WORKER"]);
+  // Role check against the selected project/department's role row (or,
+  // unscoped, any Worker role the user holds) — not whichever role row
+  // happens to come first for a user with roles on several projects.
+  const ctx = await getUserContext(supabase, workerUserId, scope);
+  const holdsWorkerRole = scope ? ctx.role === "WORKER" : ctx.availableProjects.some((r) => r.role === "WORKER");
+  assertRole(holdsWorkerRole ? "WORKER" : ctx.role, ["WORKER"]);
 
   const approvedQuery = supabase
     .from("unified_records")
@@ -3016,9 +3269,13 @@ export async function getMTDProgress(
    * than one project (see app/workflow/supervisor/page.tsx ?projectId=);
    * omitted = first role, the unchanged single-project behavior. Only
    * ever selects among the caller's own Active roles. */
-  projectId?: string
+  projectId?: string,
+  /** Optional department within that project, for a role holder with
+   * several departments there — like projectId, only ever selects among
+   * the caller's own Active roles. Omitted = the project's first role. */
+  departmentId?: string
 ): Promise<WorkItemProgressView[]> {
-  const ctx = await getUserContext(supabase, supervisorUserId, projectId ? { projectId } : undefined);
+  const ctx = await getUserContext(supabase, supervisorUserId, projectId ? { projectId, departmentId } : undefined);
   return getWorkItemCumulativeList(supabase, ctx.departmentId);
 }
 
@@ -3051,9 +3308,13 @@ export async function getWorkSummary(
    * than one project (see app/workflow/supervisor/page.tsx ?projectId=);
    * omitted = first role, the unchanged single-project behavior. Only
    * ever selects among the caller's own Active roles. */
-  projectId?: string
+  projectId?: string,
+  /** Optional department within that project, for a role holder with
+   * several departments there — like projectId, only ever selects among
+   * the caller's own Active roles. Omitted = the project's first role. */
+  departmentId?: string
 ): Promise<WorkSummary> {
-  const ctx = await getUserContext(supabase, supervisorUserId, projectId ? { projectId } : undefined);
+  const ctx = await getUserContext(supabase, supervisorUserId, projectId ? { projectId, departmentId } : undefined);
   const projectCode = await getProjectCode(supabase, ctx.projectId);
   const today = todayISODate();
   const monthStart = currentMonthStartISODate();
@@ -3112,6 +3373,11 @@ export type ExecutiveSummaryWorkItem = {
    * updatesSubmitted/workItemsUpdated/approvedCount/pendingCount below
    * describe. */
   progress: number | null;
+  /** Earned value at that progress — the same calculateEstimatedAmount
+   * figure getWorkItemCumulativeList already computes (scheduled value x
+   * current progress), passed through for display; null when the work
+   * item has no scheduled value. */
+  estimatedAmount: number | null;
   statusLabel: "Completed" | "In Progress" | "Not Started";
   /** Whether this work item had at least one submission within the
    * selected period (same set workItemsUpdated counts) — lets the brief
@@ -3193,9 +3459,13 @@ export async function getExecutiveSummary(
    * than one project (see app/workflow/supervisor/page.tsx ?projectId=);
    * omitted = first role, the unchanged single-project behavior. Only
    * ever selects among the caller's own Active roles. */
-  projectId?: string
+  projectId?: string,
+  /** Optional department within that project, for a role holder with
+   * several departments there — like projectId, only ever selects among
+   * the caller's own Active roles. Omitted = the project's first role. */
+  departmentId?: string
 ): Promise<ExecutiveSummary> {
-  const ctx = await getUserContext(supabase, callerUserId, projectId ? { projectId } : undefined);
+  const ctx = await getUserContext(supabase, callerUserId, projectId ? { projectId, departmentId } : undefined);
   const bounds = executiveSummaryPeriodBounds(period);
 
   const [periodItems, cumulativeWorkItems] = await Promise.all([
@@ -3240,6 +3510,7 @@ export async function getExecutiveSummary(
       workItemCode: w.workItemCode,
       workItemDescription: w.workItemDescription,
       progress: w.progress,
+      estimatedAmount: w.estimatedAmount,
       statusLabel: w.isCompleted ? "Completed" : (w.progress ?? 0) > 0 ? "In Progress" : "Not Started",
       touchedInPeriod: touchedWorkItemCodes.has(w.workItemCode),
     }));

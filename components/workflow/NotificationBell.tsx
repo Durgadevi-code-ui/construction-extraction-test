@@ -156,8 +156,14 @@ function writeToasted(userId: string, ids: Set<string>) {
 export default function NotificationBell({
   userId,
   showToasts = false,
+  placement = "header",
 }: {
   userId: string;
+  /** "sidebar": the bell sits next to the Agentic Atoms brand in the dark
+   * sidebar (DashboardShell) — light icon, and the panel opens to the
+   * right of it (pinned under the top bar on small screens) instead of
+   * right-aligned, which would run off the left edge there. */
+  placement?: "header" | "sidebar";
   /** Show a small toast for newly arrived unread notifications (once
    * each), with an Open button to the related record. Opt-in, so every
    * existing caller keeps its current behavior. */
@@ -349,7 +355,12 @@ export default function NotificationBell({
       <button
         onClick={() => setOpen((v) => !v)}
         aria-label="Notifications"
-        className="relative rounded-full p-2 text-foreground-secondary transition-colors duration-150 hover:bg-surface-hover hover:text-foreground"
+        aria-expanded={open}
+        className={`relative rounded-full p-2 transition-colors duration-150 ${
+          placement === "sidebar"
+            ? "text-white/80 hover:bg-white/10 hover:text-white"
+            : "text-foreground-secondary hover:bg-surface-hover hover:text-foreground"
+        }`}
       >
         <Bell className="h-5 w-5" strokeWidth={1.75} />
         {unreadCount > 0 && (
@@ -360,7 +371,13 @@ export default function NotificationBell({
       </button>
 
       {open && (
-        <div className="absolute right-0 z-20 mt-2 w-80 max-w-[90vw] animate-dropdown-in rounded-lg border border-line bg-surface shadow-lg">
+        <div
+          className={`z-30 animate-dropdown-in rounded-lg border border-line bg-surface text-foreground shadow-lg ${
+            placement === "sidebar"
+              ? "fixed left-4 right-4 top-16 sm:absolute sm:left-0 sm:right-auto sm:top-auto sm:mt-2 sm:w-80"
+              : "absolute right-0 mt-2 w-80 max-w-[90vw]"
+          }`}
+        >
           <div className="flex items-center justify-between border-b border-line px-3 py-2">
             <h3 className="text-sm font-semibold text-foreground">Notifications</h3>
             {unreadCount > 0 && (

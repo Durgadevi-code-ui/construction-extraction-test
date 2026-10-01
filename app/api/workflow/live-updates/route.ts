@@ -64,12 +64,18 @@ export async function GET(request: NextRequest) {
   try {
     // Optional ?projectId= — the reviewer page's current project context;
     // only ever selects among the caller's own Active roles.
+    // ?departmentId= narrows within that project the same way (a user
+    // holding several departments there).
     const projectId = request.nextUrl.searchParams.get("projectId") || undefined;
-    const ctx = await getUserContext(supabase, currentUser.userId, projectId ? { projectId } : undefined);
+    const departmentId = request.nextUrl.searchParams.get("departmentId") || undefined;
+    const ctx = await getUserContext(supabase, currentUser.userId, projectId ? { projectId, departmentId } : undefined);
     const updates =
       ctx.role === "WORKER"
-        ? await listLiveUpdatesForWorker(supabase, currentUser.userId)
-        : await listLiveUpdatesForReviewer(supabase, currentUser.userId, ctx.projectId);
+        ? await listLiveUpdatesForWorker(supabase, currentUser.userId, {
+            projectId: ctx.projectId,
+            departmentId: ctx.departmentId,
+          })
+        : await listLiveUpdatesForReviewer(supabase, currentUser.userId, ctx.projectId, ctx.departmentId);
 
     return NextResponse.json({ updates });
   } catch (err) {

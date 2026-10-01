@@ -7,6 +7,7 @@ import {
   listProjectContacts,
   listDirectMessages,
   sendDirectMessage,
+  countUnreadChatMessages,
 } from "@/lib/chat";
 
 /**
@@ -41,8 +42,20 @@ export async function GET(request: NextRequest) {
   const projectId = request.nextUrl.searchParams.get("projectId");
   const peer = request.nextUrl.searchParams.get("peer");
   const wantsContacts = request.nextUrl.searchParams.get("contacts") === "1";
+  // ?unread=1[&since=<ISO>] — the Communication tab badge's count (see
+  // countUnreadChatMessages); read-only, same project resolution.
+  const wantsUnread = request.nextUrl.searchParams.get("unread") === "1";
 
   try {
+    if (wantsUnread) {
+      const unread = await countUnreadChatMessages(
+        supabase,
+        currentUser.userId,
+        projectId,
+        request.nextUrl.searchParams.get("since")
+      );
+      return NextResponse.json(unread);
+    }
     if (wantsContacts) {
       const contacts = await listProjectContacts(supabase, currentUser.userId, projectId);
       return NextResponse.json({ contacts });

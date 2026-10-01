@@ -9,6 +9,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import Card from "@/components/ui/Card";
 
+import { errorMessage, readApiJson } from "@/lib/apiClient";
 type LiveUpdateItem = {
   liveUpdateId: string;
   updateType: "PHOTO" | "VOICE";
@@ -98,10 +99,13 @@ export default function LiveUpdateFeed({
   // a re-render of an already-mounted instance.
   const [filterCode, setFilterCode] = useState<string | null>(initialFilterCode);
 
-  // The page's project context (?projectId=, set by the Contractor/Worker
-  // project switcher) — forwarded so a user with roles on several
-  // projects sees only the current project's field updates.
-  const contextProjectId = useSearchParams().get("projectId");
+  // The page's project context (?projectId=, plus ?departmentId= for a
+  // user with several departments in one project — set by the
+  // Contractor/Subcontractor/Worker switcher) — forwarded so a user with
+  // several roles sees only the current context's field updates.
+  const searchParams = useSearchParams();
+  const contextProjectId = searchParams.get("projectId");
+  const contextDepartmentId = searchParams.get("departmentId");
 
   useEffect(() => {
     let ignore = false;
@@ -116,18 +120,19 @@ export default function LiveUpdateFeed({
       try {
         const res = await fetch(
           contextProjectId
-            ? `/api/workflow/live-updates?projectId=${encodeURIComponent(contextProjectId)}`
+            ? `/api/workflow/live-updates?projectId=${encodeURIComponent(contextProjectId)}${
+                contextDepartmentId ? `&departmentId=${encodeURIComponent(contextDepartmentId)}` : ""
+              }`
             : "/api/workflow/live-updates"
         );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Failed to load live updates.");
+        const data = await readApiJson<{ updates?: LiveUpdateItem[] }>(res, "Couldn't load updates.");
         if (!ignore) {
           setItems(data.updates ?? []);
           setError(null);
         }
       } catch (err) {
         if (!ignore && !background) {
-          setError(err instanceof Error ? err.message : "Failed to load live updates.");
+          setError(errorMessage(err, "Couldn't load updates."));
         }
       } finally {
         if (!ignore) setLoading(false);
@@ -140,7 +145,7 @@ export default function LiveUpdateFeed({
       ignore = true;
       clearInterval(interval);
     };
-  }, [contextProjectId]);
+  }, [contextProjectId, contextDepartmentId]);
 
   const { todayItems, historyGroups, scopedCount } = useMemo(() => {
     const todayKey = localDayKey(new Date());

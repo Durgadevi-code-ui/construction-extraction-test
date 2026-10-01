@@ -54,6 +54,8 @@ export type DemoRoleKey =
   | "foreman_plumbing"
   | "foreman_finishes"
   | "worker_electrical"
+  | "worker_electrical_2"
+  | "worker_electrical_3"
   | "worker_plumbing"
   | "worker_hvac"
   | "worker_concrete"
@@ -70,6 +72,10 @@ const DEMO_ROLE_ENV_VARS: Record<DemoRoleKey, string> = {
   foreman_plumbing: "DEMO_USER_FOREMAN_PLUMBING_EMAIL",
   foreman_finishes: "DEMO_USER_FOREMAN_FINISHES_EMAIL",
   worker_electrical: "DEMO_USER_WORKER_ELECTRICAL_EMAIL",
+  // Additional Electrical workers — for testing one work item assigned to
+  // several workers (each is its own real, separately linked account).
+  worker_electrical_2: "DEMO_USER_WORKER_ELECTRICAL_2_EMAIL",
+  worker_electrical_3: "DEMO_USER_WORKER_ELECTRICAL_3_EMAIL",
   worker_plumbing: "DEMO_USER_WORKER_PLUMBING_EMAIL",
   worker_hvac: "DEMO_USER_WORKER_HVAC_EMAIL",
   worker_concrete: "DEMO_USER_WORKER_CONCRETE_EMAIL",
@@ -90,6 +96,8 @@ const DEMO_ROLE_LABELS: Record<DemoRoleKey, string> = {
   foreman_plumbing: "Subcontractor — Plumbing",
   foreman_finishes: "Subcontractor — Finishes",
   worker_electrical: "Worker — Electrical",
+  worker_electrical_2: "Worker — Electrical 2",
+  worker_electrical_3: "Worker — Electrical 3",
   worker_plumbing: "Worker — Plumbing",
   worker_hvac: "Worker — HVAC",
   worker_concrete: "Worker — Concrete",
@@ -114,6 +122,8 @@ const DEMO_ROLE_GROUPS: Record<DemoRoleKey, string> = {
   foreman_plumbing: "Subcontractor",
   foreman_finishes: "Subcontractor",
   worker_electrical: "Worker",
+  worker_electrical_2: "Worker",
+  worker_electrical_3: "Worker",
   worker_plumbing: "Worker",
   worker_hvac: "Worker",
   worker_concrete: "Worker",
@@ -134,6 +144,8 @@ const DEMO_ROLE_ORDER: DemoRoleKey[] = [
   "foreman_plumbing",
   "foreman_finishes",
   "worker_electrical",
+  "worker_electrical_2",
+  "worker_electrical_3",
   "worker_plumbing",
   "worker_hvac",
   "worker_concrete",

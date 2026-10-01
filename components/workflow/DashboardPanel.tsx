@@ -1,14 +1,16 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import ProgressBar from "@/components/workflow/charts/ProgressBar";
 import ProgressRing from "@/components/workflow/charts/ProgressRing";
-import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
-import { formatDateUS, formatPercent } from "@/lib/format";
-import { progressColorClass } from "@/lib/progressColor";
+import ProgressValue from "@/components/workflow/charts/ProgressValue";
+import WorkItemList, { workItemStatus } from "@/components/workflow/WorkItemList";
+import { DashboardKpiCards, type DashboardKpiValues, type KpiCardActions } from "@/components/workflow/KpiCards";
+import { formatDateUS, formatMoney } from "@/lib/format";
 import Card from "@/components/ui/Card";
-import Badge, { type BadgeVariant } from "@/components/ui/Badge";
 import Input, { Select } from "@/components/ui/Input";
+import ErrorNotice from "@/components/ui/ErrorNotice";
+import { errorMessage, readApiJson } from "@/lib/apiClient";
 import { Search } from "lucide-react";
 
 type DashboardScopeOption = { projectId: string; projectName: string };
@@ -75,17 +77,6 @@ const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: "PENDING", label: "Pending" },
 ];
 
-function money(v: number): string {
-  return `$${v.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
-}
-
-function statusBadge(item: DashboardWorkItemRow): { label: string; variant: BadgeVariant } {
-  if (item.isCompleted) return { label: "Completed", variant: "success" };
-  if (item.isStuck) return { label: "Stuck", variant: "error" };
-  if (item.progressPercentage === null) return { label: "Pending", variant: "neutral" };
-  return { label: "In Progress", variant: "warning" };
-}
-
 /**
  * Contractor Dashboard — "show the maximum important information in
  * the shortest possible time" (see project design brief). Deliberately
@@ -100,7 +91,7 @@ function statusBadge(item: DashboardWorkItemRow): { label: string; variant: Badg
  * which only fix floating-point display artifacts, never the
  * underlying value).
  */
-export type DashboardSection = "overview" | "departments" | "workItems";
+export type DashboardSection = "overview" | "departments" | "workItems" | "kpis";
 const ALL_SECTIONS: DashboardSection[] = ["overview", "departments", "workItems"];
 
 export default function DashboardPanel({
@@ -112,6 +103,12 @@ export default function DashboardPanel({
   animateProgress = false,
   initialProjectId,
   lockProjectId,
+  showScope = true,
+  pendingReviews = 0,
+  onDepartmentChange,
+  onKpisChange,
+  kpiActions,
+  departmentFilterOnly = false,
 }: {
   userId: string;
   initialData: DashboardData;
@@ -123,7 +120,7 @@ export default function DashboardPanel({
    * once and just narrow `sections` per active tab — same fetch, same
    * filters, same calculations, only which part is visible changes. */
   sections?: DashboardSection[];
-  /** When true, adds a "View Live Updates" action per Work Items row
+  /** When true, adds a "View Updates" action per Work Items row
    * that expands an IMAGE-ONLY LiveUpdateFeed inline, directly under
    * that row — never a navigation to the general Live Updates tab (see
    * LiveUpdateFeed's `mode` prop doc). Omitted entirely (no extra
@@ -145,6 +142,28 @@ export default function DashboardPanel({
    * show or request another project's data. Department/status/date
    * filters still work within it. */
   lockProjectId?: string;
+  /** Show the "Current Project / Department / Status" line above the
+   * filters. The Contractor Dashboard turns it off — its header already
+   * names the project. */
+  showScope?: boolean;
+  /** Pending Review count for the "kpis" section (the caller's own review
+   * queue — not part of this panel's dashboard data). */
+  pendingReviews?: number;
+  /** Reports the Department filter's current value ("" = all in scope)
+   * so a sibling (the Contractor's Overall Health summary) can follow
+   * the same scope. */
+  onDepartmentChange?: (departmentId: string) => void;
+  /** Reports the values the KPI row is showing (same filters, same
+   * numbers) whenever they change — e.g. for the Contractor's Summary
+   * tab to describe them in words. */
+  onKpisChange?: (kpis: DashboardKpiValues) => void;
+  /** Show only the Department filter (plus Project when not locked) —
+   * the Contractor Dashboard view. Status/From/To stay at their
+   * defaults (All / no dates) while hidden. Off by default, so the
+   * Work Items tab and the standalone Dashboard keep every filter. */
+  departmentFilterOnly?: boolean;
+  /** Click-through destinations for the "kpis" cards (see KpiCardActions). */
+  kpiActions?: KpiCardActions;
 }) {
   const [query, setQuery] = useState("");
   // Default scope = the caller's own data, not "All" (see design
@@ -173,10 +192,8 @@ export default function DashboardPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAllWorkItems, setShowAllWorkItems] = useState(false);
-  // Which work item's inline image-only Live Updates panel is expanded
-  // (see showLiveUpdatesColumn) — null when none is. Toggled, not
-  // routed: clicking the same row's button again collapses it.
-  const [expandedLiveUpdatesCode, setExpandedLiveUpdatesCode] = useState<string | null>(null);
+  // Bumped by Retry to re-run the load below after a failure.
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let ignore = false;
@@ -193,11 +210,11 @@ export default function DashboardPanel({
         if (to) params.set("to", to);
 
         const res = await fetch(`/api/workflow/dashboard?${params.toString()}`);
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error ?? "Failed to load dashboard.");
+        const json = await readApiJson<DashboardData>(res, "Couldn't load the latest dashboard data.");
         if (!ignore) setData(json);
       } catch (err) {
-        if (!ignore) setError(err instanceof Error ? err.message : "Failed to load dashboard.");
+        // The previously loaded figures stay on screen under the notice.
+        if (!ignore) setError(errorMessage(err, "Couldn't load the latest dashboard data."));
       } finally {
         if (!ignore) setLoading(false);
       }
@@ -207,13 +224,31 @@ export default function DashboardPanel({
     return () => {
       ignore = true;
     };
-  }, [userId, projectId, departmentId, status, from, to]);
+  }, [userId, projectId, departmentId, status, from, to, attempt]);
+
+  useEffect(() => {
+    onDepartmentChange?.(departmentId);
+  }, [departmentId, onDepartmentChange]);
 
   const availableDepartments = data.scopeDepartments.filter(
     (d) => !projectId || d.projectId === projectId
   );
 
   const completedCount = data.workItems.filter((w) => w.isCompleted).length;
+  // Work Left is 100 − Overall Progress (one value for the KPI card and
+  // onKpisChange).
+  const workLeftPercent = Math.max(0, Math.round((100 - (data.kpis.overallProgressPercent ?? 0)) * 10) / 10);
+  const kpiRevenue = data.includeFinancials ? data.kpis.totalApprovedValue : null;
+  useEffect(() => {
+    onKpisChange?.({
+      totalWorkItems: data.kpis.totalWorkItems,
+      completedCount,
+      pendingReviews,
+      overallProgressPercent: data.kpis.overallProgressPercent ?? 0,
+      estimatedRevenue: kpiRevenue,
+      workLeftPercent,
+    });
+  }, [onKpisChange, data.kpis.totalWorkItems, completedCount, pendingReviews, data.kpis.overallProgressPercent, kpiRevenue, workLeftPercent]);
   const remainingCount = data.workItems.length - completedCount;
   const stuckCount = data.workItems.filter((w) => w.isStuck).length;
 
@@ -230,6 +265,7 @@ export default function DashboardPanel({
     <div className="space-y-6">
       {/* Level 1 — who/what this dashboard is scoped to, in plain
           words, before any number. */}
+      {showScope && (
       <Card className="text-sm flex flex-wrap items-center gap-x-6 gap-y-1">
         <p>
           <span className="text-foreground-secondary">Current Project: </span>
@@ -258,6 +294,7 @@ export default function DashboardPanel({
           </span>
         </p>
       </Card>
+      )}
 
       {/* Always visible — filtering options must be immediately visible,
           not hidden behind a click-to-expand dropdown. */}
@@ -294,6 +331,8 @@ export default function DashboardPanel({
               ))}
             </Select>
           </div>
+          {!departmentFilterOnly && (
+          <>
           <div>
             <label className="block text-xs font-medium text-foreground-secondary mb-1">Status</label>
             <Select value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
@@ -335,6 +374,8 @@ export default function DashboardPanel({
             />
             {to && <p className="text-[11px] text-foreground-muted mt-0.5">{formatDateUS(to)}</p>}
           </div>
+          </>
+          )}
         </div>
         {((projectId && !lockProjectId) || departmentId || status !== "ALL" || from || to) && (
           <button
@@ -352,11 +393,25 @@ export default function DashboardPanel({
         )}
       </div>
 
-      {error && (
-        <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
-      )}
+      {error && !loading && <ErrorNotice message={error} onRetry={() => setAttempt((n) => n + 1)} />}
 
       <div className={loading ? "opacity-60 pointer-events-none transition-opacity" : "transition-opacity"}>
+        {sections.includes("kpis") && (
+          // The same KPI row as the Subcontractor Dashboard (KpiCards),
+          // from this panel's own filtered data — so the filters above
+          // drive it. Work Left is 100 − Overall Progress, as there.
+          <DashboardKpiCards
+            totalWorkItems={data.kpis.totalWorkItems}
+            completedCount={completedCount}
+            pendingReviews={pendingReviews}
+            overallProgressPercent={data.kpis.overallProgressPercent ?? 0}
+            estimatedRevenue={data.includeFinancials ? data.kpis.totalApprovedValue : null}
+            revenueHint="Estimated value of the work in scope at its current approved progress"
+            workLeftPercent={workLeftPercent}
+            actions={kpiActions}
+          />
+        )}
+
         {sections.includes("overview") && (
           <>
             {/* Level 1 — overall result, the one number that matters most. */}
@@ -388,19 +443,19 @@ export default function DashboardPanel({
                 <div className="grid grid-cols-3 gap-3 text-center">
                   <div>
                     <p className="text-lg font-bold text-foreground tabular-nums">
-                      {data.kpis.totalEstimatedAmount !== null ? money(data.kpis.totalEstimatedAmount) : "—"}
+                      {data.kpis.totalEstimatedAmount !== null ? formatMoney(data.kpis.totalEstimatedAmount) : "—"}
                     </p>
                     <p className="text-xs text-foreground-secondary">Estimated</p>
                   </div>
                   <div>
                     <p className="text-lg font-bold text-brand tabular-nums">
-                      {data.kpis.totalApprovedValue !== null ? money(data.kpis.totalApprovedValue) : "—"}
+                      {data.kpis.totalApprovedValue !== null ? formatMoney(data.kpis.totalApprovedValue) : "—"}
                     </p>
                     <p className="text-xs text-foreground-secondary">Approved</p>
                   </div>
                   <div>
                     <p className="text-lg font-bold text-warning tabular-nums">
-                      {data.kpis.remainingValue !== null ? money(data.kpis.remainingValue) : "—"}
+                      {data.kpis.remainingValue !== null ? formatMoney(data.kpis.remainingValue) : "—"}
                     </p>
                     <p className="text-xs text-foreground-secondary">Remaining</p>
                   </div>
@@ -422,17 +477,38 @@ export default function DashboardPanel({
               <div className="space-y-3">
                 {data.departments.map((d) => (
                   <div key={d.departmentId} className="text-sm">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-foreground-secondary">{d.departmentName}</span>
-                      <span className="text-xs text-foreground-secondary tabular-nums">
-                        {formatPercent(d.overallProgressPercent)}
-                        {d.stuckCount > 0 ? ` · ${d.stuckCount} needs attention` : ""}
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mb-1.5">
+                      <span className="text-foreground-secondary">
+                        {d.departmentName}
+                        {d.stuckCount > 0 && (
+                          <span className="text-xs text-error"> · {d.stuckCount} needs attention</span>
+                        )}
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        {/* Earned value (totalApprovedValue) at this progress,
+                            of the department's scheduled value — both already
+                            computed by lib/dashboard.ts. */}
+                        <ProgressValue
+                          percent={d.overallProgressPercent}
+                          amount={data.includeFinancials ? d.totalApprovedValue : null}
+                        />
+                        {data.includeFinancials &&
+                          d.totalApprovedValue !== null &&
+                          d.totalApprovedValue !== undefined &&
+                          d.totalEstimatedAmount !== null &&
+                          d.totalEstimatedAmount !== undefined && (
+                            <span className="text-xs text-foreground-secondary tabular-nums">
+                              of {formatMoney(d.totalEstimatedAmount)}
+                            </span>
+                          )}
                       </span>
                     </div>
+                    {/* One color rule everywhere (lib/progressColor.ts) — a
+                        stuck item is flagged in the text above, it no longer
+                        overrides the bar color. */}
                     <ProgressBar
                       percent={d.overallProgressPercent}
                       tooltip={`${d.departmentName}: ${d.completedCount} completed, ${d.pendingCount} pending, ${d.stuckCount} stuck (of ${d.totalWorkItems})`}
-                      colorClass={d.stuckCount > 0 ? "bg-warning" : progressColorClass(d.overallProgressPercent, "bg")}
                     />
                   </div>
                 ))}
@@ -472,80 +548,22 @@ export default function DashboardPanel({
             <p className="text-sm text-foreground-muted px-5 py-4">No work items match “{query.trim()}”.</p>
           ) : (
             <>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-surface-soft text-[11px] uppercase tracking-wide text-foreground-muted">
-                    <tr>
-                      <th className="text-left px-5 py-2.5 font-medium">Work Item</th>
-                      <th className="text-left px-5 py-2.5 font-medium">Progress</th>
-                      <th className="text-left px-5 py-2.5 font-medium">Status</th>
-                      {showLiveUpdatesColumn && (
-                        <th className="text-left px-5 py-2.5 font-medium">Live Updates</th>
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-line">
-                    {visibleWorkItems.map((item) => {
-                      const badge = statusBadge(item);
-                      const expanded = expandedLiveUpdatesCode === item.code;
-                      return (
-                        <Fragment key={item.workItemId}>
-                          <tr className="min-h-[46px] transition-colors duration-150 hover:bg-surface-hover">
-                            <td className="px-5 py-3">
-                              <span className="text-foreground-secondary">{item.code}</span> {item.description}
-                              {data.scopeDepartments.length > 1 && !departmentId && (
-                                <span className="text-foreground-muted text-xs"> · {item.departmentName}</span>
-                              )}
-                            </td>
-                            <td className="px-5 py-3 w-40">
-                              <div className="flex items-center gap-2">
-                                <div className="w-24">
-                                  <ProgressBar percent={item.progressPercentage} />
-                                </div>
-                                <span className="text-xs text-foreground-secondary whitespace-nowrap tabular-nums">
-                                  {formatPercent(item.progressPercentage)}
-                                </span>
-                              </div>
-                            </td>
-                            <td className="px-5 py-3">
-                              <Badge variant={badge.variant}>{badge.label}</Badge>
-                            </td>
-                            {showLiveUpdatesColumn && (
-                              <td className="px-5 py-3">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setExpandedLiveUpdatesCode((prev) => (prev === item.code ? null : item.code))
-                                  }
-                                  className="rounded-md border border-line bg-surface-soft px-2.5 py-1 text-xs font-medium text-foreground-secondary transition-colors duration-150 hover:border-brand-border hover:bg-brand-soft whitespace-nowrap"
-                                >
-                                  {expanded ? "Hide Live Updates" : "View Live Updates"}
-                                </button>
-                              </td>
-                            )}
-                          </tr>
-                          {/* Displays directly under the row it belongs to —
-                              never a navigation to the general Live Updates
-                              tab. Image-only (mode="imageOnly"), scoped to
-                              exactly this work item via initialFilterCode;
-                              the underlying feed is still fetched
-                              server-scoped to this reviewer's own
-                              project/department (see LiveUpdateFeed /
-                              /api/workflow/live-updates), so this can never
-                              show another work item's or project's images. */}
-                          {showLiveUpdatesColumn && expanded && (
-                            <tr>
-                              <td colSpan={4} className="px-5 py-4 bg-surface-soft">
-                                <LiveUpdateFeed mode="imageOnly" initialFilterCode={item.code} />
-                              </td>
-                            </tr>
-                          )}
-                        </Fragment>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              {/* Shared Work Items list (same layout as the Subcontractor's
+                  Work Item Management) — read-only here: no management
+                  actions, just the per-row View Updates button. */}
+              <WorkItemList
+                showLiveUpdates={showLiveUpdatesColumn}
+                rows={visibleWorkItems.map((item) => ({
+                  workItemId: item.workItemId,
+                  code: item.code,
+                  description: item.description,
+                  departmentName: data.scopeDepartments.length > 1 && !departmentId ? item.departmentName : null,
+                  progressPercentage: item.progressPercentage,
+                  // Earned value at this progress (lib/dashboard.ts estimatedAmount).
+                  earnedAmount: data.includeFinancials ? item.estimatedAmount : null,
+                  status: workItemStatus(item),
+                }))}
+              />
               {!needle && data.workItems.length > 8 && (
                 <button
                   onClick={() => setShowAllWorkItems((v) => !v)}

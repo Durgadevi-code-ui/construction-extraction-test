@@ -30,7 +30,10 @@ export async function POST(request: NextRequest) {
     // projects) — only selects among the caller's own Active roles; the
     // role check below still applies to whichever role that resolves to.
     const projectId: string | undefined = typeof body?.projectId === "string" && body.projectId ? body.projectId : undefined;
-    const ctx = await getUserContext(supabase, currentUser.userId, projectId ? { projectId } : undefined);
+    // departmentId narrows within that project the same way.
+    const departmentId: string | undefined =
+      typeof body?.departmentId === "string" && body.departmentId ? body.departmentId : undefined;
+    const ctx = await getUserContext(supabase, currentUser.userId, projectId ? { projectId, departmentId } : undefined);
     if (![...CONTRACTOR_ROLES, "FOREMAN"].includes(ctx.role)) {
       return NextResponse.json({ error: "Not authorized." }, { status: 403 });
     }
@@ -40,7 +43,7 @@ export async function POST(request: NextRequest) {
       ? (requestedPeriod as ExecutiveSummaryPeriod)
       : "daily";
 
-    const summary = await getExecutiveSummary(supabase, currentUser.userId, period, ctx.projectId);
+    const summary = await getExecutiveSummary(supabase, currentUser.userId, period, ctx.projectId, ctx.departmentId);
     return NextResponse.json({ summary });
   } catch (err) {
     console.error("Executive summary failed:", err);

@@ -99,7 +99,9 @@ export function resolveNotificationTarget(
   }
 ): { href: string; label: string } | null {
   const projectQuery = focus?.projectId ? `&projectId=${focus.projectId}` : "";
-  const workerContextQuery = `${projectQuery}${focus?.departmentId ? `&departmentId=${focus.departmentId}` : ""}`;
+  // The notification's own project + department — every role's page selects
+  // among the recipient's own roles with these (see getUserContext).
+  const contextQuery = `${projectQuery}${focus?.departmentId ? `&departmentId=${focus.departmentId}` : ""}`;
   if (recipientRole === "WORKER") {
     // Same focus mechanism as the reviewer links below: the exact
     // submission in the Worker's own History when the notification
@@ -110,13 +112,13 @@ export function resolveNotificationTarget(
     if (focus?.submissionId) {
       const item = focus.workItemCode ? `&item=${encodeURIComponent(focus.workItemCode)}` : "";
       return {
-        href: `/workflow/worker?tab=history&focus=${focus.submissionId}${item}&n=${focus.notificationId}${workerContextQuery}`,
+        href: `/workflow/worker?tab=history&focus=${focus.submissionId}${item}&n=${focus.notificationId}${contextQuery}`,
         label: "View Update",
       };
     }
     if (focus?.workItemCode) {
       return {
-        href: `/workflow/worker?tab=workItems&item=${encodeURIComponent(focus.workItemCode)}&n=${focus.notificationId}${workerContextQuery}`,
+        href: `/workflow/worker?tab=workItems&item=${encodeURIComponent(focus.workItemCode)}&n=${focus.notificationId}${contextQuery}`,
         label: "View Update",
       };
     }
@@ -136,10 +138,10 @@ export function resolveNotificationTarget(
       }&n=${focus.notificationId}`
     : "";
   if (recipientRole === "FOREMAN") {
-    return { href: `/workflow/foreman?tab=reviews${focusQuery}${projectQuery}`, label: "View Queue" };
+    return { href: `/workflow/foreman?tab=reviews${focusQuery}${contextQuery}`, label: "View Queue" };
   }
   if (CONTRACTOR_ROLES.includes(recipientRole)) {
-    return { href: `/workflow/supervisor?tab=reviews${focusQuery}${projectQuery}`, label: "View Queue" };
+    return { href: `/workflow/supervisor?tab=reviews${focusQuery}${contextQuery}`, label: "View Queue" };
   }
   return null;
 }

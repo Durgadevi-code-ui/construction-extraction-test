@@ -1,5 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { humanizeRole } from "./format";
 
 /**
  * The role/project/department context a caller acts under — shared by
@@ -132,6 +133,48 @@ export async function isAdminUser(supabase: SupabaseClient, userId: string): Pro
 /** SUPERVISOR and MANAGER are the same Contractor-level role for
  * authorization purposes everywhere in this app. */
 export const CONTRACTOR_ROLES = ["SUPERVISOR", "MANAGER"];
+
+/** The dashboard page for a role — the same mapping app/workflow/page.tsx
+ * routes a signed-in user by. Null for a role with no such page. */
+export function roleHomePath(role: string): string | null {
+  if (role === "WORKER") return "/workflow/worker";
+  if (role === "FOREMAN") return "/workflow/foreman";
+  if (CONTRACTOR_ROLES.includes(role)) return "/workflow/supervisor";
+  return null;
+}
+
+/**
+ * Options for the header Project dropdown (components/workflow/
+ * ProjectSelect) — one per project + department the user holds an
+ * Active role in (getUserContext's availableProjects), across ALL their
+ * roles, each pointing at that role's page. A user who is e.g. a
+ * Subcontractor on one project and a Contractor on another can then
+ * always switch back, instead of each page listing only its own role's
+ * single project (which hides the dropdown). Navigation only: the page
+ * reached still resolves the pair with getUserContext among the user's
+ * own roles and checks the role itself.
+ */
+export function projectSwitchOptions(
+  availableProjects: { role: string; projectId: string; projectName: string; departmentId: string; departmentName: string }[]
+): { projectId: string; projectName: string; departmentId: string; departmentName: string; path: string; roleLabel: string }[] {
+  const options = new Map<string, ReturnType<typeof projectSwitchOptions>[number]>();
+  for (const row of availableProjects) {
+    const path = roleHomePath(row.role);
+    if (!path) continue;
+    const key = `${path}:${row.projectId}:${row.departmentId}`;
+    if (!options.has(key)) {
+      options.set(key, {
+        projectId: row.projectId,
+        projectName: row.projectName,
+        departmentId: row.departmentId,
+        departmentName: row.departmentName,
+        path,
+        roleLabel: humanizeRole(row.role),
+      });
+    }
+  }
+  return [...options.values()];
+}
 
 /**
  * The role an actor is currently acting under, for display purposes

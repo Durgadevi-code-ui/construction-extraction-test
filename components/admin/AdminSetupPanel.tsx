@@ -871,6 +871,9 @@ function WorkItemRow({
   dependencies: WorkItemDependency[];
 }) {
   const { submit, submitting, error } = useSubmit("/api/admin/work-items", "PATCH");
+  // Activate/Deactivate — soft status change, see lib/workflow.ts setWorkItemActive.
+  const statusSubmit = useSubmit("/api/workflow/work-item-status", "PATCH");
+  const isActive = item.status === "Active";
   const [editing, setEditing] = useState(false);
   const [scheduledValue, setScheduledValue] = useState(item.scheduledValue?.toString() ?? "");
   const [unitOfMeasure, setUnitOfMeasure] = useState(item.unitOfMeasure ?? "");
@@ -917,14 +920,32 @@ function WorkItemRow({
           )}
           <span className="text-foreground-secondary">{item.descriptionOfWork}</span>
           <span className="text-foreground-muted">({item.departmentName})</span>
-          <StatusBadge status={item.status} />
+          <StatusBadge status={isActive ? "Active" : "Inactive"} />
         </div>
         {!editing && (
-          <Button variant="secondary" size="sm" onClick={() => setEditing(true)} className="shrink-0">
-            Edit
-          </Button>
+          <div className="flex shrink-0 gap-2">
+            <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
+              Edit
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={statusSubmit.submitting}
+              onClick={() => {
+                if (isActive && !window.confirm("Deactivate this work item? Its history and assignments are kept, and it can be activated again.")) return;
+                statusSubmit.submit({ workItemId: item.workItemId, active: !isActive });
+              }}
+            >
+              {statusSubmit.submitting ? "Saving…" : isActive ? "Deactivate" : "Activate"}
+            </Button>
+          </div>
         )}
       </div>
+      {statusSubmit.error && (
+        <p className="mt-2 rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">
+          {statusSubmit.error}
+        </p>
+      )}
 
       {editing ? (
         <div className="mt-2 space-y-2 bg-surface-soft rounded-lg p-3">

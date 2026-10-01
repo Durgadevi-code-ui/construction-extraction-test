@@ -9,6 +9,30 @@ import {
   cardTitle,
   type NotificationItem,
 } from "@/components/workflow/NotificationBell";
+import type { ReviewFocusState } from "@/lib/workflow";
+
+/** User-facing text for a focus state that means "not in this queue" —
+ * never a raw server/database message. */
+function focusStateMessage(state: ReviewFocusState): { text: string; tone: "info" | "error" } | null {
+  switch (state.kind) {
+    case "found":
+      return {
+        text: `This submission is no longer waiting for review — it is now "${state.statusLabel}". Please check History.`,
+        tone: "info",
+      };
+    case "notFound":
+      return { text: "Submission could not be found.", tone: "error" };
+    case "forbidden":
+      return { text: "You don't have access to this submission.", tone: "error" };
+    case "otherContext":
+      return {
+        text: "This submission belongs to a different project or department than the one you're viewing.",
+        tone: "info",
+      };
+    case "error":
+      return { text: "We couldn't check this submission right now. Please try again.", tone: "error" };
+  }
+}
 
 /**
  * Shown at the top of a Reviews tab opened from a notification's "View
@@ -22,6 +46,8 @@ export default function NotificationFocusBanner({
   notificationId,
   recordInQueue,
   missingMessage = "This submission is no longer waiting in this queue — it may already have been handled. See History.",
+  focusState = null,
+  onOpenHistory,
 }: {
   notificationId: string;
   /** Whether the focused submission is currently in this queue. */
@@ -29,6 +55,13 @@ export default function NotificationFocusBanner({
   /** Shown when the focused record isn't on this page (default: the
    * reviewer-queue wording). */
   missingMessage?: string;
+  /** Server-checked state of the focused submission (reviewer pages —
+   * see lib/workflow.ts getReviewFocusState). When present and the
+   * record isn't in the queue, its message replaces missingMessage and
+   * is shown even if the notification itself couldn't be loaded. */
+  focusState?: ReviewFocusState | null;
+  /** Adds an "Open History" action to the "no longer waiting" message. */
+  onOpenHistory?: () => void;
 }) {
   const [item, setItem] = useState<NotificationItem | null>(null);
   const [dismissed, setDismissed] = useState(false);
@@ -50,23 +83,51 @@ export default function NotificationFocusBanner({
     };
   }, [notificationId]);
 
-  if (!item || dismissed) return null;
-  const subline = cardSubline(item);
+  const stateMessage = !recordInQueue && focusState ? focusStateMessage(focusState) : null;
+  if (dismissed || (!item && !stateMessage)) return null;
+  const isError = stateMessage?.tone === "error";
 
   return (
-    <div className="flex items-start justify-between gap-3 rounded-lg border border-warning-border bg-warning-soft px-4 py-3 text-sm">
+    <div
+      role={isError ? "alert" : undefined}
+      className={`flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-sm ${
+        isError ? "border-error-border bg-error-soft" : "border-warning-border bg-warning-soft"
+      }`}
+    >
       <div className="min-w-0 space-y-0.5">
-        <p className="text-xs font-medium text-warning">From your notification · {cardTitle(item.type)}</p>
-        <p className="font-medium text-foreground">
-          {item.workItemCode ? `${item.workItemCode} — ` : ""}
-          {item.workItemDescription ?? ""}
+        <p className={`text-xs font-medium ${isError ? "text-error" : "text-warning"}`}>
+          From your notification{item ? ` · ${cardTitle(item.type)}` : ""}
         </p>
-        <p className="font-semibold text-foreground">{cardHighlight(item)}</p>
-        <p className="text-xs text-foreground-secondary">
-          {[subline, formatDateTimeUS(item.createdAt)].filter(Boolean).join(" · ")}
-        </p>
-        {!recordInQueue && (
-          <p className="text-xs text-foreground-secondary">{missingMessage}</p>
+        {item && (
+          <>
+            <p className="font-medium text-foreground">
+              {item.workItemCode ? `${item.workItemCode} — ` : ""}
+              {item.workItemDescription ?? ""}
+            </p>
+            <p className="font-semibold text-foreground">{cardHighlight(item)}</p>
+            <p className="text-xs text-foreground-secondary">
+              {[cardSubline(item), formatDateTimeUS(item.createdAt)].filter(Boolean).join(" · ")}
+            </p>
+          </>
+        )}
+        {stateMessage ? (
+          <p className={isError ? "font-medium text-error" : "text-foreground"}>
+            {stateMessage.text}
+            {focusState?.kind === "found" && onOpenHistory && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  onClick={onOpenHistory}
+                  className="font-medium text-brand transition-colors duration-150 hover:underline"
+                >
+                  Open History
+                </button>
+              </>
+            )}
+          </p>
+        ) : (
+          !recordInQueue && <p className="text-xs text-foreground-secondary">{missingMessage}</p>
         )}
       </div>
       <button

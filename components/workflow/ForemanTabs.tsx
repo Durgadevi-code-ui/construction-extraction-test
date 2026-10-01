@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useEffect, useState, useTransition } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   LayoutDashboard,
   ListChecks,
@@ -9,29 +9,30 @@ import {
   History as HistoryIcon,
   MessageSquare,
   UserRound,
-  CheckCircle2,
-  Clock,
-  TrendingUp,
-  Percent,
-  DollarSign,
 } from "lucide-react";
 import DashboardShell from "@/components/workflow/DashboardShell";
+import TabNav from "@/components/workflow/TabNav";
+import ProjectSelect, { type ProjectOption } from "@/components/workflow/ProjectSelect";
+import { useChatUnreadCount } from "@/components/workflow/useChatUnreadCount";
 import AssignmentManager, {
   type AssignmentWorkerOption,
   type AssignmentWorkItemOption,
   type AssignmentRow,
+  type AssignmentInactiveWorkItem,
 } from "@/components/workflow/AssignmentManager";
 import ForemanQueue, { type ForemanQueueItem } from "@/components/workflow/ForemanQueue";
-import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
 import ChatPanel from "@/components/workflow/ChatPanel";
 import NotificationFocusBanner from "@/components/workflow/NotificationFocusBanner";
 import SubmissionHistoryTable, { type SubmissionHistoryRow } from "@/components/workflow/SubmissionHistoryTable";
+import type { ReviewFocusState } from "@/lib/workflow";
 import ProfilePanel from "@/components/workflow/ProfilePanel";
 import { ExecutiveSummaryCard } from "@/components/workflow/SupervisorPanel";
-import { useCountUp } from "@/components/workflow/useCountUp";
+import { DashboardKpiCards, KpiSummaryText, type KpiCardActions } from "@/components/workflow/KpiCards";
 import { formatPercent } from "@/lib/format";
-import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
+import Card from "@/components/ui/Card";
+import { Select } from "@/components/ui/Input";
+import ErrorNotice from "@/components/ui/ErrorNotice";
 
 type Kpis = {
   totalWorkItems: number;
@@ -65,6 +66,7 @@ type Props = {
     workers: AssignmentWorkerOption[];
     workItems: AssignmentWorkItemOption[];
     assignments: AssignmentRow[];
+    inactiveWorkItems: AssignmentInactiveWorkItem[];
   } | null;
   queue: ForemanQueueItem[];
   awaitingContractorReview: AwaitingContractorItem[];
@@ -72,20 +74,27 @@ type Props = {
   history: SubmissionHistoryRow[];
   /** The project every section is scoped to (resolved server-side). */
   projectId: string;
-  /** Shown only when the Subcontractor holds more than one project. */
-  projectSwitcher?: React.ReactNode;
+  /** The department within that project every section is scoped to. */
+  departmentId: string;
+  /** Server-checked state of a notification's focused submission
+   * (?focus=) — see lib/workflow.ts getReviewFocusState; null without one. */
+  reviewFocus?: ReviewFocusState | null;
+  /** The user's own project/department roles for this page's role —
+   * rendered as the shared header Project dropdown (ProjectSelect), which
+   * shows nothing with a single option. */
+  projectOptions?: ProjectOption[];
   /** Current Project location — display only; null when not set. */
   projectLocation?: string | null;
 };
 
 // Same tab set as the Contractor (see ContractorTabs), role data differs.
-// Live Updates is no longer its own destination: each review card shows
-// its own (filtered to the work item), Work Item Management keeps its
-// department photo view, and the full feed sits at the bottom of Reviews.
+// Updates (photos) are not their own destination: they live only on Work
+// Items, one "View Updates" per work item (see WorkItemList) — not on
+// Reviews. Profile is opened from the Profile control above Sign out.
 const TABS = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "reviews", label: "Reviews", icon: ClipboardCheck },
-  { key: "workItems", label: "Work Items", icon: ListChecks },
+  { key: "workItems", label: "Work Item Management", icon: ListChecks },
   { key: "history", label: "History", icon: HistoryIcon },
   { key: "communication", label: "Communication", icon: MessageSquare },
   { key: "profile", label: "Profile", icon: UserRound },
@@ -103,68 +112,38 @@ const HEADINGS: Record<string, string> = {
 /** Old ?tab= values (bookmarks, older links) → new tabs. */
 const LEGACY_TABS: Record<string, string> = { assignments: "workItems", liveUpdates: "reviews" };
 
-// One semantic color per metric so the six KPIs are distinguishable at a
-// glance (previously brand teal and success green read as the same
-// color). Theme tokens where one fits (success/brand), Tailwind's
-// default palette for the hues the theme has no token for — icon chips
-// only, card body stays white, same as before.
-type KpiTone = "assigned" | "completed" | "pending" | "progress" | "remaining" | "revenue";
+/** The Dashboard's views, as tabs side by side at the top — the same
+ * set as the Contractor: Dashboard (the KPI row) | Summary (the plain,
+ * data-derived Executive Summary — not AI-written) | Progress Tracking
+ * (the work items updated in the period). */
+type DashboardView = "dashboard" | "summary" | "progress";
+const DASHBOARD_VIEWS = [
+  { key: "dashboard", label: "Dashboard" },
+  { key: "summary", label: "Summary" },
+  { key: "progress", label: "Progress Tracking" },
+];
 
-const KPI_ICON_CHIP: Record<KpiTone, string> = {
-  assigned: "bg-blue-600 text-white",
-  completed: "bg-success text-white",
-  pending: "bg-orange-500 text-white",
-  progress: "bg-brand text-white",
-  remaining: "bg-amber-400 text-amber-950",
-  revenue: "bg-indigo-600 text-white",
-};
+const BASE_PATH = "/workflow/foreman";
 
-function KpiCard({
-  label,
-  value,
-  icon: Icon,
-  highlight,
-  tone,
-  hint,
-}: {
-  label: string;
-  value: React.ReactNode;
-  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
-  highlight?: boolean;
-  tone: KpiTone;
-  hint?: string;
-}) {
-  return (
-    <div
-      className={`flex flex-col gap-2 rounded-lg border p-3 ${
-        highlight ? "bg-warning-soft border-warning-border" : "bg-white border-line"
-      }`}
-      title={hint}
-    >
-      <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${KPI_ICON_CHIP[tone]}`}>
-        <Icon className="h-4 w-4" strokeWidth={2} />
-      </span>
-      <div>
-        <p className={`text-lg font-bold tabular-nums leading-tight ${highlight ? "text-warning" : "text-foreground"}`}>
-          {value}
-        </p>
-        <p className="text-xs text-foreground-secondary">{label}</p>
-      </div>
-    </div>
-  );
-}
+/** The Reviews tab's two sections, as tabs side by side at the top (same
+ * TabNav as the Dashboard views). */
+type ReviewsView = "today" | "awaiting";
+const REVIEWS_VIEWS = [
+  { key: "today", label: "Today Reviews" },
+  { key: "awaiting", label: "Awaiting Contractor Review" },
+];
 
-/** A percentage that counts up 0 → value on load (display only). */
-function CountUpPercent({ value }: { value: number }) {
-  return <>{formatPercent(useCountUp(value))}</>;
-}
+
+/** Shown where the assignment board (KPIs, Work Item Management) is
+ * missing because it failed to load — reloading the page retries it. */
+const BOARD_UNAVAILABLE = "Work item data couldn't be loaded right now.";
 
 /**
  * Subcontractor's top-level navigation — same DashboardShell and tab set
  * as the Contractor. Dashboard = KPIs + the shared project brief;
  * Reviews = the Subcontractor review queue (forward/edit/comment,
- * unchanged) with per-card Live Updates, what's awaiting the Contractor,
- * and the full live feed; Work Items = Work Item Management (assign /
+ * unchanged) and what's awaiting the Contractor; Work Items = Work Item
+ * Management (per-item Live Updates, assign /
  * remove / planned quantity / tasks, searchable); History = the existing
  * Submission History (department-scoped). Every section is the same
  * data app/workflow/foreman/page.tsx already fetched.
@@ -181,7 +160,9 @@ export default function ForemanTabs({
   awaitingContractorReview,
   history,
   projectId,
-  projectSwitcher,
+  departmentId,
+  reviewFocus = null,
+  projectOptions = [],
   projectLocation = null,
 }: Props) {
   // Initial tab + focus come from the URL (a notification's "View Queue"
@@ -192,63 +173,166 @@ export default function ForemanTabs({
   const [tab, setTab] = useState(() => {
     const raw = searchParams.get("tab") ?? "";
     const requested = LEGACY_TABS[raw] ?? raw;
-    return TABS.some((t) => t.key === requested) ? requested : "dashboard";
+    return TABS.some((t) => t.key === requested) ? requested : "reviews";
   });
   const focusSubmissionId = searchParams.get("focus");
+  // Unread message badge on the Communication tab (current project only;
+  // cleared while that tab is open) — see useChatUnreadCount.
+  const unreadMessages = useChatUnreadCount({ userId: foremanUserId, projectId, active: tab === "communication" });
+  const tabs = TABS.map((t) => (t.key === "communication" ? { ...t, badge: unreadMessages } : t));
   const focusWorkItemCode = searchParams.get("item");
   const notificationId = searchParams.get("n");
-  const [showAllLiveUpdates, setShowAllLiveUpdates] = useState(false);
+  const [dashboardView, setDashboardView] = useState<DashboardView>("dashboard");
+  const [reviewsView, setReviewsView] = useState<ReviewsView>("today");
+  // Dashboard Department filter: this Subcontractor's own departments in
+  // the current project (their role rows — the same options the header
+  // Project dropdown is built from). The page loads one department's
+  // data server-side, so choosing one reloads the page in that
+  // department with the existing ?projectId=&departmentId= switch
+  // (resolved by getUserContext among the user's own roles only).
+  const router = useRouter();
+  const [departmentPending, startDepartmentTransition] = useTransition();
+  const departmentOptions = projectOptions.filter(
+    (o) => (o.path ?? BASE_PATH) === BASE_PATH && o.projectId === projectId
+  );
+  if (!departmentOptions.some((o) => o.departmentId === departmentId)) {
+    departmentOptions.unshift({ projectId, projectName, departmentId, departmentName });
+  }
+  function changeDepartment(nextDepartmentId: string) {
+    if (nextDepartmentId === departmentId) return;
+    const qs = new URLSearchParams({ projectId, departmentId: nextDepartmentId, tab: "dashboard" });
+    startDepartmentTransition(() => router.push(`${BASE_PATH}?${qs.toString()}`));
+  }
+  // A submission opened from Awaiting Contractor Review — History opens
+  // filtered to its work item with that row highlighted. Cleared when
+  // the user navigates tabs themselves.
+  const [historyFocus, setHistoryFocus] = useState<{ submissionId: string; workItemCode: string } | null>(null);
+  function changeTab(next: string) {
+    setHistoryFocus(null);
+    setTab(next);
+  }
+  function openInHistory(item: AwaitingContractorItem) {
+    setHistoryFocus({ submissionId: item.submissionId, workItemCode: item.workItemCode });
+    setTab("history");
+  }
+  useEffect(() => {
+    if (tab !== "history" || !historyFocus) return;
+    const timer = setTimeout(() => {
+      document.querySelector("[data-focused=true]")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [tab, historyFocus]);
+  // KPI cards that lead somewhere real on this page.
+  const kpiActions: KpiCardActions = {
+    assigned: { onClick: () => setTab("workItems"), label: "Open Work Item Management" },
+    completed: { onClick: () => setTab("workItems"), label: "Open Work Item Management" },
+    pending: { onClick: () => setTab("reviews"), label: "Open Reviews" },
+    progress: { onClick: () => setDashboardView("progress"), label: "Open Progress Tracking" },
+    remaining: { onClick: () => setTab("workItems"), label: "Open Work Item Management" },
+  };
 
   return (
     <DashboardShell
-      tabs={TABS}
+      tabs={tabs}
       activeTab={tab}
-      onTabChange={setTab}
+      onTabChange={changeTab}
       heading={HEADINGS[tab]}
       subheading={`Current Project: ${projectName} · ${departmentName}${projectLocation ? ` · ${projectLocation}` : ""}`}
       userId={foremanUserId}
       userEmail={userEmail}
       roleLabel="Subcontractor"
+      profileTabKey="profile"
       showNotificationToasts
-      actions={projectSwitcher}
+      actions={
+        <ProjectSelect
+          basePath="/workflow/foreman"
+          options={projectOptions}
+          projectId={projectId}
+          departmentId={departmentId}
+          tab={tab}
+        />
+      }
     >
       {tab === "dashboard" && (
-        <div className="space-y-6">
-          {kpis && (
-            <section className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <KpiCard icon={ListChecks} label="Assigned Work" value={`${kpis.totalWorkItems}`} tone="assigned" />
-              <KpiCard icon={CheckCircle2} label="Completed" value={`${kpis.completedCount}`} tone="completed" />
-              <KpiCard
-                icon={Clock}
-                label="Pending Review"
-                value={`${kpis.pendingReviews}`}
-                tone="pending"
-                highlight={kpis.pendingReviews > 0}
-              />
-              <KpiCard
-                icon={TrendingUp}
-                label="Overall Progress"
-                value={<CountUpPercent value={kpis.overallProgressPercent} />}
-                tone="progress"
-              />
-              <KpiCard
-                icon={Percent}
-                label="Work Left"
-                value={<CountUpPercent value={kpis.workLeftPercent} />}
-                tone="remaining"
-              />
-              <KpiCard
-                icon={DollarSign}
-                tone="revenue"
-                label="Estimated Revenue"
-                value={`$${kpis.totalEstimatedValue.toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
-                hint="Estimated value of this department's work at its current approved progress"
-              />
-            </section>
+        <div className="space-y-5">
+          <TabNav
+            tabs={DASHBOARD_VIEWS}
+            active={dashboardView}
+            onChange={(key) => setDashboardView(key as DashboardView)}
+          />
+          {/* Department filter — the same Filters card as the Contractor
+              Dashboard (DashboardPanel), Department only; shown on the
+              Dashboard view, which Summary/Progress Tracking follow. */}
+          {dashboardView === "dashboard" && (
+            <div className="rounded-lg border border-line bg-surface p-4 text-sm shadow-sm">
+              <p className="text-foreground-secondary font-medium mb-2">Filters</p>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-foreground-secondary mb-1">Department</label>
+                  <Select
+                    value={departmentId}
+                    onChange={(e) => changeDepartment(e.target.value)}
+                    disabled={departmentPending}
+                    aria-label="Department"
+                  >
+                    {departmentOptions.map((o) => (
+                      <option key={o.departmentId} value={o.departmentId}>
+                        {o.departmentName}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              </div>
+            </div>
           )}
-          {/* Totals are already the KPI cards above — the brief adds the
-              period change, what happened and what needs attention. */}
-          <ExecutiveSummaryCard onReviewSubmissions={() => setTab("reviews")} showTotals={false} projectId={projectId} />
+          {dashboardView === "dashboard" && !kpis && (
+            <ErrorNotice message={BOARD_UNAVAILABLE} onRetry={() => window.location.reload()} />
+          )}
+          {dashboardView === "dashboard" && kpis && (
+            <DashboardKpiCards
+              actions={kpiActions}
+              totalWorkItems={kpis.totalWorkItems}
+              completedCount={kpis.completedCount}
+              pendingReviews={kpis.pendingReviews}
+              overallProgressPercent={kpis.overallProgressPercent}
+              estimatedRevenue={kpis.totalEstimatedValue}
+              revenueHint="Estimated value of this department's work at its current approved progress"
+              workLeftPercent={kpis.workLeftPercent}
+            />
+          )}
+          {dashboardView === "summary" && (
+            // Totals off: the description states them from the same KPI
+            // numbers as the Dashboard cards, so the two never disagree.
+            <ExecutiveSummaryCard
+              view="summary"
+              onReviewSubmissions={() => setTab("reviews")}
+              showTotals={false}
+              projectId={projectId}
+              departmentId={departmentId}
+              description={
+                kpis ? (
+                  <KpiSummaryText
+                    scopeLabel={departmentName}
+                    totalWorkItems={kpis.totalWorkItems}
+                    completedCount={kpis.completedCount}
+                    pendingReviews={kpis.pendingReviews}
+                    overallProgressPercent={kpis.overallProgressPercent}
+                    estimatedRevenue={kpis.totalEstimatedValue}
+                    workLeftPercent={kpis.workLeftPercent}
+                  />
+                ) : null
+              }
+            />
+          )}
+          {dashboardView === "progress" && (
+            <ExecutiveSummaryCard
+              view="progress"
+              onReviewSubmissions={() => setTab("reviews")}
+              showTotals={false}
+              projectId={projectId}
+              departmentId={departmentId}
+            />
+          )}
         </div>
       )}
 
@@ -257,6 +341,8 @@ export default function ForemanTabs({
           {notificationId && (
             <NotificationFocusBanner
               notificationId={notificationId}
+              focusState={reviewFocus}
+              onOpenHistory={() => setTab("history")}
               recordInQueue={queue.some(
                 (q) =>
                   (!!focusSubmissionId && q.submissionId === focusSubmissionId) ||
@@ -264,17 +350,22 @@ export default function ForemanTabs({
               )}
             />
           )}
-          <div>
-            <h2 className="font-semibold text-foreground mb-3">Today Reviews</h2>
+          <TabNav
+            tabs={REVIEWS_VIEWS}
+            active={reviewsView}
+            onChange={(key) => setReviewsView(key as ReviewsView)}
+          />
+          {reviewsView === "today" && (
             <ForemanQueue foremanUserId={foremanUserId} items={queue}
               focusSubmissionId={focusSubmissionId}
               focusWorkItemCode={focusWorkItemCode}
             />
-          </div>
+          )}
 
           {/* Visibility only — a Subcontractor cannot act on these, they
               already forwarded them; shown so they know what's still
               waiting on the Contractor rather than assuming it was lost. */}
+          {reviewsView === "awaiting" && (
           <Card className="space-y-2 text-sm">
             <div className="flex items-center justify-between">
               <h2 className="font-semibold text-foreground">Awaiting Contractor Review</h2>
@@ -293,30 +384,27 @@ export default function ForemanTabs({
                       {item.workItemDescription}
                       <span className="text-foreground-muted"> — {item.workerName}</span>
                     </span>
-                    <span className="text-xs font-medium text-foreground-secondary shrink-0 tabular-nums">
-                      {formatPercent(item.correctedProgress ?? item.submittedProgress)}
+                    <span className="flex items-center gap-3 shrink-0">
+                      <span className="text-xs font-medium text-foreground-secondary tabular-nums">
+                        {formatPercent(item.correctedProgress ?? item.submittedProgress)}
+                      </span>
+                      {/* View only — opens the submission in History; the
+                          Contractor still owns the approval. */}
+                      <Button variant="secondary" size="sm" onClick={() => openInHistory(item)}>
+                        View
+                      </Button>
                     </span>
                   </li>
                 ))}
               </ul>
             )}
           </Card>
-
-          <Card className="space-y-3">
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-              <div>
-                <h2 className="font-semibold text-foreground">Live Updates from the Field</h2>
-                <p className="text-sm text-foreground-secondary">
-                  Every worker photo and voice note in your department. Each review card above also shows its own.
-                </p>
-              </div>
-              <Button variant="secondary" size="sm" onClick={() => setShowAllLiveUpdates((v) => !v)}>
-                {showAllLiveUpdates ? "Hide" : "Show all live updates"}
-              </Button>
-            </div>
-            {showAllLiveUpdates && <LiveUpdateFeed mode="normal" />}
-          </Card>
+          )}
         </div>
+      )}
+
+      {tab === "workItems" && !board && (
+        <ErrorNotice message={BOARD_UNAVAILABLE} onRetry={() => window.location.reload()} />
       )}
 
       {tab === "workItems" && board && (
@@ -326,12 +414,24 @@ export default function ForemanTabs({
           workers={board.workers}
           workItems={board.workItems}
           assignments={board.assignments}
+          inactiveWorkItems={board.inactiveWorkItems}
+          canChangeWorkItemStatus
         />
       )}
 
-      {tab === "history" && <SubmissionHistoryTable items={history} />}
+      {tab === "history" && (
+        <SubmissionHistoryTable
+          items={history}
+          initialWorkItem={
+            historyFocus && history.some((h) => h.workItemCode === historyFocus.workItemCode)
+              ? historyFocus.workItemCode
+              : ""
+          }
+          focusSubmissionId={historyFocus?.submissionId ?? null}
+        />
+      )}
 
-      {tab === "communication" && <ChatPanel />}
+      {tab === "communication" && <ChatPanel contextProjectId={projectId} />}
 
       {tab === "profile" && (
         <ProfilePanel

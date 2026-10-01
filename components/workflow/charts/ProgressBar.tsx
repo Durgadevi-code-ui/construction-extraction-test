@@ -15,6 +15,7 @@ export default function ProgressBar({
   tooltip,
   colorClass,
   showLabel = false,
+  countingUp = false,
 }: {
   /** 0-100, or null when there's nothing to show yet (renders an empty
    * track, never a fabricated 0% bar). */
@@ -24,6 +25,11 @@ export default function ProgressBar({
   /** When true, renders the percentage as tabular-nums text above the
    * track — construction convention of pairing a bar with its number. */
   showLabel?: boolean;
+  /** True when `percent` is a live useCountUp value (see
+   * WorkItemProgress in WorkItemList): skips the CSS width transition so
+   * the fill and its color stay in step with the counting number instead
+   * of trailing it. Off by default so existing bars are unchanged. */
+  countingUp?: boolean;
 }) {
   const clamped = percent === null ? 0 : Math.max(0, Math.min(100, percent));
   const resolvedColorClass = colorClass ?? progressColorClass(percent, "bg");
@@ -47,7 +53,7 @@ export default function ProgressBar({
       >
         {percent !== null && (
           <div
-            className={`h-full rounded-full ${resolvedColorClass} transition-[width] duration-500 ease-out`}
+            className={`h-full rounded-full ${resolvedColorClass}${countingUp ? "" : " transition-[width] duration-500 ease-out"}`}
             style={{ width: `${clamped}%` }}
           />
         )}

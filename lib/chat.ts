@@ -64,7 +64,11 @@ async function resolveSenderContext(
     return { projectId: requestedProjectId, role: "ADMIN" };
   }
 
-  const ctx = await getUserContext(supabase, userId);
+  // The page's current project (a user with roles on several projects)
+  // — getUserContext only ever selects among the caller's own Active
+  // roles and falls back to the first, so a project the caller doesn't
+  // belong to can never be reached this way.
+  const ctx = await getUserContext(supabase, userId, requestedProjectId ? { projectId: requestedProjectId } : undefined);
   return { projectId: ctx.projectId, role: ctx.role };
 }
 
@@ -275,6 +279,44 @@ export async function listDirectMessages(
     createdAt: row.created_at as string,
     isOwn: row.sender_user_id === userId,
   }));
+}
+
+/**
+ * Unread count for the Communication tab badge — messages the caller
+ * RECEIVED (Team broadcasts from others, plus direct messages addressed
+ * to them) in their resolved project, newer than `since` (the caller's
+ * last-read point; omitted = every such message). Their own messages
+ * never count. Same project resolution and same visibility rules as
+ * listChatMessages/listDirectMessages — nothing counted here that the
+ * Communication panel wouldn't show. `latestAt` is the newest received
+ * message's server timestamp, used as the next last-read point (server
+ * clock, never the browser's). Read-only.
+ */
+export async function countUnreadChatMessages(
+  supabase: SupabaseClient,
+  userId: string,
+  requestedProjectId?: string | null,
+  since?: string | null
+): Promise<{ count: number; latestAt: string | null }> {
+  const { projectId } = await resolveSenderContext(supabase, userId, requestedProjectId);
+  const received = () =>
+    supabase
+      .from("chat_messages")
+      .select("chat_message_id, created_at", { count: "exact" })
+      .eq("project_id", projectId)
+      .eq("status", "Active")
+      .neq("sender_user_id", userId)
+      .or(`recipient_user_id.is.null,recipient_user_id.eq.${userId}`);
+
+  const countQuery = since && !Number.isNaN(Date.parse(since)) ? received().gt("created_at", since) : received();
+  const [{ count, error: countError }, { data: latest, error: latestError }] = await Promise.all([
+    countQuery.limit(1),
+    received().order("created_at", { ascending: false }).limit(1),
+  ]);
+  if (countError || latestError) {
+    throw new Error(`Failed to load unread messages: ${(countError ?? latestError)?.message}`);
+  }
+  return { count: count ?? 0, latestAt: (latest?.[0]?.created_at as string | undefined) ?? null };
 }
 
 /** Posts one private message to `recipientUserId` — same

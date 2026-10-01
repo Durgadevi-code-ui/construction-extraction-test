@@ -9,6 +9,7 @@ import AssignmentManager, {
   type AssignmentWorkerOption,
   type AssignmentWorkItemOption,
   type AssignmentRow,
+  type AssignmentInactiveWorkItem,
 } from "./AssignmentManager";
 
 export type DelegatedWorkItem = {
@@ -52,6 +53,8 @@ export type DelegatedDepartmentScope = {
   assignmentWorkers: AssignmentWorkerOption[];
   assignmentWorkItems: AssignmentWorkItemOption[];
   assignments: AssignmentRow[];
+  /** Deactivated work items (reactivation needs Work Item Management too). */
+  assignmentInactiveWorkItems?: AssignmentInactiveWorkItem[];
   progressReviewQueue: DelegatedReviewItem[];
 };
 
@@ -89,6 +92,8 @@ export default function DelegatedAdminPanel({ contractorUserId, scopes }: Props)
               workers={scope.assignmentWorkers}
               workItems={scope.assignmentWorkItems}
               assignments={scope.assignments}
+              inactiveWorkItems={scope.assignmentInactiveWorkItems}
+              canChangeWorkItemStatus={scope.canManageWorkItems}
             />
           )}
 

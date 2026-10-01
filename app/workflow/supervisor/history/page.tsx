@@ -22,20 +22,26 @@ export const dynamic = "force-dynamic";
 export default async function SupervisorHistoryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ projectId?: string }>;
+  searchParams: Promise<{ projectId?: string; departmentId?: string }>;
 }) {
   const currentUser = await requireCurrentUser("/workflow/supervisor/history");
   const userId = currentUser.userId;
   const supabase = getSupabaseClient();
 
-  const { projectId: projectIdParam } = await searchParams;
-  const ctx = await getUserContext(supabase, userId, projectIdParam ? { projectId: projectIdParam } : undefined);
+  // ?departmentId= (with ?projectId=) selects among the user's own
+  // departments in that project, same as the dashboards.
+  const { projectId: projectIdParam, departmentId: departmentIdParam } = await searchParams;
+  const ctx = await getUserContext(
+    supabase,
+    userId,
+    projectIdParam ? { projectId: projectIdParam, departmentId: departmentIdParam } : undefined
+  );
   const isForeman = ctx.role === "FOREMAN";
   if (!CONTRACTOR_ROLES.includes(ctx.role) && !isForeman) {
     redirect("/workflow");
   }
 
-  const items = await getSubmissionHistory(supabase, userId, submissionHistoryBounds(), ctx.projectId).then((rows) => withApproverNames(supabase, rows));
+  const items = await getSubmissionHistory(supabase, userId, submissionHistoryBounds(), ctx.projectId, ctx.departmentId).then((rows) => withApproverNames(supabase, rows));
 
   return (
     <main className="min-h-screen py-8 px-4 sm:px-6 lg:px-10">
@@ -43,7 +49,8 @@ export default async function SupervisorHistoryPage({
         <div>
           <h1 className="text-2xl font-bold text-foreground">Submission History</h1>
           <Link
-            href={isForeman ? "/workflow/foreman" : "/workflow/supervisor"}
+            // Explicit tab: both pages now open on Reviews by default.
+            href={`${isForeman ? "/workflow/foreman" : "/workflow/supervisor"}?tab=dashboard&projectId=${ctx.projectId}&departmentId=${ctx.departmentId}`}
             className="text-sm text-brand transition-colors duration-150 hover:underline"
           >
             Back to Dashboard

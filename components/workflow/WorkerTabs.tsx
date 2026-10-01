@@ -6,36 +6,28 @@ import {
   LayoutDashboard,
   ListChecks,
   History as HistoryIcon,
-  CheckCircle2,
-  FileClock,
-  LogOut,
   MessageSquare,
-  CalendarDays,
   UserRound,
   Search,
-  ArrowLeft,
-  ClipboardList,
+  PencilLine,
 } from "lucide-react";
 import ChatPanel from "@/components/workflow/ChatPanel";
-import ProfileChip from "@/components/workflow/ProfileChip";
+import TabNav from "@/components/workflow/TabNav";
+import DashboardShell from "@/components/workflow/DashboardShell";
 import WorkerHeroCard from "@/components/workflow/WorkerHeroCard";
 import WorkItemSelector, {
   type WorkItemOptionView,
 } from "@/components/workflow/WorkItemSelector";
 import DailyWorkUpdate from "@/components/workflow/DailyWorkUpdate";
-import StatusFlow from "@/components/workflow/StatusFlow";
-import ProgressRing from "@/components/workflow/charts/ProgressRing";
-import NotificationBell from "@/components/workflow/NotificationBell";
+import WorkItemList from "@/components/workflow/WorkItemList";
+import SubmissionHistoryTable from "@/components/workflow/SubmissionHistoryTable";
 import NotificationFocusBanner from "@/components/workflow/NotificationFocusBanner";
-import { formatDateUS, formatPercent, formatQuantity, humanizeApprovalStatus } from "@/lib/format";
 import type { WorkerSubmissionStatusCode } from "@/lib/format";
-import { progressColorClass } from "@/lib/progressColor";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge, { type BadgeVariant } from "@/components/ui/Badge";
 import Input from "@/components/ui/Input";
 import EmptyState from "@/components/ui/EmptyState";
-import { logout } from "@/app/login/actions";
 
 export type WorkerHistoryItem = {
   submissionId: string;
@@ -93,6 +85,15 @@ export type WorkerCurrentWork = {
    * prop doc. Derived in app/workflow/worker/page.tsx from `history`,
    * no separate query. */
   submittedQuantity: number | null;
+  /** The Worker-side submission shown on "Submitted / Estimated" for the
+   * active work item — the latest one still awaiting review, else the
+   * latest of any state — with its review state (from `history`). Never
+   * approved progress; null when this work item has no submission yet. */
+  latestSubmission: {
+    submittedProgress: number;
+    correctedProgress: number | null;
+    reviewStatusCode: WorkerSubmissionStatusCode;
+  } | null;
   approvedQuantity: number | null;
   progressPercentage: number | null;
   isCompleted: boolean;
@@ -104,7 +105,7 @@ export type WorkerCurrentWork = {
 type Props = {
   workerId: string;
   /** The signed-in Worker's email (already resolved server-side) —
-   * purely for the header's profile chip (see ProfileChip). */
+   * purely for the sidebar Profile control (see ProfileChip). */
   userEmail?: string;
   /** The worker's own users row, display-only (Profile tab). */
   profile: { displayName: string; email: string };
@@ -134,9 +135,13 @@ type Props = {
   taskContextEnabled: boolean;
 };
 
+// Update Progress is its own sidebar entry (always one click away on
+// desktop and mobile); My Assigned Work lives inside Dashboard (see
+// SECTIONS). Profile is opened from the Profile control above Sign out
+// (DashboardShell profileTabKey), not listed in the nav.
 const TABS = [
+  { key: "update", label: "Update Progress", icon: PencilLine },
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { key: "workItems", label: "Work Items", icon: ListChecks },
   { key: "history", label: "History", icon: HistoryIcon },
   { key: "communication", label: "Communication", icon: MessageSquare },
   { key: "profile", label: "Profile", icon: UserRound },
@@ -145,19 +150,20 @@ const TABS = [
 type TabKey = (typeof TABS)[number]["key"];
 
 const HEADINGS: Record<TabKey, string> = {
+  update: "Update Progress",
   dashboard: "Worker Dashboard",
-  workItems: "My Work Items",
   history: "History",
   communication: "Communication",
   profile: "My Profile",
 };
 
-const REVIEW_STATUS_BADGE: Record<WorkerSubmissionStatusCode, { variant: BadgeVariant; label: string }> = {
-  AWAITING_FOREMAN_REVIEW: { variant: "info", label: "Awaiting Subcontractor review" },
-  AWAITING_SUPERVISOR_APPROVAL: { variant: "warning", label: "Awaiting Contractor approval" },
-  APPROVED: { variant: "success", label: "Approved" },
-  ROLLED_BACK: { variant: "error", label: "Returned for correction" },
-};
+/** The Worker Dashboard's two top tabs. */
+const SECTIONS = [
+  { key: "dashboard", label: "DASHBOARD" },
+  { key: "assigned", label: "MY ASSIGNED WORK" },
+] as const;
+
+type SectionKey = (typeof SECTIONS)[number]["key"];
 
 function workItemStatus(w: WorkItemOptionView): { variant: BadgeVariant; label: string } {
   if (w.isCompleted) return { variant: "success", label: "Completed" };
@@ -165,32 +171,20 @@ function workItemStatus(w: WorkItemOptionView): { variant: BadgeVariant; label: 
   return { variant: "neutral", label: "Waiting on prerequisites" };
 }
 
-function ProgressBar({ percent }: { percent: number | null }) {
-  const pct = percent ?? 0;
-  return (
-    <div className="h-2 w-full rounded-full bg-line-soft overflow-hidden" aria-hidden>
-      <div
-        className={`h-full rounded-full ${progressColorClass(pct, "bg")}`}
-        style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
-      />
-    </div>
-  );
-}
-
 /**
- * Worker's persistent navigation (left sidebar, same visual shell as
- * before): Dashboard / Work Items / History / Communication / Profile,
- * with Sign out once at the bottom of the sidebar.
- *   - Dashboard is the landing view: current project, what's assigned,
- *     what to work on now, latest submission status, one button into
- *     the update form.
- *   - Work Items lists every Active assignment (searchable); "Update
- *     progress" opens the existing update form (WorkItemSelector +
- *     DailyWorkUpdate, which ends with the optional photo step, +
- *     progress panel) in the same tab —
- *     the former separate "Work Update" and "Work Details" tabs.
- *   - History is the worker's own submissions plus the former separate
- *     "Approved Work" list.
+ * Worker's navigation — the same DashboardShell as every other role
+ * (Notifications next to the brand, Profile above Sign out):
+ *   - Update Progress (default) — the existing update form
+ *     (WorkItemSelector + DailyWorkUpdate, which ends with the optional
+ *     photo step).
+ *   - Dashboard, with two top tabs (SECTIONS):
+ *       DASHBOARD — the current work item's progress (WorkerHeroCard);
+ *       MY ASSIGNED WORK — every Active assignment (searchable) in the
+ *         shared WorkItemList, each with its View Updates (no amounts
+ *         for a Worker).
+ *   - History is the shared Submission History — the same screen as
+ *     Contractor/Subcontractor History (filters, sortable columns,
+ *     status & review, each row's View Updates).
  * Every figure is the exact data app/workflow/worker/page.tsx already
  * fetched — this component only arranges it, no calculation here.
  */
@@ -204,7 +198,6 @@ export default function WorkerTabs({
   current,
   workItems,
   history,
-  approvedWork,
   projectSwitcher,
   projects,
   activeProjectId,
@@ -215,18 +208,18 @@ export default function WorkerTabs({
   // Dashboard landing view. Kept in client state afterwards, so a work
   // item switch (router.push to a new ?workItemId=) keeps the worker on
   // the tab they were on.
+  // Update Progress stays the landing view (as before). "workItems"
+  // (e.g. a notification's work item link) is Dashboard's MY ASSIGNED
+  // WORK tab.
   const [tab, setTab] = useState<TabKey>(() => {
     const requested = searchParams.get("tab");
-    if (requested === "update") return "workItems";
-    return TABS.some((t) => t.key === requested) ? (requested as TabKey) : "dashboard";
+    if (requested === "workItems") return "dashboard";
+    return TABS.some((t) => t.key === requested) ? (requested as TabKey) : "update";
   });
-  const [workItemsView, setWorkItemsView] = useState<"list" | "update">(
-    searchParams.get("tab") === "update" ? "update" : "list"
+  const [section, setSection] = useState<SectionKey>(() =>
+    searchParams.get("tab") === "workItems" ? "assigned" : "dashboard"
   );
   const [query, setQuery] = useState("");
-  const [historyView, setHistoryView] = useState<"submissions" | "approved">("submissions");
-  const [historyStatus, setHistoryStatus] = useState<"ALL" | "IN_REVIEW" | "APPROVED" | "ROLLED_BACK">("ALL");
-  const [logoAvailable, setLogoAvailable] = useState(true);
 
   // Notification focus — same URL mechanism as the Contractor/
   // Subcontractor Reviews tab (lib/notifications.ts
@@ -292,22 +285,6 @@ export default function WorkerTabs({
       ? (activeTasks.find((t) => t.id === taskSel.taskId) ?? null)
       : null;
 
-  /** Opens the update form. For a different work item than the current
-   * one, switches to it via the same URL-driven selection WorkItemSelector
-   * uses (identity/assignment re-checked server-side) — only offered when
-   * the project's selection switch is on (see taskContextEnabled). The
-   * current item opens as-is, keeping its auto-suggested/explicit state. */
-  function openUpdate(workItemId: string) {
-    setTab("workItems");
-    setWorkItemsView("update");
-    if (taskContextEnabled && workItemId !== activeWorkItemId) {
-      const qs = new URLSearchParams();
-      if (activeProjectId) qs.set("projectId", activeProjectId);
-      qs.set("workItemId", workItemId);
-      navigate(`/workflow/worker?${qs.toString()}`, { kind: "workItem", workItemId, projectId: activeProjectId });
-    }
-  }
-
   const needle = query.trim().toLowerCase();
   const filteredWorkItems = useMemo(
     () =>
@@ -321,202 +298,57 @@ export default function WorkerTabs({
     [workItems, needle]
   );
 
-  const filteredHistory = history.filter((item) => {
-    if (historyStatus === "ALL") return true;
-    if (historyStatus === "IN_REVIEW")
-      return item.reviewStatusCode === "AWAITING_FOREMAN_REVIEW" || item.reviewStatusCode === "AWAITING_SUPERVISOR_APPROVAL";
-    return item.reviewStatusCode === historyStatus;
-  });
-
-  const completedCount = workItems.filter((w) => w.isCompleted).length;
-  const readyCount = workItems.filter((w) => !w.isCompleted && w.isEligible).length;
-  const waitingCount = workItems.length - completedCount - readyCount;
-
-  const heading = tab === "workItems" && workItemsView === "update" ? "Work Update" : HEADINGS[tab];
+  const heading = HEADINGS[tab];
 
   return (
-    // No rounded corners/border/shadow/page padding around this shell —
-    // it's the light page canvas (bg-background) that every white Card
-    // sits on top of, not a card itself.
-    <div className="flex flex-col lg:flex-row bg-background min-h-screen">
-      <aside className="lg:w-60 shrink-0 bg-gradient-to-b from-navy-deep via-navy to-brand text-white flex flex-col">
-        <div className="px-5 py-5 border-b border-white/10 flex items-center gap-2.5">
-          {logoAvailable && (
-            // eslint-disable-next-line @next/next/no-img-element -- small static brand mark, matches TopNav's own use of the same asset
-            <img
-              src="/agentic-atoms-logo.png"
-              alt="Agentic Atoms"
-              className="h-8 w-8 shrink-0 rounded-full object-contain bg-white/10"
-              onError={() => setLogoAvailable(false)}
-            />
-          )}
-          <div className="min-w-0">
-            <p className="text-sm font-bold tracking-tight truncate">Agentic Atoms</p>
-            <p className="text-[11px] text-white/60 truncate">Construction Automation</p>
-          </div>
-        </div>
-        <nav className="flex-1 px-3 py-4 space-y-1 overflow-x-auto lg:overflow-visible">
-          <div className="flex lg:flex-col gap-1">
-            {TABS.map(({ key, label, icon: Icon }) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => {
-                  setTab(key);
-                  if (key === "workItems") setWorkItemsView("list");
-                }}
-                aria-current={tab === key ? "page" : undefined}
-                className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors duration-150 ${
-                  tab === key
-                    ? "bg-brand text-white shadow-sm"
-                    : "text-white/70 hover:bg-white/10 hover:text-white"
-                }`}
-              >
-                <Icon className="h-4 w-4 shrink-0" strokeWidth={1.8} />
-                {label}
-              </button>
-            ))}
-          </div>
-        </nav>
+    <DashboardShell
+      tabs={[...TABS]}
+      activeTab={tab}
+      onTabChange={(key) => setTab(key as TabKey)}
+      heading={heading}
+      showGreeting={false}
+      subheading={
+        <>
+          <span className="text-foreground-muted">Current Project:</span>{" "}
+          <span className="font-medium text-foreground">{projectName}</span> · {departmentName}
+          {projectLocation ? ` · ${projectLocation}` : ""}
+        </>
+      }
+      userId={workerId}
+      userEmail={userEmail}
+      roleLabel="Worker"
+      profileTabKey="profile"
+      showNotificationToasts
+      actions={projectSwitcher}
+    >
+        {/* Dashboard tabs — Dashboard / My Assigned Work. */}
+        {tab === "dashboard" && (
+          <TabNav tabs={[...SECTIONS]} active={section} onChange={(key) => setSection(key as SectionKey)} />
+        )}
 
-        <div className="px-3 py-4 border-t border-white/10">
-          <form action={logout}>
-            <button
-              type="submit"
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-white/70 transition-colors duration-150 hover:bg-white/10 hover:text-white"
-            >
-              <LogOut className="h-4 w-4" strokeWidth={1.8} />
-              Sign out
-            </button>
-          </form>
-        </div>
-      </aside>
-
-      <div className="flex-1 min-w-0 p-4 sm:p-6 space-y-5">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="min-w-0">
-            <h2 className="text-xl sm:text-2xl font-extrabold text-foreground tracking-tight">{heading}</h2>
-            <p className="text-sm text-foreground-secondary">
-              <span className="text-foreground-muted">Current Project:</span>{" "}
-              <span className="font-medium text-foreground">{projectName}</span> · {departmentName}
-              {projectLocation ? ` · ${projectLocation}` : ""}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3 min-w-0 max-w-full">
-            {projectSwitcher}
-            <span
-              suppressHydrationWarning
-              className="hidden sm:inline-flex items-center gap-1.5 text-xs text-foreground-secondary bg-surface-soft border border-line rounded-full px-3 py-1.5"
-            >
-              <CalendarDays className="h-3.5 w-3.5" strokeWidth={2} />
-              {new Date().toLocaleDateString("en-US", {
-                weekday: "long",
-                month: "short",
-                day: "numeric",
-              })}
-            </span>
-            <NotificationBell userId={workerId} showToasts />
-            {userEmail && <ProfileChip email={userEmail} roleLabel="Worker" />}
-          </div>
-        </div>
-
-        {/* ---------------- Dashboard (landing) ---------------- */}
-        {tab === "dashboard" &&
+        {/* ---------------- Dashboard ---------------- */}
+        {tab === "dashboard" && section === "dashboard" &&
           (current ? (
-            <div className="grid lg:grid-cols-[1.5fr_1fr] gap-5 items-start">
-              <div className="space-y-4">
-                <WorkerHeroCard
-                  workItemCode={current.activeWorkItem.code}
-                  workItemDescription={current.activeWorkItem.description}
-                  plannedQuantity={current.activeWorkItem.plannedQuantity}
-                  unitOfMeasure={current.activeWorkItem.unitOfMeasure}
-                  submittedQuantity={current.submittedQuantity}
-                  approvedQuantity={current.approvedQuantity}
-                  progressPercentage={current.progressPercentage}
-                  isCompleted={current.isCompleted}
-                />
-                <Card className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="min-w-0 text-sm">
-                    <p className="font-semibold text-foreground">What to do today</p>
-                    <p className="text-foreground-secondary">
-                      {current.isCompleted
-                        ? "This work item is complete — pick another assigned work item to update."
-                        : `Submit today's progress for ${current.activeWorkItem.code} — ${current.activeWorkItem.description}.`}
-                    </p>
-                  </div>
-                  <div className="flex gap-2 shrink-0">
-                    <Button onClick={() => openUpdate(current.activeWorkItemId)}>
-                      <ClipboardList className="h-4 w-4" strokeWidth={2} />
-                      Update progress
-                    </Button>
-                  </div>
-                </Card>
-                {current.noEligibleWorkNote && (
-                  <p className="text-sm text-foreground-secondary bg-surface-soft border border-line rounded-lg p-3">
-                    {current.noEligibleWorkNote}
-                  </p>
-                )}
-              </div>
-
-              <div className="space-y-4">
-                <Card className="space-y-3 text-sm">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-semibold text-foreground">My Assigned Work</p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTab("workItems");
-                        setWorkItemsView("list");
-                      }}
-                      className="text-xs font-medium text-brand hover:underline"
-                    >
-                      View all
-                    </button>
-                  </div>
-                  <p className="text-2xl font-bold text-foreground tabular-nums leading-none">
-                    {workItems.length}{" "}
-                    <span className="text-sm font-medium text-foreground-secondary">
-                      work item{workItems.length === 1 ? "" : "s"}
-                    </span>
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {completedCount > 0 && <Badge variant="success">{completedCount} completed</Badge>}
-                    {readyCount > 0 && <Badge variant="brand">{readyCount} ready</Badge>}
-                    {waitingCount > 0 && <Badge variant="neutral">{waitingCount} waiting</Badge>}
-                  </div>
-                </Card>
-
-                <Card className="space-y-2 text-sm">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-semibold text-foreground">Latest Submission</p>
-                    <button
-                      type="button"
-                      onClick={() => setTab("history")}
-                      className="text-xs font-medium text-brand hover:underline"
-                    >
-                      View history
-                    </button>
-                  </div>
-                  {current.latestSubmissionStatusCode ? (
-                    <>
-                      <Badge variant={REVIEW_STATUS_BADGE[current.latestSubmissionStatusCode].variant}>
-                        {REVIEW_STATUS_BADGE[current.latestSubmissionStatusCode].label}
-                      </Badge>
-                      <div className="pt-1">
-                        <StatusFlow statusCode={current.latestSubmissionStatusCode} />
-                      </div>
-                    </>
-                  ) : (
-                    <p className="text-foreground-muted">You haven&apos;t submitted any updates yet.</p>
-                  )}
-                  <p className="text-xs text-foreground-secondary pt-1">
-                    Approved today for {current.activeWorkItem.code}:{" "}
-                    <span className="font-medium text-foreground tabular-nums">
-                      {formatPercent(current.todaysProgress)}
-                    </span>
-                  </p>
-                </Card>
-              </div>
+            // Current work only — What to do today / My Assigned Work /
+            // Latest Submission were duplicates of the UPDATE PROGRESS and
+            // MY ASSIGNED WORK tabs and History, so they're not repeated here.
+            <div className="space-y-4">
+              <WorkerHeroCard
+                workItemCode={current.activeWorkItem.code}
+                workItemDescription={current.activeWorkItem.description}
+                plannedQuantity={current.activeWorkItem.plannedQuantity}
+                unitOfMeasure={current.activeWorkItem.unitOfMeasure}
+                submittedQuantity={current.submittedQuantity}
+                latestSubmission={current.latestSubmission}
+                approvedQuantity={current.approvedQuantity}
+                progressPercentage={current.progressPercentage}
+                isCompleted={current.isCompleted}
+              />
+              {current.noEligibleWorkNote && (
+                <p className="text-sm text-foreground-secondary bg-surface-soft border border-line rounded-lg p-3">
+                  {current.noEligibleWorkNote}
+                </p>
+              )}
             </div>
           ) : (
             <EmptyState
@@ -531,8 +363,8 @@ export default function WorkerTabs({
             />
           ))}
 
-        {/* ---------------- Work Items: list ---------------- */}
-        {tab === "workItems" && workItemsView === "list" && (
+        {/* ---------------- My Assigned Work ---------------- */}
+        {tab === "dashboard" && section === "assigned" && (
           <div className="space-y-4">
             {notificationId && (
               <NotificationFocusBanner
@@ -541,20 +373,31 @@ export default function WorkerTabs({
                 missingMessage="This work item is no longer assigned to you — see History for your submissions."
               />
             )}
-            <div className="relative max-w-md">
-              <Search
-                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground-muted"
-                strokeWidth={2}
-                aria-hidden
-              />
-              <Input
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search by code, name or task"
-                aria-label="Search work items"
-                className="pl-9 bg-white"
-              />
+            {/* Same Filters panel as History, so the two screens read alike. */}
+            <div className="rounded-lg border border-line bg-surface p-4 text-sm shadow-sm">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <p className="text-foreground-secondary font-medium">Filters</p>
+                <span className="text-xs text-foreground-muted tabular-nums">
+                  {filteredWorkItems.length === workItems.length
+                    ? `${workItems.length} work item${workItems.length === 1 ? "" : "s"}`
+                    : `${filteredWorkItems.length} of ${workItems.length} work items`}
+                </span>
+              </div>
+              <div className="relative max-w-md">
+                <Search
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground-muted"
+                  strokeWidth={2}
+                  aria-hidden
+                />
+                <Input
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search by code, name or task"
+                  aria-label="Search work items"
+                  className="pl-9 bg-white"
+                />
+              </div>
             </div>
 
             {!taskContextEnabled && workItems.length > 1 && (
@@ -573,83 +416,53 @@ export default function WorkerTabs({
             ) : filteredWorkItems.length === 0 ? (
               <EmptyState icon={Search} title={`No work items match “${query.trim()}”`} />
             ) : (
-              <div className="grid gap-3 md:grid-cols-2">
-                {filteredWorkItems.map((w) => {
-                  const status = workItemStatus(w);
-                  const isCurrent = w.workItemId === activeWorkItemId;
-                  const canUpdate = taskContextEnabled || isCurrent;
-                  const isFocused = !!focusItemCode && w.code === focusItemCode;
-                  return (
-                    <div
-                      key={w.workItemId}
-                      data-focused={isFocused ? "true" : undefined}
-                      className={`scroll-mt-4 rounded-lg ${
-                        isFocused ? "ring-2 ring-warning-border ring-offset-2 ring-offset-background" : ""
-                      }`}
-                    >
-                    <Card className={`space-y-3 text-sm ${isCurrent ? "border-brand-border" : ""}`}>
-                      {isFocused && <Badge variant="warning">From your notification</Badge>}
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-xs text-foreground-muted">{w.code}</p>
-                          <p className="font-semibold text-foreground leading-snug">{w.description}</p>
-                          <p className="text-xs text-foreground-secondary">
-                            {projectName} · {departmentName}
-                          </p>
-                        </div>
-                        <div className="flex flex-col items-end gap-1 shrink-0">
-                          <Badge variant={status.variant}>{status.label}</Badge>
-                          {isCurrent && <span className="text-[11px] text-brand font-medium">Current</span>}
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        <ProgressBar percent={w.progressPercentage} />
-                        <p className="text-xs text-foreground-secondary tabular-nums">
-                          {formatPercent(w.progressPercentage ?? 0)} approved
-                        </p>
-                      </div>
-                      {w.tasks.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5">
-                          {w.tasks.map((t) => (
-                            <span
-                              key={t.id}
-                              className="rounded-full border border-line bg-surface-soft px-2 py-0.5 text-[11px] text-foreground-secondary"
-                            >
-                              {t.label}
-                              {t.conditional ? " (if applicable)" : ""}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      {canUpdate && (
-                        <div className="flex justify-end">
-                          <Button size="sm" variant={isCurrent ? "primary" : "secondary"} onClick={() => openUpdate(w.workItemId)}>
-                            Update progress
-                          </Button>
-                        </div>
-                      )}
-                    </Card>
-                    </div>
-                  );
-                })}
-              </div>
+              // The shared Work Items list (same as Contractor/Subcontractor
+              // Work Items): Work Item · Progress · Status · Actions, with
+              // its built-in View Updates (the existing feed, scoped
+              // server-side to this worker's own updates). No amounts —
+              // earnedAmount is never passed for a Worker.
+              <Card className="!p-0 overflow-hidden">
+                <WorkItemList
+                  rows={filteredWorkItems.map((w) => ({
+                    workItemId: w.workItemId,
+                    code: w.code,
+                    description: w.description,
+                    progressPercentage: w.progressPercentage,
+                    status: workItemStatus(w),
+                    tag: w.workItemId === activeWorkItemId ? "Current" : undefined,
+                    detail:
+                      w.tasks.length > 0
+                        ? `Tasks: ${w.tasks.map((t) => `${t.label}${t.conditional ? " (if applicable)" : ""}`).join(" · ")}`
+                        : undefined,
+                  }))}
+                  focusedWorkItemId={focusItemCode ? (workItems.find((w) => w.code === focusItemCode)?.workItemId ?? null) : null}
+                  // Actions: only the list's built-in View Updates. History
+                  // is its own sidebar entry, and Update Progress is the
+                  // way into the update form.
+                />
+              </Card>
             )}
           </div>
         )}
 
-        {/* ---------------- Work Items: update form ---------------- */}
-        {tab === "workItems" && workItemsView === "update" && current && (
+        {/* ---------------- Update Progress (default) ---------------- */}
+        {tab === "update" && !current && (
+          <EmptyState
+            icon={ListChecks}
+            title="No work items assigned yet"
+            description={`Nothing is currently assigned to you in ${projectName} — ${departmentName}. Ask your Subcontractor or Contractor to assign a work item. Your past submissions are still in History.`}
+            action={
+              <Button variant="secondary" size="sm" onClick={() => setTab("history")}>
+                View history
+              </Button>
+            }
+          />
+        )}
+        {tab === "update" && current && (
+          // The update form only — the separate "Today's Progress" panel is
+          // not repeated here (the Dashboard tab shows current progress).
+          // Full content width, same as the Dashboard tab.
           <div className="space-y-4">
-            <button
-              type="button"
-              onClick={() => setWorkItemsView("list")}
-              className="inline-flex items-center gap-1.5 text-sm font-medium text-brand hover:underline"
-            >
-              <ArrowLeft className="h-4 w-4" strokeWidth={2} />
-              All work items
-            </button>
-            <div className="grid lg:grid-cols-[1.5fr_1fr] gap-5 items-start">
-              <div className="space-y-4">
                 {taskContextEnabled && (workItems.length > 0 || (projects?.length ?? 0) > 0) && (
                   <WorkItemSelector
                     workItems={workItems}
@@ -684,66 +497,9 @@ export default function WorkerTabs({
                     taskId={selectedTask?.id ?? null}
                     taskLabel={selectedTask?.label ?? null}
                     workItemExplicitlySelected={!current.isAutoSuggested}
+                    approvedProgress={current.progressPercentage}
                   />
                 </div>
-              </div>
-
-              {/* Right rail — same figures as the Dashboard's
-                  WorkerHeroCard (same props, no recomputation). Photo
-                  capture is now step 2 of the update itself (see
-                  DailyWorkUpdate / LiveUpdateBar), not a separate card. */}
-              <div className="space-y-4">
-                <Card>
-                  <p className="text-xs uppercase tracking-wide text-foreground-muted font-medium mb-3">
-                    Today&apos;s Progress
-                  </p>
-                  <div className="flex flex-col items-center">
-                    <ProgressRing
-                      percent={current.progressPercentage}
-                      label="Overall Progress"
-                      size={110}
-                      strokeWidth={10}
-                    />
-                  </div>
-                  <div className="mt-4 space-y-2.5 text-sm">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-foreground-secondary">Current Work</span>
-                      <span className="font-medium text-foreground text-right truncate max-w-[55%]">
-                        {current.activeWorkItem.code}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-foreground-secondary">Approved</span>
-                      <span className="font-medium text-success tabular-nums">
-                        {current.approvedQuantity !== null
-                          ? `${formatQuantity(current.approvedQuantity)} ${current.activeWorkItem.unitOfMeasure ?? ""}`
-                          : formatPercent(current.progressPercentage)}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-foreground-secondary">Submitted (pending)</span>
-                      <span className="font-medium text-info tabular-nums">
-                        {current.submittedQuantity !== null
-                          ? `${formatQuantity(current.submittedQuantity)} ${current.activeWorkItem.unitOfMeasure ?? ""}`
-                          : "—"}
-                      </span>
-                    </div>
-                    {current.latestSubmissionStatusLabel && (
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-foreground-secondary">Latest Status</span>
-                        <span
-                          className={`font-medium text-right ${
-                            current.latestSubmissionStatusCode === "ROLLED_BACK" ? "text-error" : "text-foreground"
-                          }`}
-                        >
-                          {current.latestSubmissionStatusLabel}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </Card>
-              </div>
-            </div>
           </div>
         )}
 
@@ -757,144 +513,33 @@ export default function WorkerTabs({
                 missingMessage="This submission isn't in your History list."
               />
             )}
-            <div className="flex flex-wrap items-center gap-2">
-              {(
-                [
-                  ["submissions", `My Submissions (${history.length})`],
-                  ["approved", `Approved Work (${approvedWork.length})`],
-                ] as const
-              ).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setHistoryView(key)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors duration-150 ${
-                    historyView === key
-                      ? "bg-brand text-white"
-                      : "bg-surface-soft text-foreground-secondary border border-line hover:bg-surface-hover"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-              {historyView === "submissions" && (
-                <select
-                  value={historyStatus}
-                  onChange={(e) => setHistoryStatus(e.target.value as typeof historyStatus)}
-                  aria-label="Filter by status"
-                  className="ml-auto rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs text-foreground focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                >
-                  <option value="ALL">All statuses</option>
-                  <option value="IN_REVIEW">In review</option>
-                  <option value="APPROVED">Approved</option>
-                  <option value="ROLLED_BACK">Returned for correction</option>
-                </select>
-              )}
-            </div>
-
-            {historyView === "submissions" && (
-              <Card className="!p-0 overflow-hidden text-sm text-foreground">
-                {filteredHistory.length === 0 ? (
-                  <EmptyState icon={FileClock} title={history.length === 0 ? "No submissions yet" : "No submissions with this status"} />
-                ) : (
-                  <div className="divide-y divide-line">
-                    {filteredHistory.map((item) => {
-                      const badge = REVIEW_STATUS_BADGE[item.reviewStatusCode];
-                      const adjusted =
-                        item.correctedProgress !== null && item.correctedProgress !== item.submittedProgress;
-                      return (
-                        <div
-                          key={item.submissionId}
-                          data-focused={item.submissionId === historyFocusId ? "true" : undefined}
-                          className={`scroll-mt-4 px-4 py-3 space-y-1.5 ${
-                            item.submissionId === historyFocusId ? "ring-2 ring-inset ring-warning-border bg-warning-soft/40" : ""
-                          }`}
-                        >
-                          {item.submissionId === historyFocusId && (
-                            <Badge variant="warning">From your notification</Badge>
-                          )}
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <p className="font-medium text-foreground">
-                                <span className="text-foreground-secondary">{item.workItemCode}</span> —{" "}
-                                {item.workItemDescription}
-                              </p>
-                              <p className="text-xs text-foreground-muted">
-                                Submitted {formatDateUS(item.submittedAt)} · {item.projectName} · {item.departmentName}
-                              </p>
-                              {item.taskLabel && (
-                                <p className="text-xs text-foreground-secondary">Task: {item.taskLabel}</p>
-                              )}
-                            </div>
-                            <Badge variant={badge.variant}>{badge.label}</Badge>
-                          </div>
-                          <p>
-                            <span className="text-foreground-secondary">You submitted:</span>{" "}
-                            <span className="font-medium tabular-nums">
-                              {item.submittedQuantity !== null
-                                ? `${formatQuantity(item.submittedQuantity)} ${item.unit ?? ""}`.trim()
-                                : formatPercent(item.submittedProgress)}
-                            </span>
-                          </p>
-                          {adjusted && (
-                            <p>
-                              <span className="text-foreground-secondary">Adjusted by reviewer to:</span>{" "}
-                              <span className="font-medium tabular-nums">{formatPercent(item.correctedProgress)}</span>
-                            </p>
-                          )}
-                          {item.approvalComments && (
-                            <p className="text-xs text-foreground-secondary">
-                              <span className="font-medium">Reviewer comment:</span> {item.approvalComments}
-                            </p>
-                          )}
-                          <div className="pt-0.5">
-                            <StatusFlow statusCode={item.reviewStatusCode} />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </Card>
-            )}
-
-            {historyView === "approved" && (
-              <Card className="!p-0 overflow-hidden text-sm text-foreground">
-                {approvedWork.length === 0 ? (
-                  <EmptyState icon={CheckCircle2} title="Nothing approved yet" />
-                ) : (
-                  <div className="divide-y divide-line">
-                    {approvedWork.map((item) => (
-                      <div key={item.unifiedRecordId} className="px-4 py-3 space-y-0.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-foreground-secondary">
-                            {item.workItemCode} — {item.workItemDescription}
-                          </span>
-                          <span className="text-xs text-foreground-secondary shrink-0 tabular-nums">
-                            {formatDateUS(item.approvedAt)}
-                          </span>
-                        </div>
-                        <p>
-                          <span className="text-foreground-secondary">Approved:</span>{" "}
-                          <span className="font-medium tabular-nums">
-                            {item.approvedQuantity !== null
-                              ? `${formatQuantity(item.approvedQuantity)} ${item.unit ?? ""}`.trim()
-                              : formatPercent(item.progressPercentage)}
-                          </span>
-                        </p>
-                        <p className="text-xs text-foreground-secondary">
-                          {humanizeApprovalStatus("APPROVED")} by Contractor
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </Card>
-            )}
+            {/* The shared Submission History — the same screen as
+                Contractor/Subcontractor History: filters, submissions,
+                status & review, reviewer comments and each row's View
+                Updates. */}
+            <SubmissionHistoryTable
+                items={history.map((h) => ({
+                  submissionId: h.submissionId,
+                  submittedAt: h.submittedAt,
+                  workerName: profile.displayName,
+                  departmentName: h.departmentName,
+                  workItemCode: h.workItemCode,
+                  workItemDescription: h.workItemDescription,
+                  submittedProgress: h.submittedProgress,
+                  submittedQuantity: h.submittedQuantity,
+                  unit: h.unit,
+                  reviewStatusLabel: h.reviewStatusLabel,
+                  reviewStatusCode: h.reviewStatusCode,
+                  correctedProgress: h.correctedProgress,
+                  approvalComments: h.approvalComments,
+                  taskLabel: h.taskLabel ?? null,
+                }))}
+                focusSubmissionId={historyFocusId}
+              />
           </div>
         )}
 
-        {tab === "communication" && <ChatPanel />}
+        {tab === "communication" && <ChatPanel contextProjectId={activeProjectId} />}
 
         {/* ---------------- Profile ---------------- */}
         {tab === "profile" && (
@@ -936,7 +581,6 @@ export default function WorkerTabs({
             </p>
           </Card>
         )}
-      </div>
-    </div>
+    </DashboardShell>
   );
 }

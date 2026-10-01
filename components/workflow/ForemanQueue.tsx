@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
+import ReviewCardLayout from "@/components/workflow/ReviewCardLayout";
 import StatusFlow from "@/components/workflow/StatusFlow";
 import { formatPercent } from "@/lib/format";
 import Card from "@/components/ui/Card";
@@ -10,6 +10,7 @@ import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import Input from "@/components/ui/Input";
 
+import { errorMessage, readApiJson } from "@/lib/apiClient";
 export type ForemanQueueItem = {
   submissionId: string;
   workerName: string;
@@ -53,8 +54,6 @@ export default function ForemanQueue({
     focusBySubmission
       ? item.submissionId === focusSubmissionId
       : !!focusWorkItemCode && item.workItemCode === focusWorkItemCode;
-  // Which card has its Live Updates expanded (one at a time).
-  const [liveUpdatesFor, setLiveUpdatesFor] = useState<string | null>(null);
   // Bring a notification's target record into view once rendered.
   useEffect(() => {
     if (!focusSubmissionId && !focusWorkItemCode) return;
@@ -89,8 +88,7 @@ export default function ForemanQueue({
         comment: draft?.comment,
       }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error ?? "Forward failed.");
+    await readApiJson(res, "The submission couldn't be forwarded. Please try again.");
 
     setDrafts((prev) => {
       const next = { ...prev };
@@ -108,7 +106,7 @@ export default function ForemanQueue({
       setSuccessMessage("Submission forwarded to Contractor.");
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Forward failed.");
+      setError(errorMessage(err, "Forward failed."));
     } finally {
       setBusyId(null);
     }
@@ -138,7 +136,7 @@ export default function ForemanQueue({
         await forwardOne(item);
         done += 1;
       } catch (err) {
-        firstError ??= err instanceof Error ? err.message : "Forward failed.";
+        firstError ??= errorMessage(err, "Forward failed.");
       }
     }
     setSelectedIds(new Set());
@@ -229,28 +227,14 @@ export default function ForemanQueue({
               />
               Select to forward
             </label>
-            <p>
-              <span className="text-foreground-secondary">Worker:</span>{" "}
-              <span className="font-medium">{item.workerName}</span>
-            </p>
-            <p>
-              <span className="text-foreground-secondary">Project:</span> {item.projectName}
-            </p>
-            <p>
-              <span className="text-foreground-secondary">Department:</span> {item.departmentName}
-            </p>
-            <p>
-              <span className="text-foreground-secondary">Work ID:</span> {item.workItemCode}
-            </p>
-            <p>
-              <span className="text-foreground-secondary">Work:</span> {item.workItemDescription}
-            </p>
-            {item.description && (
-              <p>
-                <span className="text-foreground-secondary">Description:</span> {item.description}
-              </p>
-            )}
-
+            <ReviewCardLayout
+              workItemCode={item.workItemCode}
+              workItemDescription={item.workItemDescription}
+              description={item.description}
+              projectName={item.projectName}
+              workerName={item.workerName}
+              departmentName={item.departmentName}
+            >
             {isEditing ? (
               <div>
                 <label className="block text-foreground-secondary mb-1">Submitted Progress:</label>
@@ -307,6 +291,7 @@ export default function ForemanQueue({
               </Badge>
             </p>
             <StatusFlow statusCode="AWAITING_FOREMAN_REVIEW" />
+            </ReviewCardLayout>
 
             <div className="flex gap-2 pt-1 flex-wrap">
               {isEditing ? (
@@ -374,21 +359,9 @@ export default function ForemanQueue({
               <Button size="sm" onClick={() => handleForward(item)} disabled={busyId === item.submissionId || bulkBusy}>
                 {busyId === item.submissionId ? "Forwarding…" : "Forward to Contractor"}
               </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setLiveUpdatesFor((v) => (v === item.submissionId ? null : item.submissionId))}
-              >
-                {liveUpdatesFor === item.submissionId ? "Hide live updates" : "Live updates"}
-              </Button>
             </div>
-            {/* Worker photos/voice notes for THIS work item — the existing
-                reviewer feed, filtered to the item (read-only evidence). */}
-            {liveUpdatesFor === item.submissionId && (
-              <div className="border-t border-line pt-3">
-                <LiveUpdateFeed initialFilterCode={item.workItemCode} />
-              </div>
-            )}
+            {/* Live Updates for this work item live on Work Items (one entry
+                point per work item) — not repeated on the review card. */}
           </Card>
           </div>
         );

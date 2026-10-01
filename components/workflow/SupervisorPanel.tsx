@@ -2,24 +2,33 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ListChecks, CheckCircle2, Clock, AlertTriangle } from "lucide-react";
-import { formatPercent, formatQuantity, humanizeApprovalStatus } from "@/lib/format";
+import { formatMoney, formatPercent, formatQuantity, humanizeApprovalStatus } from "@/lib/format";
 import StatusFlow from "@/components/workflow/StatusFlow";
 import PlannedQuantityEditor from "@/components/workflow/PlannedQuantityEditor";
 import WorkItemTaskManager from "@/components/workflow/WorkItemTaskManager";
 import DashboardPanel from "@/components/workflow/DashboardPanel";
-import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
+import ReviewCardLayout from "@/components/workflow/ReviewCardLayout";
 import { useCountUp } from "@/components/workflow/useCountUp";
-import { progressColorClass } from "@/lib/progressColor";
+import { progressColorClass, progressSoftClass } from "@/lib/progressColor";
+import ProgressValue from "@/components/workflow/charts/ProgressValue";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
-import Badge from "@/components/ui/Badge";
+import Badge, { type BadgeVariant } from "@/components/ui/Badge";
 import Input from "@/components/ui/Input";
+import ErrorNotice from "@/components/ui/ErrorNotice";
+import { errorMessage, readApiJson } from "@/lib/apiClient";
 import type { DashboardData } from "@/lib/dashboard";
+import { calculateOverallProgress } from "@/lib/calculations";
 
 export type SupervisorQueueItem = {
   submissionId: string;
+  /** Work item has no planned quantity: the submitted % is that day's
+   * additional progress, added to the approved total on approval. */
+  percentageMode?: boolean;
+  /** The work item's current approved total % (null = none yet). */
+  approvedProgress?: number | null;
   validationId: string | null;
   workerName: string;
   projectName: string;
@@ -120,88 +129,6 @@ function ProgressListCard({ title, items }: { title: string; items: WorkItemProg
   );
 }
 
-/** Renders the actual submission activity for one date (Today /
- * Yesterday) — one card per submission, not one per work item, so a
- * quiet day shows "No submissions" instead of every work item with
- * "—". Shows exactly what the mentor asked for: worker, department,
- * work ID, work description, submitted progress/quantity, and review
- * status — read-only (review/approve stays in Today Reviews below,
- * unchanged).
- *
- * Collapsed by default (just a count) so a busy day doesn't make the
- * dashboard long — the detailsLabel button expands the full list
- * in-place. Own local state, so Today's and Yesterday's cards expand
- * independently. */
-function SubmissionActivityCard({
-  title,
-  items,
-  detailsLabel,
-}: {
-  title: string;
-  items: SupervisorQueueItem[];
-  detailsLabel: string;
-}) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <Card className="space-y-2 text-sm">
-      <div className="flex items-center justify-between">
-        <h2 className="font-semibold text-foreground">{title}</h2>
-        <span className="text-xs text-foreground-muted tabular-nums">
-          {items.length} submission{items.length === 1 ? "" : "s"}
-        </span>
-      </div>
-
-      {items.length === 0 ? (
-        <p className="text-foreground-muted">No submissions.</p>
-      ) : !expanded ? (
-        <button
-          onClick={() => setExpanded(true)}
-          className="text-sm text-brand transition-colors duration-150 hover:underline"
-        >
-          {detailsLabel}
-        </button>
-      ) : (
-        <>
-          <button
-            onClick={() => setExpanded(false)}
-            className="text-sm text-brand transition-colors duration-150 hover:underline"
-          >
-            Hide Details
-          </button>
-          <div className="divide-y divide-line">
-            {items.map((item) => (
-              <div key={item.submissionId} className="py-2.5 first:pt-0 last:pb-0 space-y-0.5">
-                <p>
-                  <span className="text-foreground-secondary">Worker:</span>{" "}
-                  <span className="font-medium">{item.workerName}</span>{" "}
-                  <span className="text-foreground-muted">({item.departmentName})</span>
-                </p>
-                <p>
-                  <span className="text-foreground-secondary">{item.workItemCode}</span>{" "}
-                  <span>{item.workItemDescription}</span>
-                </p>
-                <p>
-                  <span className="text-foreground-secondary">Submitted:</span>{" "}
-                  <span className="font-medium tabular-nums">
-                    {item.submittedQuantity !== null
-                      ? `${formatQuantity(item.submittedQuantity)} ${item.unit ?? ""}`.trim()
-                      : formatPercent(item.submittedProgress)}
-                  </span>
-                </p>
-                <p>
-                  <span className="text-foreground-secondary">Status:</span>{" "}
-                  <span className="font-medium">{item.reviewStatusLabel}</span>
-                </p>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </Card>
-  );
-}
-
 type ExecutiveSummaryPeriod = "daily" | "weekly" | "monthly";
 
 type ExecutiveSummaryData = {
@@ -223,100 +150,134 @@ type ExecutiveSummaryData = {
     workItemCode: string;
     workItemDescription: string;
     progress: number | null;
+    estimatedAmount: number | null;
     statusLabel: "Completed" | "In Progress" | "Not Started";
     touchedInPeriod: boolean;
   }[];
 };
 
-/** Brief title / "What happened …" wording per period — display only. */
-const PERIOD_WORDING: Record<ExecutiveSummaryPeriod, { title: string; happened: string }> = {
-  daily: { title: "Today's Project Brief", happened: "What happened today" },
-  weekly: { title: "This Week's Project Brief", happened: "What happened this week" },
-  monthly: { title: "Month-to-Date Project Brief", happened: "What happened this month" },
+/** Period-change label / "updated" list heading per period — display
+ * only. The card itself is titled Progress Tracking (or Summary), with the
+ * period chosen by its Today / This Week / MTD pills. */
+const PERIOD_WORDING: Record<ExecutiveSummaryPeriod, { change: string; updated: string }> = {
+  daily: { change: "Today's updates", updated: "Updated today" },
+  weekly: { change: "This week's updates", updated: "Updated this week" },
+  monthly: { change: "MTD updates", updated: "Updated this month" },
 };
+
+/** Card title per ExecutiveSummaryCard view. */
+const SUMMARY_VIEW_TITLE = { full: "Progress Tracking", progress: "Progress Tracking", summary: "Summary" } as const;
+
+/** How many touched work items the card lists before "+N more". */
+const UPDATED_LIST_LIMIT = 5;
 
 function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : pluralForm}`;
 }
 
-const CHANGE_LABEL: Record<ExecutiveSummaryPeriod, string> = {
-  daily: "Today's Change",
-  weekly: "This Week's Change",
-  monthly: "This Month's Change",
-};
-
-function formatMoney(value: number): string {
-  return `$${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
-}
-
-/** Overall Progress figure + bar, counting up 0 → value on load (display
- * only — see useCountUp), colored by the shared progress-health bands. */
-function AnimatedOverallProgress({ percent }: { percent: number | null }) {
+/** Overall Progress panel, counting up 0 → value on load (display only —
+ * see useCountUp). One count-up drives the number, the bar AND the
+ * panel tint, so the color follows the CURRENT animated percentage
+ * (red → orange → yellow → green) and stops on the final band. Dark text
+ * for contrast; the panel and bar carry the progress-band color. */
+function OverallProgressPanel({ percent, aside }: { percent: number | null; aside?: React.ReactNode }) {
   const shown = useCountUp(percent);
   return (
-    <>
-      <p className={`text-2xl font-bold tabular-nums leading-none ${progressColorClass(percent)}`}>
-        {shown !== null ? `${shown}%` : "—"}
-      </p>
-      <p className="text-xs text-foreground-secondary">Overall Progress</p>
-    </>
-  );
-}
-
-function AnimatedBar({ percent }: { percent: number }) {
-  const shown = useCountUp(percent) ?? 0;
-  return (
-    <div className="h-1.5 rounded-full bg-surface-soft overflow-hidden" aria-hidden>
-      <div
-        className={`h-full rounded-full ${progressColorClass(percent, "bg")}`}
-        style={{ width: `${Math.min(100, Math.max(0, shown))}%` }}
-      />
+    <div className={`rounded-lg border px-4 py-3 space-y-2 ${progressSoftClass(shown)}`}>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="text-xs text-foreground-secondary">Overall Progress</p>
+          <p className="text-2xl font-bold text-foreground tabular-nums leading-tight">
+            {shown !== null ? `${shown}%` : "—"}
+          </p>
+        </div>
+        {aside}
+      </div>
+      {shown !== null && (
+        <div className="h-1.5 rounded-full bg-white/70 overflow-hidden" aria-hidden>
+          <div
+            className={`h-full rounded-full ${progressColorClass(shown, "bg")}`}
+            style={{ width: `${Math.min(100, Math.max(0, shown))}%` }}
+          />
+        </div>
+      )}
     </div>
   );
 }
 
+/** One label/value line of the Executive Summary. */
+function SummaryLine({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <li className="flex items-center justify-between gap-3 border-b border-line-soft pb-1.5 last:border-0 last:pb-0">
+      <span className="text-foreground-secondary">{label}</span>
+      <span className="font-medium text-foreground tabular-nums text-right">{children}</span>
+    </li>
+  );
+}
+
 const PERIOD_TABS: { key: ExecutiveSummaryPeriod; label: string }[] = [
-  { key: "daily", label: "Daily" },
-  { key: "weekly", label: "Weekly" },
-  { key: "monthly", label: "Monthly" },
+  { key: "daily", label: "Today" },
+  { key: "weekly", label: "This Week" },
+  { key: "monthly", label: "MTD" },
 ];
 
 /**
- * Executive Summary — structured KPIs computed from real application
- * data (see lib/workflow.ts getExecutiveSummary via
+ * Today's / This Week's / MTD Progress with a short Executive Summary —
+ * structured values computed from real application data (see
+ * lib/workflow.ts getExecutiveSummary via
  * app/api/workflow/daily-summary/route.ts), NOT an AI-written
- * paragraph: a CEO/PM should understand project status within a few
- * seconds. Daily/Weekly/Monthly share one fetch/render path, only the
- * `period` sent to the API changes.
+ * paragraph: status should be readable at a glance. All three periods
+ * share one fetch/render path, only the `period` sent to the API
+ * changes.
  *
- * Rendered as a short operational brief (not KPI tiles): how the project
- * is doing, what changed in the period, and what needs attention, with a
- * jump to Today Reviews. Purely a presentation choice — every value is
- * still the same `summary` fetched below, nothing hardcoded and nothing
- * recalculated here. "What happened" lists only work items with
- * touchedInPeriod (a submission within the selected period), never items
- * that merely carry older progress.
+ * Layout, top to bottom: overall progress with its earned value (tinted
+ * by the shared progress bands), a few Executive Summary lines
+ * (completed / pending / the period's updates / what needs attention),
+ * then the work items actually updated in the period, each as
+ * "progress · value". Every value is the same `summary` fetched below —
+ * nothing hardcoded, nothing recalculated here beyond subtracting two
+ * returned totals. The list shows only work items with touchedInPeriod
+ * (a submission within the selected period), never items that merely
+ * carry older progress.
  */
 export function ExecutiveSummaryCard({
   onReviewSubmissions,
   showTotals = true,
   projectId,
+  departmentId,
+  view = "full",
+  description,
 }: {
   onReviewSubmissions: () => void;
+  /** Optional plain-language description shown at the top of the
+   * summary part (e.g. the Subcontractor Summary's sentences built from
+   * the page's own KPI numbers). Omitted = unchanged card. */
+  description?: React.ReactNode;
+  /** Which part to show: "full" (everything, titled Progress Tracking),
+   * "summary" (totals + the Executive Summary lines, titled Summary) or
+   * "progress" (the work items updated in the period, titled Progress
+   * Tracking) — lets a dashboard put the two behind separate tabs
+   * instead of one long card. Same fetch and data in every view. */
+  view?: "full" | "summary" | "progress";
   /** Project context for a Contractor with roles on several projects —
    * sent to the summary API, which resolves it among the caller's own
    * roles. Omitted = the first role (single-project behavior). */
   projectId?: string;
-  /** Show the project totals (Overall Progress figure/bar, earned vs
-   * scheduled, Completed/Remaining Work). The Subcontractor Dashboard
-   * turns this off — its KPI cards already show exactly those numbers —
-   * leaving the period change, what happened and what needs attention. */
+  /** Department within that project, for a role holder with several
+   * departments there — resolved the same own-roles-only way. */
+  departmentId?: string;
+  /** Show the project totals (Overall Progress + earned value, Completed/
+   * Pending work). The Subcontractor Dashboard turns this off — its KPI
+   * cards already show exactly those numbers — leaving the period's
+   * updates, what needs attention and the updated work items. */
   showTotals?: boolean;
 }) {
   const [period, setPeriod] = useState<ExecutiveSummaryPeriod>("daily");
   const [summary, setSummary] = useState<ExecutiveSummaryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Bumped by Retry to re-run the fetch below after a failure.
+  const [attempt, setAttempt] = useState(0);
 
   // `loading`/`error` reset on a period switch happens in the button's
   // own click handler below (a user event), not here — the effect only
@@ -330,15 +291,14 @@ export function ExecutiveSummaryCard({
     fetch("/api/workflow/daily-summary", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ period, projectId }),
+      body: JSON.stringify({ period, projectId, departmentId }),
     })
       .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Could not load the summary.");
+        const data = await readApiJson<{ summary: ExecutiveSummaryData }>(res, "Couldn't load progress tracking.");
         if (!ignore) setSummary(data.summary);
       })
       .catch((err) => {
-        if (!ignore) setError(err instanceof Error ? err.message : "Could not load the summary.");
+        if (!ignore) setError(errorMessage(err, "Couldn't load progress tracking."));
       })
       .finally(() => {
         if (!ignore) setLoading(false);
@@ -346,7 +306,7 @@ export function ExecutiveSummaryCard({
     return () => {
       ignore = true;
     };
-  }, [period, projectId]);
+  }, [period, projectId, departmentId, attempt]);
 
   function selectPeriod(next: ExecutiveSummaryPeriod) {
     setPeriod(next);
@@ -354,20 +314,43 @@ export function ExecutiveSummaryCard({
     setError(null);
   }
 
+  function retry() {
+    setLoading(true);
+    setError(null);
+    setAttempt((n) => n + 1);
+  }
+
+  const showSummaryPart = view !== "progress";
+  const showProgressPart = view !== "summary";
+
   return (
-    <Card className="space-y-3 text-sm">
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <h2 className="font-semibold text-foreground">{PERIOD_WORDING[period].title}</h2>
+    <Card className="space-y-4 text-sm">
+      <div className="flex items-start justify-between gap-2 flex-wrap">
+        <div className="min-w-0">
+          <h2 className="font-semibold text-foreground">{SUMMARY_VIEW_TITLE[view]}</h2>
+          {summary && !loading && (
+            <p className="text-xs text-foreground-secondary truncate">
+              {summary.projectName} ·{" "}
+              {/department$/i.test(summary.departmentName)
+                ? summary.departmentName
+                : `${summary.departmentName} Department`}{" "}
+              ·{" "}
+              {period === "daily"
+                ? new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })
+                : summary.periodLabel}
+            </p>
+          )}
+        </div>
         <div className="flex gap-1">
           {PERIOD_TABS.map((t) => (
             <button
               key={t.key}
               type="button"
               onClick={() => selectPeriod(t.key)}
-              className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors duration-150 ${
+              className={`px-2.5 py-1 rounded-full border text-xs font-medium transition-colors duration-150 ${
                 period === t.key
-                  ? "bg-brand text-white"
-                  : "bg-surface-soft text-foreground-secondary hover:bg-surface-hover"
+                  ? "bg-brand-soft text-brand border-brand-border"
+                  : "bg-surface-soft text-foreground-secondary border-transparent hover:bg-surface-hover"
               }`}
             >
               {t.label}
@@ -376,103 +359,116 @@ export function ExecutiveSummaryCard({
         </div>
       </div>
 
+      {view !== "progress" && description}
+
       {loading && <p className="text-foreground-muted">Loading…</p>}
-      {error && <p className="text-error">{error}</p>}
+      {error && !loading && <ErrorNotice message={error} onRetry={retry} />}
 
       {summary && !loading && (() => {
         const changed = summary.topWorkItems.filter((w) => w.touchedInPeriod);
+        const listed = changed.slice(0, UPDATED_LIST_LIMIT);
         // topWorkItems is capped server-side; workItemsUpdated is the true
         // count of distinct work items touched in the period.
-        const notListed = Math.max(0, summary.workItemsUpdated - changed.length);
+        const notListed = Math.max(0, summary.workItemsUpdated - listed.length);
         const needsAttention = summary.pendingCount > 0 || summary.rolledBackCount > 0;
+        const hasValue = summary.earnedAmount !== null && summary.scheduledAmount !== null;
+        const pendingWork = summary.totalWorkItems - summary.completedWorkItems;
 
         return (
           <div className="space-y-4">
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div className="min-w-0">
-                <p className="font-medium text-foreground truncate">{summary.projectName}</p>
-                <p className="text-xs text-foreground-secondary">
-                  {/department$/i.test(summary.departmentName)
-                    ? summary.departmentName
-                    : `${summary.departmentName} Department`}{" "}
-                  ·{" "}
-                  {period === "daily"
-                    ? new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" })
-                    : summary.periodLabel}
-                </p>
-              </div>
-              {showTotals && (
-              <div className="text-right">
-                <AnimatedOverallProgress percent={summary.overallProgress} />
-                {summary.earnedAmount !== null && summary.scheduledAmount !== null && (
-                  <p className="text-xs text-foreground-secondary tabular-nums mt-0.5">
-                    {formatMoney(summary.earnedAmount)} earned / {formatMoney(summary.scheduledAmount)} scheduled
-                  </p>
-                )}
-              </div>
-              )}
-            </div>
-            {showTotals && summary.overallProgress !== null && <AnimatedBar percent={summary.overallProgress} />}
+            {showSummaryPart && showTotals && (
+              <OverallProgressPanel
+                percent={summary.overallProgress}
+                aside={
+                  hasValue && (
+                    <div className="text-right">
+                      <p className="text-xs text-foreground-secondary">Value earned</p>
+                      <p className="font-semibold text-foreground tabular-nums">
+                        {formatMoney(summary.earnedAmount)}{" "}
+                        <span className="font-normal text-foreground-secondary">
+                          of {formatMoney(summary.scheduledAmount)}
+                        </span>
+                      </p>
+                    </div>
+                  )
+                }
+              />
+            )}
 
-            {/* Executive Summary — short lines (the Overall Progress figure
-                is the large number above), every value straight
-                from the same summary response (no paragraph, no new math
-                beyond subtraction of two returned totals). */}
-            <ul className={`grid gap-x-6 gap-y-1.5 text-sm ${showTotals ? "sm:grid-cols-2" : ""}`}>
-              {showTotals && (
-              <>
-              <li className="flex justify-between gap-3 border-b border-line-soft pb-1">
-                <span className="text-foreground-secondary">Completed Work</span>
-                <span className="font-medium tabular-nums">
-                  {summary.completedWorkItems} of {plural(summary.totalWorkItems, "work item")}
-                </span>
-              </li>
-              <li className="flex justify-between gap-3 border-b border-line-soft pb-1">
-                <span className="text-foreground-secondary">Remaining Work</span>
-                <span className="font-medium tabular-nums text-right">
-                  {plural(summary.totalWorkItems - summary.completedWorkItems, "work item")}
-                  {summary.earnedAmount !== null && summary.scheduledAmount !== null
-                    ? ` · ${formatMoney(Math.max(0, summary.scheduledAmount - summary.earnedAmount))}`
-                    : ""}
-                </span>
-              </li>
-              </>
-              )}
-              <li className="flex justify-between gap-3 border-b border-line-soft pb-1">
-                <span className="text-foreground-secondary">{CHANGE_LABEL[period]}</span>
-                <span className="font-medium tabular-nums text-right">
+            {showSummaryPart && (
+            <div>
+              <h3 className="text-xs font-semibold text-foreground-secondary uppercase tracking-wide mb-1.5">
+                Executive Summary
+              </h3>
+              <ul className="space-y-1.5">
+                {showTotals && (
+                  <>
+                    <SummaryLine label="Completed work">
+                      {summary.completedWorkItems} of {plural(summary.totalWorkItems, "work item")}
+                    </SummaryLine>
+                    <SummaryLine label="Pending work">
+                      {plural(pendingWork, "work item")}
+                      {hasValue && (
+                        <span className="font-normal text-foreground-secondary">
+                          {" "}· {formatMoney(Math.max(0, summary.scheduledAmount! - summary.earnedAmount!))} left
+                        </span>
+                      )}
+                    </SummaryLine>
+                  </>
+                )}
+                <SummaryLine label={PERIOD_WORDING[period].change}>
                   {summary.updatesSubmitted === 0
                     ? "No updates"
                     : `${plural(summary.updatesSubmitted, "update")} · ${summary.approvedCount} approved`}
-                </span>
-              </li>
-            </ul>
+                </SummaryLine>
+                <SummaryLine label="Needs attention">
+                  {needsAttention ? (
+                    <span className="inline-flex flex-wrap items-center justify-end gap-2">
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-warning-border bg-warning-soft px-2 py-0.5 text-xs">
+                        <span className="h-1.5 w-1.5 rounded-full bg-warning" aria-hidden />
+                        {[
+                          summary.pendingCount > 0 ? `${summary.pendingCount} to review` : null,
+                          summary.rolledBackCount > 0 ? `${summary.rolledBackCount} returned` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={onReviewSubmissions}
+                        className="text-xs font-medium text-brand transition-colors duration-150 hover:underline"
+                      >
+                        Review
+                      </button>
+                    </span>
+                  ) : (
+                    <span className="font-normal text-foreground-secondary">Nothing right now</span>
+                  )}
+                </SummaryLine>
+              </ul>
+            </div>
+            )}
 
+            {showProgressPart && (
             <div>
               <h3 className="text-xs font-semibold text-foreground-secondary uppercase tracking-wide mb-1.5">
-                {PERIOD_WORDING[period].happened}
+                {PERIOD_WORDING[period].updated}
               </h3>
-              {changed.length === 0 ? (
+              {listed.length === 0 ? (
                 <p className="text-foreground-muted">No work items updated during this period.</p>
               ) : (
-                <ul className="space-y-1">
-                  {changed.map((w) => (
-                    <li key={w.workItemCode} className="flex items-baseline justify-between gap-3">
+                <ul className="space-y-1.5">
+                  {listed.map((w) => (
+                    <li key={w.workItemCode} className="flex items-center justify-between gap-3">
                       <span className="min-w-0 truncate">
                         <span className="text-foreground-secondary">{w.workItemCode}</span>{" "}
                         <span className="text-foreground">— {w.workItemDescription}</span>
                       </span>
-                      <span
-                        className={`shrink-0 font-medium tabular-nums ${
-                          w.statusLabel === "Completed"
-                            ? "text-success"
-                            : w.statusLabel === "In Progress"
-                              ? "text-info"
-                              : "text-foreground-secondary"
-                        }`}
-                      >
-                        {w.progress !== null ? `${w.progress}%` : "—"} {w.statusLabel}
-                      </span>
+                      <ProgressValue
+                        percent={w.progress}
+                        amount={w.estimatedAmount}
+                        title={`${w.statusLabel}${w.estimatedAmount !== null ? " · earned value at current progress" : ""}`}
+                      />
                     </li>
                   ))}
                   {notListed > 0 && (
@@ -481,36 +477,342 @@ export function ExecutiveSummaryCard({
                 </ul>
               )}
             </div>
-
-            <div
-              className={`rounded-lg border px-3 py-2.5 ${
-                needsAttention ? "border-warning-border bg-warning-soft" : "border-line bg-surface-soft"
-              }`}
-            >
-              <h3 className="text-xs font-semibold text-foreground-secondary uppercase tracking-wide mb-1">
-                What needs your attention
-              </h3>
-              {needsAttention ? (
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <ul className="text-warning font-medium">
-                    {summary.pendingCount > 0 && (
-                      <li>{plural(summary.pendingCount, "submission")} waiting for review</li>
-                    )}
-                    {summary.rolledBackCount > 0 && (
-                      <li>{plural(summary.rolledBackCount, "submission")} returned for correction</li>
-                    )}
-                  </ul>
-                  <Button size="sm" onClick={onReviewSubmissions}>
-                    Review Submissions
-                  </Button>
-                </div>
-              ) : (
-                <p className="text-foreground-secondary">Nothing needs your attention right now.</p>
-              )}
-            </div>
+            )}
           </div>
         );
       })()}
+    </Card>
+  );
+}
+
+type HealthStatus = "empty" | "complete" | "attention" | "review" | "active";
+
+// No "On track / Behind schedule": this data has no planned dates or
+// target progress to judge a schedule against, so the headline states
+// only what the data supports.
+const HEALTH_BADGE: Record<HealthStatus, { variant: BadgeVariant; label: string }> = {
+  empty: { variant: "neutral", label: "No active work yet" },
+  complete: { variant: "success", label: "Complete" },
+  attention: { variant: "error", label: "Attention required" },
+  review: { variant: "warning", label: "Awaiting your review" },
+  active: { variant: "brand", label: "Active — no issues flagged" },
+};
+
+/** Days before today in the "recent" view (today + these). */
+const RECENT_DAYS = 4;
+
+function plainList(items: string[], limit = 3): string {
+  return items.length <= limit ? items.join(", ") : `${items.slice(0, limit).join(", ")} and ${items.length - limit} more`;
+}
+
+function counted(n: number, singular: string, pluralForm = `${singular}s`): string {
+  return `${n} ${n === 1 ? singular : pluralForm}`;
+}
+
+const noopSubscribe = () => () => {};
+
+/**
+ * Executive Summary — "Overall Health at a Glance" for the Contractor,
+ * in the mentor's executive-summary format, compact enough to scan in
+ * 5–10 seconds: headline status (1–2 lines) → Key accomplishments →
+ * Progress against plan → Blockers & risks → Decisions needed → Client &
+ * revenue-relevant updates → Plan for today. Each fact appears once, in
+ * its most fitting section; a section with no supporting data is left
+ * out (Decisions needed says "None."). Metrics aren't repeated here —
+ * the KPI row above already shows them.
+ *
+ * Nothing is fetched or invented; every line is traceable to data the
+ * Contractor page already loaded:
+ *   - workItems: the selected scope's Active work items (getDashboardData):
+ *     progress, completed, lastApprovedAt, planned quantity, and the
+ *     existing "stuck" rule (not complete, no approved progress 14+ days).
+ *   - history: Submission History for the page's current department —
+ *     submittedAt / approvedAt / status / worker (today and the previous
+ *     4 days, returned work and who it's with).
+ *   - pendingItems: the Contractor's own review queue right now.
+ *   - earned / scheduled / month values: the scope's existing earned-value
+ *     totals — the only plan and revenue measure in this data.
+ * History/queue facts appear only when the selected scope includes that
+ * department (labelled with it when the scope is wider). There are no
+ * planned dates or planned progress, so nothing here claims on/behind
+ * schedule.
+ */
+export function OverallHealthSummary({
+  workItems,
+  history,
+  pendingItems,
+  activityScope,
+  activityDepartmentName,
+  earnedAmount,
+  scheduledAmount,
+  monthApprovedValue,
+  previousMonthApprovedValue,
+  onReviewSubmissions,
+  description,
+}: {
+  /** Plain-language description shown in place of the headline line
+   * (e.g. the Dashboard KPI values in words — see KpiSummaryText), so
+   * the card never states a second, differently computed progress
+   * figure. Omitted = the headline, unchanged. */
+  description?: React.ReactNode;
+  workItems: {
+    code: string;
+    progressPercentage: number | null;
+    isCompleted: boolean;
+    isStuck: boolean;
+    plannedQuantity: number | null;
+    lastApprovedAt: string | null;
+  }[];
+  history: {
+    workItemCode: string;
+    workerName: string;
+    submittedAt: string;
+    submittedProgress: number;
+    correctedProgress?: number | null;
+    reviewStatusCode?: string;
+    approvedAt?: string | null;
+  }[];
+  pendingItems: { workItemCode: string }[];
+  /** "same": the scope is exactly the department history/queue cover;
+   * "partial": the scope is wider (facts are labelled with that
+   * department); "none": another department — those facts are omitted. */
+  activityScope: "same" | "partial" | "none";
+  activityDepartmentName: string;
+  earnedAmount: number | null;
+  scheduledAmount: number | null;
+  monthApprovedValue: number | null;
+  previousMonthApprovedValue: number | null;
+  onReviewSubmissions: () => void;
+}) {
+  // Day boundaries are the viewer's local calendar days, so the dated
+  // facts are only computed in the browser (server render omits them).
+  const isClient = useSyncExternalStore(noopSubscribe, () => true, () => false);
+
+  const total = workItems.length;
+  const completed = workItems.filter((w) => w.isCompleted).length;
+  const open = workItems.filter((w) => !w.isCompleted);
+  const inProgressItems = open.filter((w) => (w.progressPercentage ?? 0) > 0);
+  const stalled = open.filter((w) => w.isStuck);
+  const overall = calculateOverallProgress(workItems.map((w) => w.progressPercentage));
+  const byCode = new Map(workItems.map((w) => [w.code, w]));
+  const pct = (code: string) => formatPercent(byCode.get(code)?.progressPercentage ?? 0);
+
+  const showActivity = activityScope !== "none";
+  const scopeSuffix = activityScope === "partial" ? ` (${activityDepartmentName})` : "";
+  const scopedHistory = showActivity ? history : [];
+  const at = (iso: string | null | undefined) => (iso ? new Date(iso).getTime() : NaN);
+
+  // Returned = a work item whose LATEST submission was returned; the
+  // worker on it is who it's with (known from History, not assumed).
+  const latest = new Map<string, (typeof history)[number]>();
+  for (const h of scopedHistory) {
+    const seen = latest.get(h.workItemCode);
+    if (!seen || h.submittedAt > seen.submittedAt) latest.set(h.workItemCode, h);
+  }
+  const returned = [...latest.values()].filter(
+    (h) => h.reviewStatusCode === "ROLLED_BACK" && byCode.has(h.workItemCode) && !byCode.get(h.workItemCode)!.isCompleted
+  );
+  const pending = showActivity ? pendingItems : [];
+  const pendingCodes = [...new Set(pending.map((q) => q.workItemCode))];
+
+  const status: HealthStatus =
+    total === 0
+      ? "empty"
+      : completed === total
+        ? "complete"
+        : stalled.length > 0 || returned.length > 0
+          ? "attention"
+          : pending.length > 0
+            ? "review"
+            : "active";
+
+  /** "from → to" approved progress for a percentage-mode item, where each
+   * approval is the cumulative % (the rule getWorkItemCurrentStatus
+   * uses): "from" = its latest approval before `cutoff` (none yet = 0%,
+   * the app's existing rule), "to" = its current approved %. Items with a
+   * planned quantity show "now X%" (their approvals are increments). */
+  const moveText = (code: string, cutoff: number) => {
+    const item = byCode.get(code)!;
+    if (item.plannedQuantity !== null && item.plannedQuantity > 0) return `${code} now at ${pct(code)}`;
+    const before = scopedHistory
+      .filter((h) => h.workItemCode === code && h.reviewStatusCode === "APPROVED" && at(h.approvedAt) < cutoff)
+      .sort((a, b) => at(b.approvedAt) - at(a.approvedAt))[0];
+    return `${code} moved from ${formatPercent(before ? (before.correctedProgress ?? before.submittedProgress) : 0)} to ${pct(code)} approved`;
+  };
+
+  // ---- Headline (1–2 lines): current state + today's key change.
+  const headline =
+    total === 0
+      ? "No active work items in this scope yet."
+      : `Overall progress is ${formatPercent(overall)}, with ${completed} completed, ${inProgressItems.length} in progress${
+          showActivity ? ` and ${pending.length} awaiting your review` : ""
+        }${scopeSuffix} (of ${counted(total, "work item")}).`;
+  let keyChange: string | null = null;
+
+  // ---- Key accomplishments (today + previous 4 days).
+  const accomplishments: string[] = [];
+  if (showActivity && isClient) {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const t0 = todayStart.getTime();
+    const windowStartDate = new Date(todayStart);
+    windowStartDate.setDate(windowStartDate.getDate() - RECENT_DAYS); // calendar days (DST-safe)
+    const windowStart = windowStartDate.getTime();
+    const fmtDay = (ms: number) => new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+    const approvedToday = scopedHistory.filter((h) => at(h.approvedAt) >= t0);
+    const approvedEarlier = scopedHistory.filter((h) => at(h.approvedAt) >= windowStart && at(h.approvedAt) < t0);
+
+    // Today's key change: something completed today, else the biggest
+    // approved move today.
+    const completedToday = workItems.filter((w) => w.isCompleted && at(w.lastApprovedAt) >= t0);
+    const movedTodayCodes = [...new Set(approvedToday.map((h) => h.workItemCode))].filter(
+      (code) => byCode.has(code) && !byCode.get(code)!.isCompleted
+    );
+    let keyCode: string | null = null;
+    if (completedToday.length > 0) {
+      keyCode = completedToday[0].code;
+      keyChange = `Today's key change: ${plainList(completedToday.map((w) => w.code), 2)} ${completedToday.length === 1 ? "was" : "were"} completed.`;
+    } else if (movedTodayCodes.length > 0) {
+      keyCode = [...movedTodayCodes].sort(
+        (a, b) => (byCode.get(b)!.progressPercentage ?? 0) - (byCode.get(a)!.progressPercentage ?? 0)
+      )[0];
+      keyChange = `Today's key change: ${moveText(keyCode, t0)}.`;
+    }
+
+    // Other meaningful outcomes in the window (not repeating the key change).
+    const completedRecently = workItems.filter(
+      (w) => w.isCompleted && at(w.lastApprovedAt) >= windowStart && at(w.lastApprovedAt) < t0
+    );
+    for (const w of completedRecently.slice(0, 2)) {
+      accomplishments.push(`${w.code} was completed (${fmtDay(at(w.lastApprovedAt))}).`);
+    }
+    const movedCodes = [
+      ...new Set(scopedHistory.filter((h) => at(h.approvedAt) >= windowStart).map((h) => h.workItemCode)),
+    ].filter((code) => code !== keyCode && byCode.has(code) && !byCode.get(code)!.isCompleted);
+    for (const code of movedCodes.slice(0, Math.max(0, 2 - accomplishments.length))) {
+      accomplishments.push(`${moveText(code, windowStart)}.`);
+    }
+    if (approvedToday.length > 0 || approvedEarlier.length > 0) {
+      accomplishments.push(
+        `${counted(approvedToday.length, "submission")} approved today, ${approvedEarlier.length} in the previous ${RECENT_DAYS} days${scopeSuffix}.`
+      );
+    }
+  }
+
+  // ---- Progress against plan: the only plan measure in this data is
+  // scheduled value vs earned value (no planned dates/quantities/progress).
+  const planLines: string[] = [];
+  if (earnedAmount !== null && scheduledAmount !== null && scheduledAmount > 0) {
+    planLines.push(
+      `Earned value is ${formatMoney(earnedAmount)} of ${formatMoney(scheduledAmount)} scheduled (${formatPercent(
+        Math.round((earnedAmount / scheduledAmount) * 1000) / 10
+      )}).`
+    );
+  }
+
+  // ---- Blockers & risks: only concrete, rule-based issues.
+  const risks: string[] = [];
+  if (stalled.length > 0) {
+    risks.push(
+      `${plainList(stalled.map((w) => `${w.code} (${formatPercent(w.progressPercentage ?? 0)})`))} — no approved progress for 14+ days.`
+    );
+  }
+  if (returned.length > 0) {
+    risks.push(
+      `${plainList(returned.map((h) => `${h.workItemCode} (${h.workerName})`))} — returned for correction, awaiting resubmission${scopeSuffix}.`
+    );
+  }
+
+  // ---- Decisions needed: what the Contractor must decide.
+  const decisions =
+    pending.length > 0
+      ? [`Approve or return ${counted(pending.length, "pending submission")}: ${plainList(pendingCodes)}${scopeSuffix}.`]
+      : [];
+
+  // ---- Client & revenue-relevant updates (no client data exists).
+  const revenue: string[] = [];
+  if (monthApprovedValue !== null && previousMonthApprovedValue !== null) {
+    revenue.push(
+      `Approved value this month: ${formatMoney(monthApprovedValue)} (last month ${formatMoney(previousMonthApprovedValue)}).`
+    );
+  }
+
+  // ---- Plan for today: at most 3 priorities from the actual state.
+  const plan = [
+    pending.length > 0 ? `Review the ${counted(pending.length, "pending submission")}.` : null,
+    stalled.length > 0
+      ? `Follow up on ${[...stalled].sort((a, b) => (a.lastApprovedAt ?? "").localeCompare(b.lastApprovedAt ?? ""))[0].code}, stalled longest.`
+      : null,
+    returned.length > 0 ? `Confirm ${returned[0].workItemCode} is resubmitted by ${returned[0].workerName}.` : null,
+  ].filter((a): a is string => !!a);
+  if (plan.length === 0 && inProgressItems.length > 0) {
+    const closest = [...inProgressItems]
+      .sort((a, b) => (b.progressPercentage ?? 0) - (a.progressPercentage ?? 0))
+      .slice(0, 2)
+      .map((w) => `${w.code} (${formatPercent(w.progressPercentage ?? 0)})`);
+    plan.push(`Monitor the items closest to completion: ${closest.join(", ")}.`);
+  }
+
+  const sections: { title: string; items: string[]; numbered?: boolean; action?: React.ReactNode }[] = [
+    { title: "Key accomplishments", items: accomplishments },
+    { title: "Progress against plan", items: planLines },
+    { title: "Blockers & risks", items: risks },
+    {
+      title: "Decisions needed",
+      items: decisions.length > 0 ? decisions : total > 0 ? ["None."] : [],
+      action:
+        pending.length > 0 ? (
+          <button
+            type="button"
+            onClick={onReviewSubmissions}
+            className="text-xs font-medium text-brand transition-colors duration-150 hover:underline"
+          >
+            Review submissions
+          </button>
+        ) : null,
+    },
+    { title: "Client & revenue-relevant updates", items: revenue },
+    { title: "Plan for today", items: plan.slice(0, 3), numbered: true },
+  ].filter((section) => section.items.length > 0);
+
+  return (
+    <Card className="space-y-3 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-semibold text-foreground">Overall Health at a Glance</h2>
+        <Badge variant={HEALTH_BADGE[status].variant}>{HEALTH_BADGE[status].label}</Badge>
+      </div>
+      <div className="space-y-0.5">
+        {description ?? <p className="font-medium text-foreground">{headline}</p>}
+        {keyChange && <p className="text-foreground">{keyChange}</p>}
+      </div>
+      <div className="grid gap-x-6 gap-y-2.5 md:grid-cols-2">
+        {sections.map((section) => (
+          <div key={section.title}>
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground-secondary">{section.title}</h3>
+              {section.action}
+            </div>
+            {section.numbered ? (
+              <ol className="mt-0.5 list-decimal space-y-0.5 pl-5 text-foreground">
+                {section.items.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ol>
+            ) : (
+              <ul className="mt-0.5 list-disc space-y-0.5 pl-5 text-foreground">
+                {section.items.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ))}
+      </div>
+      <p className="text-[11px] text-foreground-muted">
+        Follows the Department filter. Stalled = not complete, no approved progress for 14+ days. No planned dates or
+        planned progress exist in this data, so on/behind schedule isn&apos;t assessed.
+      </p>
     </Card>
   );
 }
@@ -559,8 +861,6 @@ function approvalStatusFlowCode(
 export default function SupervisorPanel({
   supervisorUserId,
   queue,
-  todaysProgress,
-  yesterdaysProgress,
   mtdProgress,
   workSummary,
   forcedTab,
@@ -570,6 +870,7 @@ export default function SupervisorPanel({
   focusSubmissionId = null,
   focusWorkItemCode = null,
   projectId,
+  departmentId,
 }: Props & {
   /** When set, this panel shows only that one view and hides its own
    * Today's Progress/MTD Summary tab switcher — used by
@@ -603,6 +904,8 @@ export default function SupervisorPanel({
   focusWorkItemCode?: string | null;
   /** Project context for the brief (see ExecutiveSummaryCard). */
   projectId?: string;
+  /** Department within that project for the brief (see ExecutiveSummaryCard). */
+  departmentId?: string;
 }) {
   const focusBySubmission = !!focusSubmissionId && queue.some((q) => q.submissionId === focusSubmissionId);
   const router = useRouter();
@@ -611,8 +914,6 @@ export default function SupervisorPanel({
   // Target of the brief's "Review Submissions" action — scrolls to the
   // existing Today Reviews section below, no navigation/route change.
   const todayReviewsRef = useRef<HTMLDivElement>(null);
-  // Which review card has its Live Updates expanded (one at a time).
-  const [liveUpdatesFor, setLiveUpdatesFor] = useState<string | null>(null);
   // Bring a notification's target record into view once rendered.
   useEffect(() => {
     if (!focusSubmissionId && !focusWorkItemCode) return;
@@ -627,16 +928,6 @@ export default function SupervisorPanel({
   const [commentDraft, setCommentDraft] = useState<string>("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Open "Previously Completed Work" up front when the focused record is in it.
-  const [showHistory, setShowHistory] = useState(
-    () =>
-      queue.some(
-        (q) =>
-          q.approvalStatus === "APPROVED" &&
-          ((!!focusSubmissionId && q.submissionId === focusSubmissionId) ||
-            (!!focusWorkItemCode && q.workItemCode === focusWorkItemCode))
-      )
-  );
   // Universal Approve: which queue items are ticked, plus a ref-based lock
   // (state alone can lag a rapid double-click) so repeated clicks can
   // never fire a second batch while one is in flight.
@@ -644,15 +935,9 @@ export default function SupervisorPanel({
   const [bulkBusy, setBulkBusy] = useState(false);
   const bulkLock = useRef(false);
 
-  // Completed + Approved work items are display-only history on this
-  // dashboard — same queue data, same fields (isCompleted,
-  // approvalStatus) already returned by lib/workflow.ts, just split for
-  // rendering. A rollback flips approvalStatus away from "APPROVED", so
-  // the item naturally reappears in currentItems on the next refresh —
-  // nothing pins it to history.
-  const historyItems = queue.filter(
-    (item) => item.isCompleted && item.approvalStatus === "APPROVED"
-  );
+  // Completed + Approved work items are finished — not shown in Today
+  // Reviews (they're in the History page). Same queue data, same fields
+  // (isCompleted, approvalStatus) already returned by lib/workflow.ts.
   const currentItems = queue.filter(
     (item) => !(item.isCompleted && item.approvalStatus === "APPROVED")
   );
@@ -690,7 +975,7 @@ export default function SupervisorPanel({
       try {
         await post(id, { action: "approve" });
       } catch (err) {
-        failed.push(err instanceof Error ? err.message : "Action failed.");
+        failed.push(errorMessage(err, "Action failed."));
       }
     }
     setSelectedIds(new Set());
@@ -710,8 +995,7 @@ export default function SupervisorPanel({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ validationId, supervisorUserId, ...body }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error ?? "Action failed.");
+    await readApiJson(res, "The action couldn't be completed. Please try again.");
   }
 
   async function run(validationId: string, action: string, extra: Record<string, unknown> = {}) {
@@ -723,7 +1007,7 @@ export default function SupervisorPanel({
       setCommentingId(null);
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Action failed.");
+      setError(errorMessage(err, "Action failed."));
     } finally {
       setBusyId(null);
     }
@@ -736,6 +1020,14 @@ export default function SupervisorPanel({
     const isCommenting = commentingId === validationId;
     const currentProgress = item.correctedProgress ?? item.submittedProgress;
     const displayedProgress = isEditing ? progressDraft : currentProgress;
+    // Percentage mode, not yet approved: show what approving will do —
+    // the same rule the server applies (lib/workflow.ts
+    // toApprovedTotalData): new total = previous approved + today's %,
+    // capped at 100. No approved progress yet counts as 0%.
+    const showApprovalPreview = !!item.percentageMode && item.approvalStatus !== "APPROVED";
+    const previousApproved = item.approvedProgress ?? 0;
+    const newApprovedPreview = Math.min(100, Math.round((previousApproved + (displayedProgress ?? 0)) * 100) / 100);
+    const todayLabel = item.percentageMode ? "Submitted today" : "Submitted Progress";
 
     const isFocused = focusBySubmission
       ? item.submissionId === focusSubmissionId
@@ -762,32 +1054,22 @@ export default function SupervisorPanel({
             Select for approval
           </label>
         )}
-        <p>
-          <span className="text-foreground-secondary">Worker:</span>{" "}
-          <span className="font-medium">{item.workerName}</span>
-        </p>
-        <p>
-          <span className="text-foreground-secondary">Project:</span> {item.projectName}
-        </p>
-        <p>
-          <span className="text-foreground-secondary">Department:</span> {item.departmentName}
-        </p>
-        <p>
-          <span className="text-foreground-secondary">Work ID:</span> {item.workItemCode}
-        </p>
-        <p>
-          <span className="text-foreground-secondary">Work:</span> {item.workItemDescription}
-        </p>
-        {item.description && (
-          <p>
-            <span className="text-foreground-secondary">Description:</span> {item.description}
-          </p>
-        )}
-
+        <ReviewCardLayout
+          workItemCode={item.workItemCode}
+          workItemDescription={item.workItemDescription}
+          description={item.description}
+          projectName={item.projectName}
+          workerName={item.workerName}
+          departmentName={item.departmentName}
+        >
         {isEditing ? (
           <div>
             <label className="block text-foreground-secondary mb-1">
-              {item.correctedProgress !== null ? "Corrected Progress:" : "Submitted Progress:"}
+              {item.percentageMode
+                ? "Progress today (%):"
+                : item.correctedProgress !== null
+                  ? "Corrected Progress:"
+                  : "Submitted Progress:"}
             </label>
             <div className="flex items-center gap-1.5">
               <Input
@@ -814,14 +1096,35 @@ export default function SupervisorPanel({
           </>
         ) : (
           <p>
-            <span className="text-foreground-secondary">Submitted Progress:</span>{" "}
+            <span className="text-foreground-secondary">{todayLabel}:</span>{" "}
             <span className="font-medium tabular-nums">{formatPercent(displayedProgress)}</span>
           </p>
+        )}
+        {showApprovalPreview && (
+          <div className="rounded-md border border-line bg-surface-soft px-3 py-2 space-y-0.5">
+            <p>
+              <span className="text-foreground-secondary">Previously approved:</span>{" "}
+              <span className="font-medium tabular-nums">{formatPercent(previousApproved)}</span>
+            </p>
+            <p>
+              <span className="text-foreground-secondary">Submitted today:</span>{" "}
+              <span className="font-medium tabular-nums">{formatPercent(displayedProgress)}</span>
+            </p>
+            <p>
+              <span className="text-foreground-secondary">New approved progress:</span>{" "}
+              <span className="font-semibold tabular-nums">{formatPercent(newApprovedPreview)}</span>
+              {previousApproved + (displayedProgress ?? 0) > 100 && (
+                <span className="text-xs text-foreground-muted"> (capped at 100%)</span>
+              )}
+            </p>
+          </div>
         )}
 
         {item.scheduledValue !== null && (
           <p>
-            <span className="text-foreground-secondary">Estimated Amount:</span>{" "}
+            <span className="text-foreground-secondary">
+              {item.percentageMode ? "Estimated Amount (today's progress):" : "Estimated Amount:"}
+            </span>{" "}
             <span className="font-medium tabular-nums">
               {item.estimatedAmount !== null
                 ? `$${item.estimatedAmount.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
@@ -837,6 +1140,7 @@ export default function SupervisorPanel({
           </Badge>
         </p>
         <StatusFlow statusCode={approvalStatusFlowCode(item.approvalStatus)} />
+        </ReviewCardLayout>
 
         {isCommenting && (
           <textarea
@@ -922,21 +1226,9 @@ export default function SupervisorPanel({
               Rollback
             </Button>
           )}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setLiveUpdatesFor((v) => (v === validationId ? null : validationId))}
-          >
-            {liveUpdatesFor === validationId ? "Hide live updates" : "Live updates"}
-          </Button>
         </div>
-        {/* Worker photos/voice notes for THIS work item — the existing
-            reviewer feed, filtered to the item (read-only evidence). */}
-        {liveUpdatesFor === validationId && (
-          <div className="border-t border-line pt-3">
-            <LiveUpdateFeed initialFilterCode={item.workItemCode} />
-          </div>
-        )}
+        {/* Live Updates for this work item live on Work Items (one entry
+            point per work item) — not repeated on the review card. */}
       </Card>
       </div>
     );
@@ -947,7 +1239,7 @@ export default function SupervisorPanel({
       {!forcedTab && (
         <div className="flex gap-2">
           <Button variant={tab === "today" ? "primary" : "secondary"} size="sm" onClick={() => setTab("today")}>
-            Today&apos;s Progress
+            Progress Tracking
           </Button>
           <Button variant={tab === "mtd" ? "primary" : "secondary"} size="sm" onClick={() => setTab("mtd")}>
             MTD / Work Summary
@@ -964,6 +1256,7 @@ export default function SupervisorPanel({
               (() => todayReviewsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }))
             }
             projectId={projectId}
+            departmentId={departmentId}
           />
           )}
 
@@ -1026,40 +1319,6 @@ export default function SupervisorPanel({
               </div>
             )}
 
-            {historyItems.length > 0 && (
-              <div className="mt-4">
-                <button
-                  onClick={() => setShowHistory((v) => !v)}
-                  className="text-sm text-brand transition-colors duration-150 hover:underline"
-                >
-                  {showHistory ? "Hide History" : "View History"}
-                </button>
-                {showHistory && (
-                  <div className="mt-3 space-y-4">
-                    <h3 className="font-semibold text-foreground text-sm">
-                      Previously Completed Work
-                    </h3>
-                    {historyItems.map(renderQueueItem)}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Read-only Today/Yesterday submission activity (collapsed by
-              default) — kept, just placed after Today Reviews so the
-              brief leads straight into Department Progress. */}
-          <div className="grid gap-4 sm:grid-cols-2">
-            <SubmissionActivityCard
-              title="Today's Submissions"
-              items={todaysProgress}
-              detailsLabel="View Today's Details"
-            />
-            <SubmissionActivityCard
-              title="Yesterday"
-              items={yesterdaysProgress}
-              detailsLabel="View Yesterday's Details"
-            />
           </div>
 
           {/* Submission History — a clear access point (not a separate

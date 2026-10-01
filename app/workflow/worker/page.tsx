@@ -47,9 +47,26 @@ export default async function WorkerPage({
   // ?departmentId= (with ?projectId=) picks between two departments the
   // worker holds in the SAME project; like projectId it only selects
   // among this worker's own Active roles and falls back safely.
+  // A work item picked without an explicit department (the work item /
+  // project selectors only carry projectId + workItemId) opens in that
+  // work item's own project/department — otherwise a worker with two
+  // departments in one project would land on the other department's list.
+  let contextProjectId = projectIdParam;
+  let contextDepartmentId = departmentIdParam;
+  if (workItemIdParam && !departmentIdParam) {
+    const { data: workItemScope } = await supabase
+      .from("work_items")
+      .select("project_id, department_id")
+      .eq("work_item_id", workItemIdParam)
+      .maybeSingle();
+    if (workItemScope && (!projectIdParam || workItemScope.project_id === projectIdParam)) {
+      contextProjectId = workItemScope.project_id as string;
+      contextDepartmentId = workItemScope.department_id as string;
+    }
+  }
   const ctx = await getUserContext(supabase, userId, {
-    projectId: projectIdParam,
-    departmentId: departmentIdParam,
+    projectId: contextProjectId,
+    departmentId: contextDepartmentId,
   });
   // A logged-in Contractor/Subcontractor navigating straight to this
   // URL should see their own dashboard, not a Worker's — redirect to
@@ -216,6 +233,21 @@ export default async function WorkerPage({
           .filter((item) => item.workItemCode === dashboard.workItem.code)
           .reduce((sum, item) => sum + (item.submittedQuantity ?? 0), 0)
       : null;
+  // The Worker-side submission the "Submitted / Estimated" card shows for
+  // the same active work item — kept separate from approved progress
+  // (dashboard.overallProgress, Contractor-approved only): this worker's
+  // MOST RECENT submission of the work item, whatever its review state
+  // (pending included), with that state so the card can say Pending
+  // approval / Approved / Returned for correction. `history` is already
+  // newest-first. Null only when they haven't submitted it yet.
+  const shownSubmission = history.find((item) => item.workItemCode === dashboard.workItem.code);
+  const latestSubmission = shownSubmission
+    ? {
+        submittedProgress: shownSubmission.submittedProgress,
+        correctedProgress: shownSubmission.correctedProgress,
+        reviewStatusCode: shownSubmission.reviewStatusCode,
+      }
+    : null;
 
   const suggestionNote = (() => {
     if (!isAutoSuggested) return null;
@@ -263,6 +295,7 @@ export default async function WorkerPage({
           suggestionNote,
           noEligibleWorkNote,
           submittedQuantity,
+          latestSubmission,
           approvedQuantity: dashboard.overallApprovedQuantity,
           progressPercentage: dashboard.overallProgress,
           isCompleted: dashboard.isCompleted,

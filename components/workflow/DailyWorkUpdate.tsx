@@ -32,6 +32,10 @@ type Props = {
    * current work item silently when the Worker actually chose it.
    * Defaults to true so any other caller keeps the old behavior. */
   workItemExplicitlySelected?: boolean;
+  /** The current work item's approved total % — passed to the form only
+   * when submitting for this same work item (not a different confirmed
+   * one, whose approved % isn't loaded here). */
+  approvedProgress?: number | null;
 };
 
 /**
@@ -59,6 +63,7 @@ export default function DailyWorkUpdate({
   taskId = null,
   taskLabel = null,
   workItemExplicitlySelected = true,
+  approvedProgress,
 }: Props) {
   const [lockState, setLockState] = useState(initialLockState);
   const [reviewedText, setReviewedText] = useState<string | null>(null);
@@ -197,6 +202,7 @@ export default function DailyWorkUpdate({
           plannedQuantity={confirmedItem ? confirmedItem.plannedQuantity : plannedQuantity}
           unitOfMeasure={confirmedItem ? confirmedItem.unitOfMeasure : unitOfMeasure}
           taskId={submittedTaskId}
+          approvedProgress={!confirmedItem || confirmedItem.workItemId === workItemId ? approvedProgress : undefined}
           initialDescription={reviewedText}
           onSubmitted={handleSubmitted}
         />
