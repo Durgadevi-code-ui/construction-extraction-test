@@ -7,9 +7,10 @@ import { ListChecks, CheckCircle2, Clock, AlertTriangle } from "lucide-react";
 import { formatMoney, formatPercent, formatQuantity, humanizeApprovalStatus } from "@/lib/format";
 import StatusFlow from "@/components/workflow/StatusFlow";
 import PlannedQuantityEditor from "@/components/workflow/PlannedQuantityEditor";
-import WorkItemTaskManager from "@/components/workflow/WorkItemTaskManager";
+import WorkItemTaskManager, { type ManagedTask } from "@/components/workflow/WorkItemTaskManager";
 import DashboardPanel from "@/components/workflow/DashboardPanel";
 import ReviewCardLayout from "@/components/workflow/ReviewCardLayout";
+import SortControl, { type SortDir, type SortState } from "@/components/workflow/SortControl";
 import { useCountUp } from "@/components/workflow/useCountUp";
 import { progressColorClass, progressSoftClass } from "@/lib/progressColor";
 import ProgressValue from "@/components/workflow/charts/ProgressValue";
@@ -24,6 +25,9 @@ import { calculateOverallProgress } from "@/lib/calculations";
 
 export type SupervisorQueueItem = {
   submissionId: string;
+  /** When it was submitted (extraction_submissions.created_at) — used
+   * only to sort the review queue. */
+  submittedAt?: string;
   /** Work item has no planned quantity: the submitted % is that day's
    * additional progress, added to the approved total on approval. */
   percentageMode?: boolean;
@@ -74,7 +78,7 @@ export type WorkItemProgressView = {
   isCompleted: boolean;
   /** This work item's own task list (Active and Inactive) — see
    * lib/workflow.ts WorkItemTask. */
-  tasks?: { id: string; label: string; conditional: boolean; status: "Active" | "Inactive" }[];
+  tasks?: ManagedTask[];
 };
 
 export type WorkSummaryView = {
@@ -86,6 +90,25 @@ export type WorkSummaryView = {
   pendingCount: number;
   rolledBackCount: number;
   workItems: WorkItemProgressView[];
+};
+
+/** Today Reviews sorting — same keys/behavior as the Subcontractor's
+ * review queue (ForemanQueue), plus Status (Contractor cards span
+ * pending, approved and rolled-back records). */
+type ReviewSortKey = "date" | "workItem" | "worker" | "progress" | "status";
+const REVIEW_SORT_OPTIONS: { key: ReviewSortKey; label: string }[] = [
+  { key: "date", label: "Date" },
+  { key: "workItem", label: "Work Item" },
+  { key: "worker", label: "Worker" },
+  { key: "progress", label: "Progress" },
+  { key: "status", label: "Status" },
+];
+const REVIEW_DEFAULT_DIR: Record<ReviewSortKey, SortDir> = {
+  date: "desc",
+  workItem: "asc",
+  worker: "asc",
+  progress: "desc",
+  status: "asc",
 };
 
 type Props = {
@@ -871,7 +894,11 @@ export default function SupervisorPanel({
   focusWorkItemCode = null,
   projectId,
   departmentId,
+  query = "",
 }: Props & {
+  /** The page's search text (header toolbar) — narrows Today Reviews by
+   * work item code/name, worker or update text. */
+  query?: string;
   /** When set, this panel shows only that one view and hides its own
    * Today's Progress/MTD Summary tab switcher — used by
    * ContractorTabs.tsx, which now owns those two as separate top-level
@@ -942,9 +969,47 @@ export default function SupervisorPanel({
     (item) => !(item.isCompleted && item.approvalStatus === "APPROVED")
   );
 
+  // Search narrows, sort orders (ties: newest first) — the same rules as
+  // History and the Subcontractor queue. Bulk approve only ever acts on
+  // the cards actually shown.
+  const [sort, setSort] = useState<SortState<ReviewSortKey>>({ key: "date", dir: "desc" });
+  const visibleItems = (() => {
+    const needle = query.trim().toLowerCase();
+    const matched = needle
+      ? currentItems.filter((i) =>
+          [i.workItemCode, i.workItemDescription, i.workerName, i.description, i.departmentName].some((t) =>
+            (t ?? "").toLowerCase().includes(needle)
+          )
+        )
+      : currentItems;
+    const byDate = (a: SupervisorQueueItem, b: SupervisorQueueItem) =>
+      (a.submittedAt ?? "").localeCompare(b.submittedAt ?? "");
+    const sign = sort.dir === "asc" ? 1 : -1;
+    return [...matched].sort((a, b) => {
+      let primary: number;
+      switch (sort.key) {
+        case "workItem":
+          primary = a.workItemCode.localeCompare(b.workItemCode, undefined, { numeric: true });
+          break;
+        case "worker":
+          primary = a.workerName.localeCompare(b.workerName);
+          break;
+        case "progress":
+          primary = (a.correctedProgress ?? a.submittedProgress) - (b.correctedProgress ?? b.submittedProgress);
+          break;
+        case "status":
+          primary = humanizeApprovalStatus(a.approvalStatus).localeCompare(humanizeApprovalStatus(b.approvalStatus));
+          break;
+        default:
+          return sign * byDate(a, b);
+      }
+      return sign * primary || byDate(b, a);
+    });
+  })();
+
   // Only items this panel can actually approve right now — has a
   // validation row and isn't already APPROVED.
-  const eligibleIds = currentItems
+  const eligibleIds = visibleItems
     .filter((item) => item.validationId && item.approvalStatus !== "APPROVED")
     .map((item) => item.validationId as string);
   const selectedEligible = eligibleIds.filter((id) => selectedIds.has(id));
@@ -1315,7 +1380,16 @@ export default function SupervisorPanel({
                     </span>
                   </div>
                 )}
-                {currentItems.map(renderQueueItem)}
+                <SortControl
+                  options={REVIEW_SORT_OPTIONS}
+                  sort={sort}
+                  onChange={setSort}
+                  defaultDir={REVIEW_DEFAULT_DIR}
+                />
+                {visibleItems.length === 0 && (
+                  <p className="text-sm text-foreground-muted">No submissions match “{query.trim()}”.</p>
+                )}
+                {visibleItems.map(renderQueueItem)}
               </div>
             )}
 
@@ -1388,7 +1462,11 @@ export default function SupervisorPanel({
                       unitOfMeasure={item.unitOfMeasure}
                     />
                   </p>
-                  <WorkItemTaskManager workItemId={item.workItemId} tasks={item.tasks ?? []} />
+                  <WorkItemTaskManager
+                    workItemId={item.workItemId}
+                    tasks={item.tasks ?? []}
+                    workItemLabel={`${item.workItemCode} — ${item.workItemDescription}`}
+                  />
                   {(item.progress !== null || item.approvedQuantity !== null) && (
                     <p className="flex flex-wrap items-center gap-1.5">
                       <span className="text-foreground-secondary">MTD Progress:</span>{" "}

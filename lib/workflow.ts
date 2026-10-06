@@ -192,7 +192,46 @@ export type WorkItemTask = {
    * already recorded this task's id/label (denormalized at submit time,
    * see ProgressData.task) keeps displaying correctly regardless. */
   status: "Active" | "Inactive";
+  /** Task Update Access — whether a Worker assigned to this work item
+   * may record task-level progress (updateTaskProgressAsWorker). Set
+   * only by a Contractor/Subcontractor (updateWorkItemTask); false for
+   * every task that predates this field, so nothing changes for a work
+   * item until someone explicitly turns it on. When off, the Worker
+   * keeps using Work Item-level progress exactly as before. */
+  updateAccess: boolean;
+  /** Latest task-level update a Worker recorded, or null if none yet.
+   * Worker-reported status only: it is NOT approved progress and never
+   * feeds the Work Item's approved %, which still comes solely from the
+   * reviewed/approved Work Item submissions. */
+  progress: WorkItemTaskProgress | null;
 };
+
+export type WorkItemTaskProgress = {
+  /** 0-100, or null when the Worker only marked done/added a note. */
+  percent: number | null;
+  completed: boolean;
+  note: string | null;
+  updatedAt: string;
+  updatedByUserId: string;
+  updatedByName: string;
+};
+
+/** Defensive read of one task's stored progress — malformed data reads
+ * as "no update yet", never a crash or a fabricated value. */
+function parseTaskProgress(raw: unknown): WorkItemTaskProgress | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.updatedAt !== "string" || typeof r.updatedByUserId !== "string") return null;
+  const percent = typeof r.percent === "number" && Number.isFinite(r.percent) ? r.percent : null;
+  return {
+    percent,
+    completed: r.completed === true,
+    note: typeof r.note === "string" && r.note ? r.note : null,
+    updatedAt: r.updatedAt,
+    updatedByUserId: r.updatedByUserId,
+    updatedByName: typeof r.updatedByName === "string" ? r.updatedByName : "(unknown)",
+  };
+}
 
 /** Defensive read of additional_fields.__tasks — anything malformed is
  * ignored, so a work item with no/invalid task data simply has none. */
@@ -207,7 +246,14 @@ export function parseWorkItemTasks(additionalFields: unknown): WorkItemTask[] {
     if (typeof id !== "string" || !id || typeof label !== "string" || !label || seen.has(id)) continue;
     seen.add(id);
     const status = (t as { status?: unknown }).status === "Inactive" ? "Inactive" : "Active";
-    tasks.push({ id, label, conditional: (t as { conditional?: unknown }).conditional === true, status });
+    tasks.push({
+      id,
+      label,
+      conditional: (t as { conditional?: unknown }).conditional === true,
+      status,
+      updateAccess: (t as { updateAccess?: unknown }).updateAccess === true,
+      progress: parseTaskProgress((t as { progress?: unknown }).progress),
+    });
   }
   return tasks;
 }
@@ -2259,6 +2305,8 @@ export async function createWorkItemTask(
     label,
     conditional: params.conditional === true,
     status: "Active",
+    updateAccess: false,
+    progress: null,
   };
 
   const merged = { ...(workItem.additional_fields ?? {}), __tasks: [...existing, newTask] };
@@ -2288,6 +2336,9 @@ export async function updateWorkItemTask(
     label?: string;
     conditional?: boolean;
     status?: "Active" | "Inactive";
+    /** Task Update Access (see WorkItemTask.updateAccess) — Contractor/
+     * Subcontractor only, same authorization as every other task edit. */
+    updateAccess?: boolean;
   }
 ): Promise<void> {
   const workItem = await getWorkItemById(supabase, params.workItemId);
@@ -2307,6 +2358,7 @@ export async function updateWorkItemTask(
   }
   if (params.conditional !== undefined) updated.conditional = params.conditional;
   if (params.status !== undefined) updated.status = params.status;
+  if (params.updateAccess !== undefined) updated.updateAccess = params.updateAccess;
   tasks[index] = updated;
 
   const merged = { ...(workItem.additional_fields ?? {}), __tasks: tasks };
@@ -2317,6 +2369,81 @@ export async function updateWorkItemTask(
   if (error) {
     throw new Error(`Failed to update task: ${error.message}`);
   }
+}
+
+const MAX_TASK_NOTE_LENGTH = 1000;
+
+/**
+ * A Worker's task-level update (progress %, done flag, short note) on
+ * one task of a work item assigned to them — additive to, and
+ * independent of, Work Item-level progress (submitWorkerProgress /
+ * review / approval are untouched, and this never changes the Work
+ * Item's approved %). Allowed only when ALL hold, each checked here
+ * server-side:
+ *   - the caller is a Worker acting on a work item in their own
+ *     department that is Active and actively assigned to them
+ *     (resolveWorkItemForWorker — the same gate as submitting progress);
+ *   - the task exists on that work item and is Active;
+ *   - its Task Update Access is turned on (set by a Contractor/
+ *     Subcontractor via updateWorkItemTask).
+ * Only that task's `progress` is written — a Worker can never change a
+ * task's name, status, access or ownership through this path.
+ */
+export async function updateTaskProgressAsWorker(
+  supabase: SupabaseClient,
+  params: {
+    workerId: string;
+    workItemId: string;
+    taskId: string;
+    percent: number | null;
+    completed: boolean;
+    note: string | null;
+  }
+): Promise<WorkItemTaskProgress> {
+  const ctx = await getWorkerContextForWorkItem(supabase, params.workerId, params.workItemId);
+  assertRole(ctx.role, ["WORKER"]);
+  const workItem = await resolveWorkItemForWorker(supabase, params.workerId, ctx.departmentId, params.workItemId);
+
+  if (params.percent !== null && (!Number.isFinite(params.percent) || params.percent < 0 || params.percent > 100)) {
+    throw new Error("Task progress must be between 0 and 100.");
+  }
+  const note = params.note?.trim() || null;
+  if (note && note.length > MAX_TASK_NOTE_LENGTH) {
+    throw new Error(`Task update note is too long (max ${MAX_TASK_NOTE_LENGTH} characters).`);
+  }
+  if (params.percent === null && !params.completed && !note) {
+    throw new Error("Enter a progress %, mark the task done, or add a note.");
+  }
+
+  const tasks = parseWorkItemTasks(workItem.additional_fields);
+  const index = tasks.findIndex((t) => t.id === params.taskId);
+  if (index === -1 || tasks[index].status !== "Active") {
+    throw new Error(`Task ${params.taskId} does not belong to work item ${params.workItemId}`);
+  }
+  if (!tasks[index].updateAccess) {
+    throw new Error("Task updates are not enabled for this task — update the work item instead.");
+  }
+
+  const progress: WorkItemTaskProgress = {
+    // Marking done without a % reads as 100%.
+    percent: params.completed && params.percent === null ? 100 : params.percent,
+    completed: params.completed,
+    note,
+    updatedAt: new Date().toISOString(),
+    updatedByUserId: params.workerId,
+    updatedByName: await getUserDisplayName(supabase, params.workerId),
+  };
+  tasks[index] = { ...tasks[index], progress };
+
+  const merged = { ...(workItem.additional_fields ?? {}), __tasks: tasks };
+  const { error } = await supabase
+    .from("work_items")
+    .update({ additional_fields: merged })
+    .eq("work_item_id", params.workItemId);
+  if (error) {
+    throw new Error(`Failed to save task update: ${error.message}`);
+  }
+  return progress;
 }
 
 // ------------------------------------------------------------------

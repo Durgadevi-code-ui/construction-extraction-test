@@ -1,8 +1,8 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown, Camera, History, SearchX } from "lucide-react";
-import { formatDateTimeUS, formatDateUS, formatPercent, type WorkerSubmissionStatusCode } from "@/lib/format";
+import { ArrowDown, ArrowUp, ArrowUpDown, Camera, ChevronDown, History, SearchX, SlidersHorizontal } from "lucide-react";
+import { formatDateUS, formatPercent, formatTimeUS, type WorkerSubmissionStatusCode } from "@/lib/format";
 import Badge, { type BadgeVariant } from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
@@ -11,6 +11,7 @@ import { Select } from "@/components/ui/Input";
 import DateInput from "@/components/ui/DateInput";
 import type { SubmissionHistoryRow } from "@/components/workflow/SubmissionHistoryTable";
 import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
+import SortControl, { nextSort, type SortDir } from "@/components/workflow/SortControl";
 
 /** Light status tint per review state — green approved, light red
  * returned, light amber anything still in review. */
@@ -22,7 +23,6 @@ const STATUS_VARIANT: Record<WorkerSubmissionStatusCode, BadgeVariant> = {
 };
 
 type SortKey = "date" | "worker" | "workItem" | "submitted" | "status";
-type SortDir = "asc" | "desc";
 type SubmittedFilter = "ALL" | "ADJUSTED" | "AS_SUBMITTED";
 
 /** Direction a column starts in when first clicked — newest first for
@@ -34,6 +34,35 @@ const DEFAULT_DIR: Record<SortKey, SortDir> = {
   submitted: "desc",
   status: "asc",
 };
+
+/** Same columns, for the "Sort by" control (mobile card layout). */
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: "date", label: "Date" },
+  { key: "worker", label: "Worker" },
+  { key: "workItem", label: "Work Item" },
+  { key: "submitted", label: "Submitted" },
+  { key: "status", label: "Status & Review" },
+];
+
+/** Every filter control (date or dropdown) has this exact height and
+ * padding, so the six History filters line up as one row. */
+const FILTER_CONTROL = "h-10 !py-0 truncate";
+
+/** Every column heading — sortable or not — uses exactly this style, so
+ * no heading reads bolder or lighter than another. */
+const HEADING_CLASS = "px-5 py-2.5 font-bold uppercase tracking-wide";
+
+/** A timestamp as two consistent parts — MM/DD/YYYY and h:mm AM — the
+ * one date/time presentation used everywhere in this list. */
+function DateTime({ value, className = "" }: { value: string; className?: string }) {
+  const time = formatTimeUS(value);
+  return (
+    <span className={`tabular-nums ${className}`}>
+      <span className="block">{formatDateUS(value, "/")}</span>
+      {time && <span className="block text-xs text-foreground-muted">{time}</span>}
+    </span>
+  );
+}
 
 /** Sortable column header — the whole label is the button; ↑ / ↓ shows
  * the active column's direction, a faint ↕ the others. Every heading
@@ -56,13 +85,13 @@ function SortHeader({
   const Icon = !active ? ArrowUpDown : sort.dir === "asc" ? ArrowUp : ArrowDown;
   return (
     <th
-      className={`${align === "right" ? "text-right" : "text-left"} px-5 py-2.5 font-semibold`}
+      className={`${align === "right" ? "text-right" : "text-left"} ${HEADING_CLASS}`}
       aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
     >
       <button
         type="button"
         onClick={() => onSort(column)}
-        className="inline-flex items-center gap-1 uppercase tracking-wide font-semibold transition-colors duration-150 hover:text-foreground"
+        className="inline-flex items-center gap-1 uppercase tracking-wide font-bold transition-colors duration-150 hover:text-foreground"
         title={`Sort by ${typeof label === "string" ? label : "this column"}`}
       >
         {label}
@@ -105,6 +134,7 @@ export default function SubmissionHistoryView({
   items,
   initialWorkItem = "",
   focusSubmissionId = null,
+  query = "",
 }: {
   items: SubmissionHistoryRow[];
   /** Work item pre-selected in the Work Item filter (e.g. opened from a
@@ -113,6 +143,10 @@ export default function SubmissionHistoryView({
   /** Submission a notification points at — highlighted, marked
    * data-focused for the page's scroll-into-view. */
   focusSubmissionId?: string | null;
+  /** The page's universal search text (header toolbar, next to Project)
+   * — narrows the records the same way a filter does, on top of them:
+   * worker, work item code/name, task, department, status or comment. */
+  query?: string;
 }) {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -124,10 +158,11 @@ export default function SubmissionHistoryView({
   // Same column again flips the direction; a new column starts in its
   // natural direction.
   function toggleSort(key: SortKey) {
-    setSort((prev) =>
-      prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: DEFAULT_DIR[key] }
-    );
+    setSort((prev) => nextSort(prev, key, DEFAULT_DIR));
   }
+  // Mobile only: the filter fields fold away behind one "Filters" button
+  // so the records stay in view; always open from the sm breakpoint up.
+  const [filtersOpen, setFiltersOpen] = useState(false);
   // Which row's Live Updates are open (one at a time).
   const [liveUpdatesFor, setLiveUpdatesFor] = useState<string | null>(null);
 
@@ -149,7 +184,23 @@ export default function SubmissionHistoryView({
   );
 
   const shown = useMemo(() => {
+    const needle = query.trim().toLowerCase();
     const filtered = items.filter((i) => {
+      if (
+        needle &&
+        ![
+          i.workerName,
+          i.departmentName,
+          i.workItemCode,
+          i.workItemDescription,
+          i.taskLabel,
+          i.reviewStatusLabel,
+          i.approvalComments,
+          i.approvedBy,
+        ].some((t) => (t ?? "").toLowerCase().includes(needle))
+      ) {
+        return false;
+      }
       const day = localDay(i.submittedAt);
       if (from && day < from) return false;
       if (to && day > to) return false;
@@ -185,9 +236,10 @@ export default function SubmissionHistoryView({
       }
       return sign * primary || byDate(b, a);
     });
-  }, [items, from, to, worker, workItem, submitted, status, sort]);
+  }, [items, query, from, to, worker, workItem, submitted, status, sort]);
 
-  const filtersActive = !!(from || to || worker || workItem || status || submitted !== "ALL");
+  const activeFilterCount = [from, to, worker, workItem, status, submitted !== "ALL"].filter(Boolean).length;
+  const filtersActive = activeFilterCount > 0;
   function clearFilters() {
     setFrom("");
     setTo("");
@@ -208,24 +260,35 @@ export default function SubmissionHistoryView({
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-line bg-surface p-4 text-sm shadow-sm">
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <p className="text-foreground-secondary font-medium">Filters</p>
+        <div className="flex items-center justify-between gap-2">
+          {/* Mobile: a toggle with the active-filter count; sm+: a plain heading. */}
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((v) => !v)}
+            aria-expanded={filtersOpen}
+            className="sm:hidden inline-flex items-center gap-1.5 rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-foreground"
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+            Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${filtersOpen ? "rotate-180" : ""}`} strokeWidth={2} aria-hidden />
+          </button>
+          <p className="hidden sm:block font-semibold text-foreground">Filters</p>
           <span className="text-xs text-foreground-muted tabular-nums">
             {shown.length === items.length ? `${items.length} records` : `${shown.length} of ${items.length} records`}
           </span>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className={`${filtersOpen ? "grid" : "hidden"} sm:grid mt-3 grid-cols-1 min-[420px]:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-x-3 gap-y-3`}>
           <div>
-            <label className="block text-xs font-medium text-foreground-secondary mb-1">From</label>
+            <label className="block text-xs font-bold text-foreground mb-1.5">From</label>
             <DateInput value={from} onChange={setFrom} label="From" />
           </div>
           <div>
-            <label className="block text-xs font-medium text-foreground-secondary mb-1">To</label>
+            <label className="block text-xs font-bold text-foreground mb-1.5">To</label>
             <DateInput value={to} onChange={setTo} label="To" />
           </div>
           <div>
-            <label className="block text-xs font-medium text-foreground-secondary mb-1">Worker</label>
-            <Select value={worker} onChange={(e) => setWorker(e.target.value)}>
+            <label className="block text-xs font-bold text-foreground mb-1.5">Worker</label>
+            <Select className={FILTER_CONTROL} value={worker} onChange={(e) => setWorker(e.target.value)}>
               <option value="">All Workers</option>
               {workerOptions.map((w) => (
                 <option key={w} value={w}>
@@ -235,8 +298,8 @@ export default function SubmissionHistoryView({
             </Select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-foreground-secondary mb-1">Work Item</label>
-            <Select value={workItem} onChange={(e) => setWorkItem(e.target.value)}>
+            <label className="block text-xs font-bold text-foreground mb-1.5">Work Item</label>
+            <Select className={FILTER_CONTROL} value={workItem} onChange={(e) => setWorkItem(e.target.value)}>
               <option value="">All Work Items</option>
               {workItemOptions.map(([code, description]) => (
                 <option key={code} value={code}>
@@ -246,16 +309,16 @@ export default function SubmissionHistoryView({
             </Select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-foreground-secondary mb-1">Submitted</label>
-            <Select value={submitted} onChange={(e) => setSubmitted(e.target.value as SubmittedFilter)}>
+            <label className="block text-xs font-bold text-foreground mb-1.5">Submitted</label>
+            <Select className={FILTER_CONTROL} value={submitted} onChange={(e) => setSubmitted(e.target.value as SubmittedFilter)}>
               <option value="ALL">All</option>
               <option value="AS_SUBMITTED">As submitted</option>
               <option value="ADJUSTED">Adjusted by reviewer</option>
             </Select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-foreground-secondary mb-1">Status &amp; Review</label>
-            <Select value={status} onChange={(e) => setStatus(e.target.value)}>
+            <label className="block text-xs font-bold text-foreground mb-1.5">Status &amp; Review</label>
+            <Select className={FILTER_CONTROL} value={status} onChange={(e) => setStatus(e.target.value)}>
               <option value="">All Statuses</option>
               {statusOptions.map(([key, label]) => (
                 <option key={key} value={key}>
@@ -269,12 +332,24 @@ export default function SubmissionHistoryView({
           <button
             type="button"
             onClick={clearFilters}
-            className="mt-2 text-xs text-brand transition-colors duration-150 hover:underline"
+            className="mt-3 text-xs font-medium text-brand transition-colors duration-150 hover:underline"
           >
             Clear filters
           </button>
         )}
       </div>
+
+      {/* Mobile sort — the table's sortable headings aren't shown in the
+          card layout, so the same sort is offered here. */}
+      {shown.length > 0 && (
+        <SortControl
+          className="md:hidden"
+          options={SORT_OPTIONS}
+          sort={sort}
+          onChange={setSort}
+          defaultDir={DEFAULT_DIR}
+        />
+      )}
 
       <Card className="!p-0 overflow-hidden">
         {shown.length === 0 ? (
@@ -292,16 +367,89 @@ export default function SubmissionHistoryView({
             }
           />
         ) : (
-          <div className="overflow-x-auto">
+          <>
+          {/* Mobile: one card per record (same data, same actions). */}
+          <ul className="md:hidden divide-y divide-line">
+            {shown.map((item) => (
+              <li
+                key={item.submissionId}
+                data-focused={item.submissionId === focusSubmissionId ? "true" : undefined}
+                className={`scroll-mt-4 p-4 space-y-2 text-sm ${
+                  item.submissionId === focusSubmissionId ? "bg-warning-soft/40 ring-2 ring-inset ring-warning-border" : ""
+                }`}
+              >
+                {item.submissionId === focusSubmissionId && <Badge variant="warning">From your notification</Badge>}
+                <div className="flex items-start justify-between gap-3">
+                  <p className="min-w-0">
+                    <span className="text-foreground-secondary">{item.workItemCode}</span>{" "}
+                    <span className="font-medium">{item.workItemDescription}</span>
+                    {item.taskLabel && (
+                      <span className="block text-xs text-foreground-secondary">Task: {item.taskLabel}</span>
+                    )}
+                  </p>
+                  <DateTime value={item.submittedAt} className="shrink-0 text-right text-xs text-foreground-secondary" />
+                </div>
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                  <dt className="font-bold uppercase tracking-wide text-foreground-secondary">Worker</dt>
+                  <dd>
+                    {item.workerName} <span className="text-foreground-muted">({item.departmentName})</span>
+                  </dd>
+                  <dt className="font-bold uppercase tracking-wide text-foreground-secondary">Submitted</dt>
+                  <dd className="tabular-nums">
+                    {item.submittedQuantity !== null
+                      ? `${item.submittedQuantity} ${item.unit ?? ""}`.trim()
+                      : `${item.submittedProgress}%`}
+                    {wasAdjusted(item) && (
+                      <span className="text-foreground-secondary"> · adjusted to {formatPercent(item.correctedProgress)}</span>
+                    )}
+                  </dd>
+                  <dt className="font-bold uppercase tracking-wide text-foreground-secondary">Status</dt>
+                  <dd className="space-y-0.5">
+                    {item.reviewStatusCode ? (
+                      <Badge variant={STATUS_VARIANT[item.reviewStatusCode]}>{item.reviewStatusLabel}</Badge>
+                    ) : (
+                      item.reviewStatusLabel
+                    )}
+                    {item.approvedBy && (
+                      <span className="block text-foreground-secondary">
+                        Approved by {item.approvedBy}
+                        {item.approvedAt ? ` · ${formatDateUS(item.approvedAt, "/")} ${formatTimeUS(item.approvedAt)}` : ""}
+                      </span>
+                    )}
+                    {item.approvalComments && (
+                      <span className="block text-foreground-secondary">Comment: {item.approvalComments}</span>
+                    )}
+                  </dd>
+                </dl>
+                <Button
+                  variant={liveUpdatesFor === item.submissionId ? "primary" : "secondary"}
+                  size="sm"
+                  className="w-full"
+                  onClick={() => setLiveUpdatesFor((prev) => (prev === item.submissionId ? null : item.submissionId))}
+                  aria-expanded={liveUpdatesFor === item.submissionId}
+                >
+                  <Camera className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+                  {liveUpdatesFor === item.submissionId ? "Hide Updates" : "View Updates"}
+                </Button>
+                {liveUpdatesFor === item.submissionId && (
+                  <div className="rounded-lg bg-surface-soft p-3">
+                    <LiveUpdateFeed mode="imageOnly" initialFilterCode={item.workItemCode} />
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-surface-soft text-[11px] uppercase tracking-wide text-foreground-secondary">
+              <thead className="bg-surface-soft text-[11px] uppercase tracking-wide text-foreground">
                 <tr>
                   <SortHeader label="Date" column="date" sort={sort} onSort={toggleSort} />
                   <SortHeader label="Worker" column="worker" sort={sort} onSort={toggleSort} />
                   <SortHeader label="Work Item" column="workItem" sort={sort} onSort={toggleSort} />
                   <SortHeader label="Submitted" column="submitted" sort={sort} onSort={toggleSort} align="right" />
                   <SortHeader label={"Status & Review"} column="status" sort={sort} onSort={toggleSort} />
-                  <th className="text-left px-5 py-2.5 font-semibold">Updates</th>
+                  <th className={`text-left ${HEADING_CLASS}`}>Updates</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
@@ -313,8 +461,8 @@ export default function SubmissionHistoryView({
                       item.submissionId === focusSubmissionId ? "bg-warning-soft/40 ring-2 ring-inset ring-warning-border" : ""
                     }`}
                   >
-                    <td className="px-5 py-3 whitespace-nowrap text-foreground-secondary tabular-nums">
-                      {formatDateUS(item.submittedAt, "/")}
+                    <td className="px-5 py-3 whitespace-nowrap text-foreground-secondary">
+                      <DateTime value={item.submittedAt} />
                       {item.submissionId === focusSubmissionId && (
                         <span className="block mt-1">
                           <Badge variant="warning">From your notification</Badge>
@@ -351,7 +499,7 @@ export default function SubmissionHistoryView({
                       {item.approvedBy && (
                         <span className="block text-xs text-foreground-secondary">
                           Approved by {item.approvedBy}
-                          {item.approvedAt ? ` · ${formatDateTimeUS(item.approvedAt)}` : ""}
+                          {item.approvedAt ? ` · ${formatDateUS(item.approvedAt, "/")} ${formatTimeUS(item.approvedAt)}` : ""}
                         </span>
                       )}
                       {item.approvalComments && (
@@ -389,6 +537,7 @@ export default function SubmissionHistoryView({
               </tbody>
             </table>
           </div>
+          </>
         )}
       </Card>
 

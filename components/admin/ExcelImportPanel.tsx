@@ -28,6 +28,8 @@ type ParseIssue = { sourceRow: number; sourceSheet: string; message: string };
 type PreviewResponse = {
   preview: true;
   sheetsScanned: string[];
+  /** How each sheet's columns were understood (lib/excelImport.ts). */
+  columnMappings?: { sheet: string; headerRow: number; columns: { header: string; field: string }[] }[];
   departments: string[];
   workItemCount: number;
   rows: ParsedRow[];
@@ -124,7 +126,9 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
     preview?.rows.some((r) => r.additionalFields && Object.keys(r.additionalFields).length > 0) ?? false;
 
   return (
-    <div className="mt-2 bg-surface-soft border border-line rounded-lg p-4 space-y-3 text-sm">
+    // order-last + w-full: inside the project's Excel actions row the
+    // opened panel drops to its own line below the buttons.
+    <div className="order-last w-full mt-1 bg-surface-soft border border-line rounded-lg p-4 space-y-3 text-sm">
       <div className="flex items-center justify-between">
         <h4 className="font-medium text-foreground">Import Project File</h4>
         <button
@@ -153,9 +157,10 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
             className="block w-full text-xs text-foreground-secondary file:mr-3 file:rounded-lg file:border file:border-line file:bg-white file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-foreground-secondary hover:file:bg-surface-hover file:transition-colors file:duration-150"
           />
           <p className="text-xs text-foreground-secondary">
-            Reads every sheet, matches Department / Work Item / Quantity / Unit / Amount columns
-            automatically (column order and naming don&apos;t need to match exactly). Nothing is
-            saved until you confirm below.
+            Reads every sheet and works out which columns hold the department, item number,
+            description, quantity, unit and amount from their headings and contents (names and order
+            don&apos;t need to match). Other columns are kept with each work item. Nothing is saved
+            until you confirm below.
           </p>
 
           {!preview ? (
@@ -182,6 +187,17 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
                   <p className="mt-0.5 text-sm font-medium text-foreground">{preview.workItemCount}</p>
                 </div>
               </div>
+
+              {preview.columnMappings && preview.columnMappings.length > 0 && (
+                <div className="text-xs text-foreground-secondary space-y-0.5">
+                  {preview.columnMappings.map((m) => (
+                    <p key={m.sheet}>
+                      <span className="font-medium text-foreground">{m.sheet}</span> (header row {m.headerRow}):{" "}
+                      {m.columns.map((c) => `${c.header} → ${c.field}`).join(" · ")}
+                    </p>
+                  ))}
+                </div>
+              )}
 
               <div className="max-h-56 overflow-x-auto overflow-y-auto border border-line rounded-lg bg-white">
                 <table className="w-full min-w-[560px] text-xs">

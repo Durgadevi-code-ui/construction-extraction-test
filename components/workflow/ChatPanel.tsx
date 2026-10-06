@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Send, MessageSquare, ArrowLeft, Users as UsersIcon, Search } from "lucide-react";
 import Card from "@/components/ui/Card";
 import Input, { Select } from "@/components/ui/Input";
@@ -81,6 +81,7 @@ function formatTime(iso: string): string {
 export default function ChatPanel({
   projects,
   contextProjectId,
+  query,
 }: {
   /** Only Admin needs a project picker — everyone else's project is
    * resolved server-side from their own active assignment. */
@@ -89,13 +90,18 @@ export default function ChatPanel({
    * roles on several projects) — sent so chat follows that project; the
    * server still only accepts one of the caller's own projects. */
   contextProjectId?: string;
+  /** The page's header search (DashboardShell), when the page provides
+   * one — it then replaces this panel's own search box, so there is one
+   * search, in the same place as on every other tab. */
+  query?: string;
 }) {
   const [projectId, setProjectId] = useState(projects?.[0]?.projectId ?? contextProjectId ?? "");
   const [contacts, setContacts] = useState<ChatContact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(true);
   const [contactsError, setContactsError] = useState<string | null>(null);
   // Search over the conversation list (Team + contacts, by name or role).
-  const [search, setSearch] = useState("");
+  const [ownSearch, setSearch] = useState("");
+  const search = query ?? ownSearch;
   const [selectedPeer, setSelectedPeer] = useState<string>(TEAM_THREAD);
   const [showThreadOnMobile, setShowThreadOnMobile] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -103,6 +109,34 @@ export default function ChatPanel({
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The thread follows the newest message (like any messenger) unless
+  // the reader has scrolled up to read older ones — then a background
+  // poll never yanks them back down.
+  const threadRef = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
+  // Desktop: the panel fills from wherever it starts down to the bottom
+  // of the window (same 24px bottom margin as the page padding), so it
+  // has the same proportions on every role's page whatever that page's
+  // header holds. Mobile keeps the fixed viewport-based height.
+  const frameRef = useRef<HTMLDivElement>(null);
+  const [fitHeight, setFitHeight] = useState<number | null>(null);
+  useEffect(() => {
+    function fit() {
+      const el = frameRef.current;
+      if (!el || window.innerWidth < 1024) {
+        setFitHeight(null);
+        return;
+      }
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      setFitHeight(Math.max(420, Math.round(window.innerHeight - top - 24)));
+    }
+    const frame = requestAnimationFrame(fit);
+    window.addEventListener("resize", fit);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", fit);
+    };
+  }, []);
 
   const needsProject = !!projects && !projectId;
 
@@ -171,7 +205,13 @@ export default function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshMessages closes over projectId/needsProject/selectedPeer, all already in this dependency list
   }, [projectId, needsProject, selectedPeer]);
 
+  useEffect(() => {
+    const el = threadRef.current;
+    if (el && followLatest.current) el.scrollTop = el.scrollHeight;
+  }, [messages, loading]);
+
   function selectConversation(peer: string) {
+    followLatest.current = true;
     setSelectedPeer(peer);
     setShowThreadOnMobile(true);
   }
@@ -193,6 +233,7 @@ export default function ChatPanel({
       });
       await readApiJson(res, "Your message wasn't sent. Please try again.");
       setText("");
+      followLatest.current = true;
       await refreshMessages(false);
     } catch (err) {
       // The typed text is kept so it can be re-sent.
@@ -217,7 +258,14 @@ export default function ChatPanel({
         : undefined;
 
   return (
-    <Card className="!p-0 overflow-hidden flex flex-col lg:flex-row h-[calc(100dvh-11rem)] min-h-[420px] max-h-[720px]">
+    // Fills the rest of the viewport below the page header (see fit
+    // above); the message list scrolls inside it.
+    <div
+      ref={frameRef}
+      style={fitHeight !== null ? { height: fitHeight } : undefined}
+      className={fitHeight !== null ? "" : "h-[calc(100dvh-11rem)] min-h-[420px]"}
+    >
+    <Card className="!p-0 overflow-hidden flex flex-col lg:flex-row h-full">
       {/* Conversation list — hidden on mobile once a thread is open,
           always visible at lg+ alongside the thread. */}
       <div
@@ -225,7 +273,9 @@ export default function ChatPanel({
           showThreadOnMobile ? "hidden lg:flex" : "flex"
         }`}
       >
-        <div className="px-4 pt-3 pb-2 flex items-center justify-between gap-2">
+        <div
+          className={`px-4 pt-3 pb-2 flex items-center justify-between gap-2${query !== undefined ? " border-b border-line" : ""}`}
+        >
           <h2 className="font-semibold text-foreground text-sm">Communication</h2>
           {projects && projects.length > 0 && (
             <Select
@@ -245,7 +295,7 @@ export default function ChatPanel({
 
         {/* The one Communication search — filters the conversation list
             below (Team and people, by name or role). */}
-        {!needsProject && (
+        {!needsProject && query === undefined && (
           <div className="px-4 pb-3 border-b border-line">
             <div className="relative">
               <Search
@@ -382,7 +432,14 @@ export default function ChatPanel({
             </div>
           )
         ) : (
-          <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-3">
+          <div
+            ref={threadRef}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              followLatest.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+            }}
+            className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 py-4 space-y-3"
+          >
             {messages.map((m) => (
               <div key={m.chatMessageId} className={`flex ${m.isOwn ? "justify-end" : "justify-start"}`}>
                 <div
@@ -431,5 +488,6 @@ export default function ChatPanel({
         </form>
       </div>
     </Card>
+    </div>
   );
 }

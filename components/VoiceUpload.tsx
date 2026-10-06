@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { Mic, Square } from "lucide-react";
 import ValidationPanel, { type RelevanceCheckResult } from "./ValidationPanel";
 import type { ConfirmedWorkItem } from "./TextInput";
 
@@ -31,6 +32,12 @@ type Props = {
    * only (Priority 3: capture-first field workflow). Default false keeps
    * the file picker for other callers (e.g. the extraction test page). */
   recordOnly?: boolean;
+  /** Card heading — defaults to the original "Voice / Audio". */
+  title?: string;
+  /** Present voice as the primary input: a prominent brand Record button
+   * (the Worker update flow, where voice comes first). Default false
+   * keeps the original neutral button for other callers. */
+  primary?: boolean;
 };
 
 export default function VoiceUpload({
@@ -44,6 +51,8 @@ export default function VoiceUpload({
   departmentName,
   workItemExplicitlySelected = true,
   recordOnly = false,
+  title = "Voice / Audio",
+  primary = false,
 }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [recording, setRecording] = useState(false);
@@ -178,15 +187,24 @@ export default function VoiceUpload({
   const displayStatus = locked ? "LOCKED" : status;
 
   return (
-    <div className={`bg-surface rounded-lg border border-line shadow-sm p-5 space-y-3 ${locked ? "opacity-50" : ""}`}>
-      <h2 className="font-semibold text-foreground">Voice / Audio</h2>
+    <div
+      className={`bg-surface rounded-lg border shadow-sm p-5 space-y-3 ${primary ? "border-brand/40" : "border-line"} ${locked ? "opacity-50" : ""}`}
+    >
+      <h2 className="font-semibold text-foreground">{title}</h2>
       <div className="flex items-center gap-2">
         <button
           onClick={recording ? stopRecording : startRecording}
           disabled={locked}
-          className="px-3 py-2 bg-[#FAFAFA] border border-line text-foreground rounded text-sm font-medium disabled:opacity-50 hover:bg-line-soft"
+          className={
+            primary
+              ? `inline-flex items-center gap-2 px-5 py-3 rounded-lg text-sm font-semibold text-white transition-colors duration-150 disabled:opacity-50 ${
+                  recording ? "bg-error hover:bg-error/90" : "bg-brand hover:bg-brand-hover"
+                }`
+              : "px-3 py-2 bg-[#FAFAFA] border border-line text-foreground rounded text-sm font-medium disabled:opacity-50 hover:bg-line-soft"
+          }
         >
-          {recording ? "Stop Recording" : "Record"}
+          {primary && (recording ? <Square className="h-4 w-4" strokeWidth={2} /> : <Mic className="h-4 w-4" strokeWidth={2} />)}
+          {recording ? "Stop Recording" : primary ? "Record voice update" : "Record"}
         </button>
         {!recordOnly && (
           <>

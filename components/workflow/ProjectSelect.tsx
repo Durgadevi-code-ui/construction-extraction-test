@@ -33,8 +33,8 @@ export type ProjectOption = {
  * server-side with getUserContext, which only ever selects among the
  * user's own Active roles — a hand-edited id can't reach another
  * project; this control is navigation only, not the security boundary.
- * Renders nothing with a single option (the header subheading already
- * names the current project/department).
+ * With a single option it still shows the current project (read-only),
+ * so Project is in the same header place on every page and role.
  */
 export default function ProjectSelect({
   basePath,
@@ -54,7 +54,7 @@ export default function ProjectSelect({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  if (options.length <= 1) return null;
+  if (options.length === 0) return null;
 
   const pathOf = (o: { path?: string }) => o.path ?? basePath;
   const perProject = new Map<string, number>();
@@ -72,6 +72,9 @@ export default function ProjectSelect({
       mixedRoles && o.roleLabel ? ` (${o.roleLabel})` : ""
     }`;
   const current = options.find((o) => keyOf(o) === keyOf({ projectId, departmentId }));
+  // One project: nothing to switch to — the same control, read-only.
+  if (options.length === 1 && !current) return null;
+  const readOnly = options.length === 1;
 
   function handleChange(value: string) {
     const next = options.find((o) => keyOf(o) === value);
@@ -89,7 +92,7 @@ export default function ProjectSelect({
       <Select
         value={keyOf({ projectId, departmentId })}
         onChange={(e) => handleChange(e.target.value)}
-        disabled={pending}
+        disabled={pending || readOnly}
         aria-label="Current project"
         title={current ? labelOf(current) : undefined}
         // Fixed width, so the header controls don't shift with the

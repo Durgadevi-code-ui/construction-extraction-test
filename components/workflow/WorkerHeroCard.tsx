@@ -139,27 +139,23 @@ export default function WorkerHeroCard({
       ? (latestSubmission.correctedProgress ?? latestSubmission.submittedProgress)
       : null;
   const cumulativeSubmitted = Math.min(100, Math.round((pct + (pending ?? 0)) * 100) / 100);
-  const submittedValue = quantityMode
-    ? submittedQuantity !== null
-      ? `${formatQuantity(submittedQuantity)} / ${withUnit(plannedQuantity!)}`
-      : "N/A"
-    : latestSubmission !== null
-      ? `${formatPercent(cumulativeSubmitted)} / 100%`
-      : "N/A";
-  // Review state under the Submitted value (both modes), so a pending
-  // submission can't be mistaken for current progress.
+  // Review state of the most recent submission (both modes), so a
+  // pending submission can't be mistaken for approved progress.
   const submissionState = latestSubmission
     ? SUBMISSION_STATE[latestSubmission.reviewStatusCode](latestSubmission)
     : null;
-  // Percentage mode: the recently submitted part of that figure, so it
-  // stays identifiable. Approved / Remaining keep using approved progress
-  // only until a reviewer approves it.
-  const recentSubmittedText =
-    quantityMode || !latestSubmission
-      ? null
-      : pending !== null
-        ? `Recent submitted: +${formatPercent(pending)}`
-        : `Latest submitted: ${formatPercent(latestSubmission.submittedProgress)}`;
+  // "Recently Submitted": percentage mode — the latest submission's % (the
+  // part awaiting approval when it is pending, "+2%"); quantity mode — the
+  // quantity submitted so far, approved or not.
+  const recentValue = quantityMode
+    ? submittedQuantity !== null
+      ? withUnit(submittedQuantity)
+      : "N/A"
+    : pending !== null
+      ? `+${formatPercent(pending)}`
+      : latestSubmission !== null
+        ? formatPercent(latestSubmission.submittedProgress)
+        : "None yet";
   const approvedValue =
     quantityMode && approvedQuantity !== null ? (
       <>
@@ -169,15 +165,29 @@ export default function WorkerHeroCard({
     ) : (
       formatPercent(pct)
     );
+  const remainingPct = Math.max(0, Math.round((100 - pct) * 10) / 10);
   const remainingValue = quantityMode
     ? approvedQuantity !== null
       ? withUnit(Math.max(0, plannedQuantity! - approvedQuantity))
       : "N/A"
-    : formatPercent(Math.max(0, Math.round((100 - pct) * 10) / 10));
+    : formatPercent(remainingPct);
+  // One plain sentence answering "out of the total, how much is approved,
+  // how much is waiting, how much is left" — built from the same figures
+  // as the cells above, never a separate calculation.
+  const summary = quantityMode
+    ? approvedQuantity !== null
+      ? `${withUnit(approvedQuantity)} of ${withUnit(plannedQuantity!)} approved (${formatPercent(pct)}) · ${remainingValue} remaining.`
+      : `Target is ${withUnit(plannedQuantity!)}. Nothing approved yet.`
+    : pending !== null
+      ? `Approved ${formatPercent(pct)} + ${formatPercent(pending)} awaiting approval = ${formatPercent(cumulativeSubmitted)} of 100%. Remaining: ${formatPercent(remainingPct)} (${formatPercent(Math.max(0, Math.round((100 - cumulativeSubmitted) * 10) / 10))} once approved).`
+      : `${formatPercent(pct)} of 100% approved · ${formatPercent(remainingPct)} remaining.`;
   // Same count-up as the Contractor Overall Progress (display only): the
-  // bar width, its color and the "% complete" text all follow the CURRENT
-  // animated value, so the color steps red → orange → yellow → green.
+  // approved segment's width and color follow the CURRENT animated value,
+  // so the color steps red → orange → yellow → green. The pending segment (percentage mode only) sits right
+  // after it, capped so the bar never exceeds 100%.
   const shownPct = useCountUp(progressPercentage) ?? 0;
+  const approvedWidth = Math.min(100, Math.max(0, shownPct));
+  const pendingWidth = pending !== null ? Math.max(0, Math.min(100 - approvedWidth, pending)) : 0;
 
   const encouragement = isCompleted
     ? "Work completed!"
@@ -197,13 +207,63 @@ export default function WorkerHeroCard({
         <p className="text-xs text-foreground-muted">{workItemCode}</p>
       </div>
 
+      {/* Total target first — everything below is a share of it. */}
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <p className="text-sm text-foreground-secondary">
+          Total Target{" "}
+          <span className="font-bold text-foreground tabular-nums">{targetValue}</span>
+          {!quantityMode && <span className="text-foreground-muted"> (full scope of this work item)</span>}
+        </p>
+        {encouragement && <p className="text-xs font-medium text-brand">{encouragement}</p>}
+      </div>
+
+      <div>
+        <div
+          className="flex h-3 w-full rounded-full bg-line-soft overflow-hidden"
+          role="img"
+          aria-label={summary}
+        >
+          <div className={`h-full ${progressColorClass(shownPct, "bg")}`} style={{ width: `${approvedWidth}%` }} />
+          {pendingWidth > 0 && (
+            <div
+              className="h-full bg-info/60 bg-[repeating-linear-gradient(45deg,transparent_0_4px,rgba(255,255,255,0.45)_4px_8px)]"
+              style={{ width: `${pendingWidth}%` }}
+            />
+          )}
+        </div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-foreground-secondary">
+          <span className="inline-flex items-center gap-1.5">
+            <span className={`h-2 w-2 rounded-full ${progressColorClass(shownPct, "bg")}`} aria-hidden />
+            Approved
+          </span>
+          {pendingWidth > 0 && (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-info/60" aria-hidden />
+              Awaiting approval
+            </span>
+          )}
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-line-soft border border-line" aria-hidden />
+            Remaining
+          </span>
+        </div>
+        <p className="mt-2 text-sm text-foreground tabular-nums">{summary}</p>
+      </div>
+
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCell
           icon={Target}
           tone="error"
           valueClassName="text-error"
           value={targetValue}
-          label={quantityMode ? "Target" : "Target (full scope)"}
+          label="Total Target"
+        />
+        <StatCell
+          icon={CheckCircle2}
+          tone="brand"
+          valueClassName="text-brand"
+          value={approvedValue}
+          label="Approved (counts as done)"
         />
         <StatCell
           icon={Send}
@@ -212,24 +272,14 @@ export default function WorkerHeroCard({
           value={
             submissionState ? (
               <>
-                {submittedValue}
+                {recentValue}
                 <span className={`block text-xs font-medium ${submissionState.className}`}>{submissionState.text}</span>
-                {recentSubmittedText && (
-                  <span className="block text-xs font-normal text-foreground-secondary">{recentSubmittedText}</span>
-                )}
               </>
             ) : (
-              submittedValue
+              recentValue
             )
           }
-          label={quantityMode ? "Submitted / Estimated" : "Submitted (incl. awaiting approval)"}
-        />
-        <StatCell
-          icon={CheckCircle2}
-          tone="brand"
-          valueClassName="text-brand"
-          value={approvedValue}
-          label="Approved / Completed"
+          label={quantityMode ? "Submitted so far" : "Recently Submitted"}
         />
         <StatCell
           icon={Hourglass}
@@ -238,21 +288,6 @@ export default function WorkerHeroCard({
           value={remainingValue}
           label="Remaining"
         />
-      </div>
-
-      <div>
-        <div className="h-2.5 w-full rounded-full bg-line-soft overflow-hidden">
-          <div
-            className={`h-full rounded-full ${progressColorClass(shownPct, "bg")}`}
-            style={{ width: `${Math.min(100, Math.max(0, shownPct))}%` }}
-          />
-        </div>
-        <div className="flex items-center justify-between mt-1">
-          <p className="text-xs text-foreground-secondary tabular-nums">{formatPercent(shownPct)} complete</p>
-          {encouragement && (
-            <p className="text-xs font-medium text-brand">{encouragement}</p>
-          )}
-        </div>
       </div>
     </Card>
   );

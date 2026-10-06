@@ -70,6 +70,7 @@ export async function PATCH(request: NextRequest) {
     const label: unknown = body?.label;
     const conditional: unknown = body?.conditional;
     const status: unknown = body?.status;
+    const updateAccess: unknown = body?.updateAccess;
 
     if (typeof workItemId !== "string" || !workItemId) {
       return NextResponse.json({ error: "workItemId is required." }, { status: 400 });
@@ -88,6 +89,9 @@ export async function PATCH(request: NextRequest) {
       ...(typeof label === "string" ? { label } : {}),
       ...(typeof conditional === "boolean" ? { conditional } : {}),
       ...(status === "Active" || status === "Inactive" ? { status } : {}),
+      // Task Update Access — same Contractor/Subcontractor authorization
+      // as every other field here (assertCanManageWorkItemTasks).
+      ...(typeof updateAccess === "boolean" ? { updateAccess } : {}),
     });
 
     return NextResponse.json({ ok: true });

@@ -5,9 +5,11 @@ import ProgressBar from "@/components/workflow/charts/ProgressBar";
 import ProgressRing from "@/components/workflow/charts/ProgressRing";
 import ProgressValue from "@/components/workflow/charts/ProgressValue";
 import WorkItemList, { workItemStatus } from "@/components/workflow/WorkItemList";
+import WorkItemTaskManager, { type ManagedTask } from "@/components/workflow/WorkItemTaskManager";
 import { DashboardKpiCards, type DashboardKpiValues, type KpiCardActions } from "@/components/workflow/KpiCards";
 import { formatDateUS, formatMoney } from "@/lib/format";
 import Card from "@/components/ui/Card";
+import Button from "@/components/ui/Button";
 import Input, { Select } from "@/components/ui/Input";
 import ErrorNotice from "@/components/ui/ErrorNotice";
 import { errorMessage, readApiJson } from "@/lib/apiClient";
@@ -21,6 +23,7 @@ type DashboardWorkItemRow = {
   code: string;
   description: string;
   projectName: string;
+  departmentId: string;
   departmentName: string;
   plannedQuantity: number | null;
   unitOfMeasure: string | null;
@@ -30,6 +33,8 @@ type DashboardWorkItemRow = {
   isStuck: boolean;
   lastApprovedAt: string | null;
   estimatedAmount?: number | null;
+  /** Present in every /api/workflow/dashboard response (lib/dashboard.ts). */
+  tasks?: ManagedTask[];
 };
 
 type DashboardDepartmentSummary = {
@@ -109,6 +114,11 @@ export default function DashboardPanel({
   onKpisChange,
   kpiActions,
   departmentFilterOnly = false,
+  query: queryProp,
+  taskManagementDepartmentIds,
+  headerAction,
+  departmentId: departmentIdProp,
+  showFilters = true,
 }: {
   userId: string;
   initialData: DashboardData;
@@ -164,8 +174,29 @@ export default function DashboardPanel({
   departmentFilterOnly?: boolean;
   /** Click-through destinations for the "kpis" cards (see KpiCardActions). */
   kpiActions?: KpiCardActions;
+  /** Search text owned by the page (the shared header toolbar search) —
+   * replaces this panel's own Work Items search box when given. */
+  query?: string;
+  /** Departments where the caller may configure tasks (own Contractor
+   * department, or a WORK_ITEM_MANAGEMENT delegation) — rows there get a
+   * Tasks action with the shared WorkItemTaskManager. The server still
+   * authorizes every task change itself. */
+  taskManagementDepartmentIds?: string[];
+  /** Extra control in the Work Items card header (e.g. Excel download). */
+  headerAction?: React.ReactNode;
+  /** Department chosen by the page (its header Department dropdown) —
+   * when given it drives this panel's data exactly like the panel's own
+   * Department filter would ("" = all in scope). */
+  departmentId?: string;
+  /** Render the Filters card (default). Off where the page provides its
+   * own controls or none are needed. */
+  showFilters?: boolean;
 }) {
-  const [query, setQuery] = useState("");
+  const [ownQuery, setQuery] = useState("");
+  const query = queryProp ?? ownQuery;
+  // Which row's Tasks panel is open (one at a time).
+  const [tasksOpenFor, setTasksOpenFor] = useState<string | null>(null);
+  const canManageTasks = (departmentId: string) => !!taskManagementDepartmentIds?.includes(departmentId);
   // Default scope = the caller's own data, not "All" (see design
   // brief section 8): when the server has already resolved exactly one
   // project/department for this caller (the common case for a
@@ -182,9 +213,10 @@ export default function DashboardPanel({
         ? initialData.scopeProjects[0].projectId
         : "")
   );
-  const [departmentId, setDepartmentId] = useState(
+  const [ownDepartmentId, setDepartmentId] = useState(
     initialData.scopeDepartments.length === 1 ? initialData.scopeDepartments[0].departmentId : ""
   );
+  const departmentId = departmentIdProp ?? ownDepartmentId;
   const [status, setStatus] = useState<StatusFilter>("ALL");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -298,6 +330,7 @@ export default function DashboardPanel({
 
       {/* Always visible — filtering options must be immediately visible,
           not hidden behind a click-to-expand dropdown. */}
+      {showFilters && (
       <div className="rounded-lg border border-line bg-surface p-4 text-sm shadow-sm">
         <p className="text-foreground-secondary font-medium mb-2">Filters</p>
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -392,6 +425,7 @@ export default function DashboardPanel({
           </button>
         )}
       </div>
+      )}
 
       {error && !loading && <ErrorNotice message={error} onRetry={() => setAttempt((n) => n + 1)} />}
 
@@ -521,10 +555,11 @@ export default function DashboardPanel({
         /* Level 3/4 — actionable + detail: work items, simple columns
             only. Capped at 8 rows by default (Level 4 detail, not the
             first thing a Contractor should have to scroll through). */
-        <Card className="mt-6 !p-0 overflow-hidden">
+        <Card className="not-first:mt-6 !p-0 overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-b border-line">
             <h2 className="font-semibold text-foreground text-sm">Work Items</h2>
-            {showSearch && (
+            {headerAction}
+            {showSearch && queryProp === undefined && (
               <div className="relative w-full sm:w-72">
                 <Search
                   className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground-muted"
@@ -563,6 +598,41 @@ export default function DashboardPanel({
                   earnedAmount: data.includeFinancials ? item.estimatedAmount : null,
                   status: workItemStatus(item),
                 }))}
+                renderActions={
+                  taskManagementDepartmentIds
+                    ? (row) => {
+                        const item = data.workItems.find((w) => w.workItemId === row.workItemId);
+                        if (!item || !canManageTasks(item.departmentId)) return null;
+                        const open = tasksOpenFor === row.workItemId;
+                        return (
+                          <Button
+                            variant={open ? "primary" : "secondary"}
+                            size="sm"
+                            onClick={() => setTasksOpenFor(open ? null : row.workItemId)}
+                            aria-expanded={open}
+                          >
+                            Tasks ({(item.tasks ?? []).filter((t) => t.status === "Active").length})
+                          </Button>
+                        );
+                      }
+                    : undefined
+                }
+                renderDetail={(row) => {
+                  if (tasksOpenFor !== row.workItemId) return null;
+                  const item = data.workItems.find((w) => w.workItemId === row.workItemId);
+                  if (!item || !canManageTasks(item.departmentId)) return null;
+                  return (
+                    <div className="border-t border-line-soft bg-surface-soft px-4 py-3">
+                      <WorkItemTaskManager
+                        workItemId={item.workItemId}
+                        tasks={item.tasks ?? []}
+                        workItemLabel={`${item.code} — ${item.description}`}
+                        defaultExpanded
+                        onChanged={() => setAttempt((n) => n + 1)}
+                      />
+                    </div>
+                  );
+                }}
               />
               {!needle && data.workItems.length > 8 && (
                 <button

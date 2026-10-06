@@ -4,17 +4,42 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
+import Badge from "@/components/ui/Badge";
+import { formatDateUS, formatPercent, formatTimeUS } from "@/lib/format";
+
+/** A Worker's latest task-level update (see lib/workflow.ts
+ * WorkItemTaskProgress) — worker-reported, never approved progress. */
+export type ManagedTaskProgress = {
+  percent: number | null;
+  completed: boolean;
+  note: string | null;
+  updatedAt: string;
+  updatedByName: string;
+};
 
 export type ManagedTask = {
   id: string;
   label: string;
   conditional: boolean;
   status: "Active" | "Inactive";
+  /** Task Update Access — lets an assigned Worker record task-level
+   * progress. Optional so older callers still compile (reads as off). */
+  updateAccess?: boolean;
+  progress?: ManagedTaskProgress | null;
 };
 
 type Props = {
   workItemId: string;
   tasks: ManagedTask[];
+  /** The work item these tasks belong to (e.g. "043 — Rough-in"), shown
+   * as the panel heading so it's always clear whose tasks these are. */
+  workItemLabel?: string;
+  /** Open the task list straight away (when the caller already shows it
+   * behind its own "Tasks" button). */
+  defaultExpanded?: boolean;
+  /** Called after a successful change — for callers whose task list is
+   * client-fetched (router.refresh() alone wouldn't reload it). */
+  onChanged?: () => void;
 };
 
 /**
@@ -31,9 +56,9 @@ type Props = {
  * the Worker Dashboard, and the API rejects an unauthorized caller
  * regardless).
  */
-export default function WorkItemTaskManager({ workItemId, tasks }: Props) {
+export default function WorkItemTaskManager({ workItemId, tasks, workItemLabel, defaultExpanded = false, onChanged }: Props) {
   const router = useRouter();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [adding, setAdding] = useState(false);
   const [newLabel, setNewLabel] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -53,6 +78,7 @@ export default function WorkItemTaskManager({ workItemId, tasks }: Props) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Request failed.");
       router.refresh();
+      onChanged?.();
       return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed.");
@@ -77,6 +103,10 @@ export default function WorkItemTaskManager({ workItemId, tasks }: Props) {
     if (ok) setEditingId(null);
   }
 
+  async function handleToggleAccess(task: ManagedTask) {
+    await post("/api/workflow/work-item-tasks", "PATCH", { taskId: task.id, updateAccess: !task.updateAccess });
+  }
+
   async function handleToggleStatus(task: ManagedTask) {
     await post("/api/workflow/work-item-tasks", "PATCH", {
       taskId: task.id,
@@ -96,11 +126,16 @@ export default function WorkItemTaskManager({ workItemId, tasks }: Props) {
 
       {expanded && (
         <div className="mt-1.5 space-y-1.5 rounded-lg border border-line bg-surface-soft p-2.5">
+          {workItemLabel && (
+            <p className="text-xs font-semibold text-foreground">
+              Tasks for <span className="text-brand">{workItemLabel}</span>
+            </p>
+          )}
           {tasks.length === 0 && !adding && (
             <p className="text-xs text-foreground-secondary">No tasks configured yet.</p>
           )}
           {tasks.map((task) => (
-            <div key={task.id} className="flex items-center justify-between gap-2 text-xs">
+            <div key={task.id} className="flex flex-wrap items-center justify-between gap-2 text-xs">
               {editingId === task.id ? (
                 <>
                   <Input
@@ -125,10 +160,41 @@ export default function WorkItemTaskManager({ workItemId, tasks }: Props) {
                 </>
               ) : (
                 <>
-                  <span className={task.status === "Inactive" ? "text-foreground-muted line-through" : "text-foreground"}>
-                    {task.label}
+                  <span className="min-w-0 flex-1">
+                    <span className={task.status === "Inactive" ? "text-foreground-muted line-through" : "text-foreground"}>
+                      {task.label}
+                    </span>
+                    {task.progress && (
+                      <span className="block text-[11px] text-foreground-secondary">
+                        {task.progress.completed ? (
+                          <Badge variant="success">Done</Badge>
+                        ) : (
+                          task.progress.percent !== null && <Badge variant="info">{formatPercent(task.progress.percent)}</Badge>
+                        )}{" "}
+                        Worker update by {task.progress.updatedByName} · {formatDateUS(task.progress.updatedAt, "/")}{" "}
+                        {formatTimeUS(task.progress.updatedAt)}
+                        {task.progress.note ? ` — “${task.progress.note}”` : ""}
+                      </span>
+                    )}
                   </span>
-                  <div className="flex gap-1 shrink-0">
+                  <div className="flex flex-wrap gap-1 shrink-0">
+                    {task.status === "Active" && (
+                      <Button
+                        variant={task.updateAccess ? "primary" : "secondary"}
+                        size="sm"
+                        className="!px-2 !py-1 !text-xs"
+                        onClick={() => handleToggleAccess(task)}
+                        disabled={busy}
+                        aria-pressed={!!task.updateAccess}
+                        title={
+                          task.updateAccess
+                            ? "Assigned workers can update this task. Click to turn off."
+                            : "Workers update the work item only. Click to let assigned workers update this task."
+                        }
+                      >
+                        {task.updateAccess ? "Worker updates: On" : "Worker updates: Off"}
+                      </Button>
+                    )}
                     <Button
                       variant="secondary"
                       size="sm"

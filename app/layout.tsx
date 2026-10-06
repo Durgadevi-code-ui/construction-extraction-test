@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
+import { THEME_INIT_SCRIPT } from "@/lib/theme";
 
 const geistSans = Geist({
   subsets: ["latin"],
@@ -27,7 +28,13 @@ export const metadata: Metadata = {
 // maintain.
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`h-full antialiased ${geistSans.variable}`}>
+    // suppressHydrationWarning: the inline script below may set
+    // data-theme="dark" (a saved Dark choice, see lib/theme.ts) before
+    // React hydrates; the DOM's value is the right one.
+    <html lang="en" className={`h-full antialiased ${geistSans.variable}`} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       {/* overflow-x-hidden is a defensive backstop only — every legitimate
           horizontal scroll area (TabNav, data tables) has its own
           explicit overflow-x-auto container, which still scrolls normally

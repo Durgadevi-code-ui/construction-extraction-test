@@ -56,9 +56,35 @@ export type ParseResult = {
   rows: ParsedWorkItemRow[];
   issues: ParseIssue[];
   sheetsScanned: string[];
+  /** How each work-item sheet's columns were understood — shown in the
+   * import preview so the operator can see what was read as what. */
+  columnMappings: { sheet: string; headerRow: number; columns: { header: string; field: string }[] }[];
+  /** Plain-language notes on sheets that couldn't be read as a work-item
+   * table — used to explain an import that found nothing. */
+  diagnostics: string[];
 };
 
-type NormalizedField =
+/** Display names for the fields a column can be read as. */
+export const FIELD_LABELS: Record<NormalizedField, string> = {
+  department: "Department",
+  workItemNo: "Item No",
+  description: "Description",
+  plannedQuantity: "Quantity",
+  unitOfMeasure: "Unit",
+  scheduledValue: "Scheduled Value",
+  csiLineCode: "CSI Code",
+  startDate: "Start Date",
+  endDate: "Finish Date",
+};
+
+/** Department used when a row has no department evidence at all (no
+ * department column, no DIVISION/category heading above it). Existing
+ * work items are still matched by item number first (see lib/admin.ts
+ * upsertWorkItemFromImport), so this only ever holds genuinely new items
+ * — visibly, so an Admin can move them, rather than rejecting the file. */
+export const UNASSIGNED_DEPARTMENT = "Unassigned";
+
+export type NormalizedField =
   | "department"
   | "workItemNo"
   | "description"
@@ -131,28 +157,238 @@ function normalizeHeader(header: unknown): string {
     .replace(/[^a-z0-9]/g, "");
 }
 
-/** Maps each column index in a header row to the normalized field it
- * represents, if any. A column that matches no known alias is simply
- * ignored (never an error — "extra columns" must be tolerated). */
-function matchColumns(headerRow: unknown[]): Map<number, NormalizedField> {
-  const columnField = new Map<number, NormalizedField>();
-  const claimedFields = new Set<NormalizedField>();
+// ------------------------------------------------------------------
+// Column interpretation. Real project files name columns however their
+// author likes ("Division" / "Trade" / "Group", "Item No." / "Activity
+// ID" / "Ref", "Scope Description" / "What Needs To Be Done", …), so a
+// column's meaning is decided from several signals instead of one exact
+// heading name:
+//   1. heading — the exact aliases above (strongest, so every file that
+//      imported before maps exactly the same), else the heading's words
+//      ("Planned Qty" → quantity, "Activity ID" → item number), with
+//      negative words that rule a field out ("Notes" is never the
+//      description, "Unit Price" is never the scheduled value);
+//   2. cell data — long varied text reads as a description, short unique
+//      codes as item numbers, repeated short labels / "DIVISION 03 – …"
+//      as a department, measurement words (EA, LF, SF…) as units,
+//      numbers as quantity/amount;
+//   3. compatibility — a heading is only trusted when the data agrees
+//      (a "Work Item" column holding 101, 102, … is an item number, not
+//      a description).
+// Each field is then given to its best-scoring column, one column each.
+// ------------------------------------------------------------------
 
-  headerRow.forEach((cell, colIndex) => {
-    const normalized = normalizeHeader(cell);
-    if (!normalized) return;
+type ColumnProfile = {
+  /** Non-blank sample values. */
+  n: number;
+  numFrac: number;
+  textFrac: number;
+  /** Short identifiers with a digit: 053, 101, A-101, 1.2, CO-01a. */
+  codeFrac: number;
+  /** CSI-style section numbers: 03310, 26 05 19, 03 30 00. */
+  csiFrac: number;
+  /** Measurement-unit words: EA, LF, SF, CY, LS, HR, … */
+  unitFrac: number;
+  /** "DIVISION 03 — CONCRETE"-style values. */
+  divisionFrac: number;
+  avgLen: number;
+  distinctRatio: number;
+  medianNumber: number;
+};
 
+/** Common construction measurement units — a vocabulary of cell VALUES
+ * (what a unit column contains), not of column headings. */
+const UNIT_WORDS = new Set([
+  "ea", "each", "lf", "lin ft", "sf", "sq ft", "sqft", "sy", "sq yd", "cy", "cu yd", "cf", "ls", "lump sum", "lot",
+  "allow", "allowance", "ton", "tons", "hr", "hrs", "hour", "hours", "day", "days", "wk", "week", "mo", "month", "m",
+  "m2", "m3", "sqm", "lm", "kg", "lb", "lbs", "gal", "ft", "yd", "in", "pcs", "pc", "set", "sets", "unit", "units",
+  "no", "nos", "%", "pct", "job", "item", "mh", "lnft", "bf", "msf", "sq",
+]);
+
+function profileColumn(values: unknown[]): ColumnProfile {
+  const present = values.filter((v) => v !== null && v !== undefined && String(v).trim() !== "");
+  const n = present.length;
+  if (n === 0) {
+    return { n: 0, numFrac: 0, textFrac: 0, codeFrac: 0, csiFrac: 0, unitFrac: 0, divisionFrac: 0, avgLen: 0, distinctRatio: 0, medianNumber: 0 };
+  }
+  const texts = present.map((v) => String(v).trim());
+  const numbers = present.map((v) => toNumberOrNull(v).value).filter((v): v is number => v !== null);
+  const isCode = (v: unknown, t: string) =>
+    typeof v === "number" ? Number.isInteger(v) && v >= 0 && v < 1e6 : /^[A-Za-z]{0,4}[-.\s]?\d[\w.\-/]{0,11}$/.test(t);
+  const sorted = [...numbers].sort((a, b) => a - b);
+  return {
+    n,
+    numFrac: numbers.length / n,
+    textFrac: texts.filter((t) => /[A-Za-z]/.test(t)).length / n,
+    codeFrac: present.filter((v, i) => isCode(v, texts[i])).length / n,
+    csiFrac: texts.filter((t) => /^\d{2}\s?\d{2}\s?\d{1,2}(\.\d+)?$/.test(t)).length / n,
+    unitFrac: texts.filter((t) => UNIT_WORDS.has(t.toLowerCase().replace(/\./g, ""))).length / n,
+    divisionFrac: texts.filter((t) => /^division\b/i.test(t)).length / n,
+    avgLen: texts.reduce((s, t) => s + t.length, 0) / n,
+    distinctRatio: new Set(texts.map((t) => t.toLowerCase())).size / n,
+    medianNumber: sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0,
+  };
+}
+
+/** Heading words → fields. Weight 1 = the word alone says it; lower =
+ * a hint the data must confirm. `not` words rule the field out. */
+const HEADING_WORDS: Record<NormalizedField, { words: Record<string, number>; not: string[] }> = {
+  department: {
+    words: { department: 1, dept: 1, division: 1, trade: 1, discipline: 1, category: 1, workstream: 1, group: 0.7, package: 0.6, system: 0.5 },
+    not: ["note", "notes", "comment", "comments", "remark", "remarks", "phase", "status", "location", "area", "zone", "level", "building", "floor", "date", "responsible", "contractor", "subcontractor", "code", "no", "number", "id"],
+  },
+  description: {
+    words: { description: 1, desc: 1, scope: 1, task: 1, activity: 0.8, title: 0.7, narrative: 0.8, details: 0.6, work: 0.5, what: 0.5, name: 0.5, item: 0.4 },
+    not: ["note", "notes", "comment", "comments", "remark", "remarks", "status", "phase", "location", "area", "zone", "level", "building", "floor", "contractor", "subcontractor", "responsible", "party", "date", "id", "no", "number", "code", "ref", "qty", "quantity", "unit", "uom", "value", "amount", "cost", "price"],
+  },
+  workItemNo: {
+    words: { no: 1, number: 1, num: 1, ref: 1, reference: 1, id: 1, wbs: 1, line: 0.7, item: 0.6, code: 0.6, sn: 0.8, sl: 0.6 },
+    not: ["description", "desc", "scope", "qty", "quantity", "unit", "value", "amount", "cost", "price", "csi", "spec", "phone", "date"],
+  },
+  csiLineCode: {
+    words: { csi: 1, masterformat: 1, spec: 0.9, specification: 0.8, section: 0.7 },
+    not: ["description", "desc", "qty", "quantity", "value", "amount"],
+  },
+  plannedQuantity: {
+    words: { qty: 1, quantity: 1, quantities: 1, planned: 0.6, target: 0.6, estimated: 0.5, count: 0.6, volume: 0.6, units: 0.5 },
+    not: ["price", "cost", "rate", "value", "amount", "%", "percent", "completed", "previous", "period", "stored", "balance", "retainage"],
+  },
+  unitOfMeasure: {
+    words: { uom: 1, unit: 1, units: 0.8, measure: 1, measurement: 1, um: 0.8 },
+    not: ["price", "cost", "rate", "value", "amount"],
+  },
+  scheduledValue: {
+    words: { amount: 1, value: 1, cost: 1, budget: 1, scheduled: 0.8, contract: 0.6, sum: 0.6, total: 0.5, price: 0.4 },
+    not: ["unit", "rate", "per", "percent", "%", "retainage", "balance", "previous", "period", "stored", "completed", "approved", "earned"],
+  },
+  startDate: { words: { start: 1, begin: 1, commence: 1 }, not: [] },
+  endDate: { words: { finish: 1, end: 1, completion: 0.8, due: 1 }, not: ["balance"] },
+};
+
+/** How strongly a heading alone suggests `field`: 1 for an exact alias
+ * (the original matching rule), else the best heading-word weight, or
+ * -1 when a ruling-out word is present. */
+function headingScore(field: NormalizedField, header: unknown): number {
+  const compact = normalizeHeader(header);
+  if (!compact) return 0;
+  if (FIELD_ALIASES[field].includes(compact)) return 1;
+  const words = String(header ?? "")
+    .toLowerCase()
+    .replace(/%/g, " % ")
+    .split(/[^a-z0-9%]+/)
+    .filter(Boolean);
+  const { words: known, not } = HEADING_WORDS[field];
+  if (words.some((w) => not.includes(w))) return -1;
+  return words.reduce((best, w) => Math.max(best, known[w] ?? 0), 0);
+}
+
+/** Whether the column's data can be this field at all. */
+function dataCompatible(field: NormalizedField, p: ColumnProfile): boolean {
+  switch (field) {
+    case "description":
+      return p.textFrac >= 0.6 && p.numFrac < 0.4;
+    case "department":
+      return p.textFrac >= 0.6 && p.unitFrac < 0.5;
+    case "workItemNo":
+      return p.codeFrac >= 0.6 && p.avgLen <= 20;
+    case "csiLineCode":
+      return p.codeFrac >= 0.6;
+    case "plannedQuantity":
+    case "scheduledValue":
+      return p.numFrac >= 0.6;
+    case "unitOfMeasure":
+      return p.textFrac >= 0.6 && p.avgLen <= 12;
+    default:
+      return true;
+  }
+}
+
+/** How much the column's data alone looks like this field (0–1). */
+function dataScore(field: NormalizedField, p: ColumnProfile, colIndex: number): number {
+  switch (field) {
+    case "description":
+      return p.textFrac * Math.min(1, p.avgLen / 25) * (0.4 + 0.6 * p.distinctRatio);
+    case "department":
+      if (p.divisionFrac >= 0.5) return 1;
+      return p.n >= 3 && p.distinctRatio < 1 ? p.textFrac * (1 - p.distinctRatio) * (p.avgLen <= 40 ? 1 : 0.5) : 0;
+    case "workItemNo":
+      return p.codeFrac * p.distinctRatio * (colIndex <= 2 ? 1 : 0.8);
+    case "csiLineCode":
+      return p.csiFrac;
+    case "unitOfMeasure":
+      return p.unitFrac;
+    case "plannedQuantity":
+      return p.numFrac * 0.3;
+    case "scheduledValue":
+      return p.numFrac * 0.3 + (p.medianNumber >= 1000 ? 0.2 : 0);
+    default:
+      return 0;
+  }
+}
+
+/** Minimum data score for a column with no heading support at all —
+ * only fields whose data is distinctive enough to stand on its own. */
+const DATA_ONLY_THRESHOLD: Partial<Record<NormalizedField, number>> = {
+  description: 0.45,
+  department: 0.6,
+  workItemNo: 0.6,
+  unitOfMeasure: 0.7,
+  csiLineCode: 0.8,
+};
+
+type ColumnInterpretation = {
+  columnField: Map<number, NormalizedField>;
+  score: number;
+  /** Fields whose column had heading support (not data alone). */
+  headingBacked: number;
+  /** Fields matched by an exact alias (the original rule). */
+  exactAliases: number;
+};
+
+/** Interprets one candidate header row against the rows below it. */
+function interpretColumns(headerRow: unknown[], sampleRows: unknown[][]): ColumnInterpretation {
+  const candidates: { col: number; field: NormalizedField; total: number; heading: number }[] = [];
+  const width = Math.max(headerRow.length, ...sampleRows.map((r) => r.length));
+  for (let col = 0; col < width; col++) {
+    const header = headerRow[col];
+    // The download's own "Latest …" columns are computed output, never
+    // source data — they are not interpreted as any field.
+    const headerText = toStringOrNull(header);
+    if (headerText && EXPORT_LATEST_HEADER_SET.has(headerText)) continue;
+    const profile = profileColumn(sampleRows.map((r) => r[col]));
     for (const field of FIELD_MATCH_ORDER) {
-      if (claimedFields.has(field)) continue;
-      if (FIELD_ALIASES[field].includes(normalized)) {
-        columnField.set(colIndex, field);
-        claimedFields.add(field);
-        return;
+      const heading = headingScore(field, header);
+      if (heading < 0) continue;
+      if (profile.n === 0 ? heading < 0.9 : !dataCompatible(field, profile)) continue;
+      const data = profile.n === 0 ? 0 : dataScore(field, profile, col);
+      if (heading >= 0.4) {
+        if (heading + data >= 0.7) candidates.push({ col, field, total: heading + data, heading });
+      } else if (data >= (DATA_ONLY_THRESHOLD[field] ?? Infinity)) {
+        candidates.push({ col, field, total: data, heading: 0 });
       }
     }
-  });
-
-  return columnField;
+  }
+  // Best pairs first; ties keep the original field priority and leftmost column.
+  candidates.sort(
+    (a, b) =>
+      b.total - a.total ||
+      FIELD_MATCH_ORDER.indexOf(a.field) - FIELD_MATCH_ORDER.indexOf(b.field) ||
+      a.col - b.col
+  );
+  const columnField = new Map<number, NormalizedField>();
+  const taken = new Set<NormalizedField>();
+  let score = 0;
+  let headingBacked = 0;
+  let exactAliases = 0;
+  for (const c of candidates) {
+    if (columnField.has(c.col) || taken.has(c.field)) continue;
+    columnField.set(c.col, c.field);
+    taken.add(c.field);
+    score += c.total;
+    if (c.heading > 0) headingBacked++;
+    if (FIELD_ALIASES[c.field].includes(normalizeHeader(headerRow[c.col]))) exactAliases++;
+  }
+  return { columnField, score, headingBacked, exactAliases };
 }
 
 function isRowBlank(row: unknown[]): boolean {
@@ -185,12 +421,20 @@ function extractDivisionHeader(row: unknown[]): string | null {
 // The actual column-header row of an AIA G703 continuation sheet (or any
 // project workbook) is rarely the first non-blank row — real exports have
 // a project/application-info block ("AIA DOCUMENT G703", "APPLICATION
-// NO.", "PERIOD TO:", etc.) above the real table header. Instead of
-// assuming the first non-blank row is the header, scan the first several
-// rows and pick whichever one matches the most known field aliases (and
-// includes at least a department or description column) — that's the
-// real header row regardless of how much metadata sits above it.
+// NO.", "PERIOD TO:", etc.) above the real table header. So the first
+// HEADER_SEARCH_ROW_LIMIT rows are each tried as the header, interpreted
+// against the rows below them (interpretColumns), and the best
+// interpretation wins. To avoid reading a summary/cover sheet (e.g. AIA
+// G702) or a data row as a table, a header row must be mostly text and
+// either name a department/description column exactly (the original rule)
+// or back at least two fields with its headings — and it must yield a
+// description column (or a department plus an item/CSI number).
 const HEADER_SEARCH_ROW_LIMIT = 50;
+const HEADER_SAMPLE_ROWS = 40;
+
+function isSingleCellRow(row: unknown[]): boolean {
+  return row.filter((cell) => toStringOrNull(cell) !== null).length === 1;
+}
 
 function findHeaderRow(
   grid: unknown[][]
@@ -201,14 +445,32 @@ function findHeaderRow(
   for (let i = 0; i < Math.min(grid.length, HEADER_SEARCH_ROW_LIMIT); i++) {
     const row = grid[i];
     if (isRowBlank(row)) continue;
+    const cells = row.filter((cell) => toStringOrNull(cell) !== null);
+    const textCells = cells.filter((cell) => typeof cell === "string" && /[A-Za-z]/.test(cell));
+    if (textCells.length / cells.length < 0.6) continue;
 
-    const columnField = matchColumns(row);
-    const fieldsFound = new Set(columnField.values());
-    if (!fieldsFound.has("department") && !fieldsFound.has("description")) continue;
+    const sample: unknown[][] = [];
+    for (let r = i + 1; r < grid.length && sample.length < HEADER_SAMPLE_ROWS; r++) {
+      const candidate = grid[r];
+      if (isRowBlank(candidate) || isSingleCellRow(candidate) || isTotalRow(candidate)) continue;
+      sample.push(candidate);
+    }
 
-    if (columnField.size > bestScore) {
-      bestScore = columnField.size;
-      best = { index: i, columnField };
+    const interpretation = interpretColumns(row, sample);
+    const fields = new Set(interpretation.columnField.values());
+    const hasCore =
+      fields.has("description") ||
+      (fields.has("department") && (fields.has("workItemNo") || fields.has("csiLineCode")));
+    if (!hasCore) continue;
+    const exactCore = [...interpretation.columnField].some(
+      ([col, field]) =>
+        (field === "description" || field === "department") && FIELD_ALIASES[field].includes(normalizeHeader(row[col]))
+    );
+    if (interpretation.headingBacked < 2 && !exactCore) continue;
+
+    if (interpretation.score > bestScore) {
+      bestScore = interpretation.score;
+      best = { index: i, columnField: interpretation.columnField };
     }
   }
 
@@ -246,7 +508,7 @@ function toStringOrNull(value: unknown): string | null {
  * that merely contains the word "total" (e.g. "Total station survey
  * equipment") is never mistaken for one. */
 function isTotalRowMarker(text: string | null): boolean {
-  return !!text && /^(grand\s+)?(sub)?\s*total\b/i.test(text.trim());
+  return !!text && /^(grand\s+)?(sub)?\s*totals?\b/i.test(text.trim());
 }
 
 /** A real G703/continuation-sheet row can legitimately have no
@@ -272,6 +534,25 @@ function synthesizeDescription(workItemNo: string | null, csiLineCode: string | 
  * empty cell in an extra column isn't "additional data"). Returns null
  * rather than `{}` when there's nothing to report, so
  * ParsedWorkItemRow.additionalFields can mean "none" cleanly. */
+/**
+ * Headings of the columns "Download updated Excel" appends
+ * (lib/excelExport.ts uses these exact names). They hold figures computed
+ * from the app's own approved progress, never source data, so when a
+ * downloaded file is uploaded again they are not stored as work item
+ * fields. Defined here, once, so the two sides can't drift apart.
+ */
+export const EXPORT_LATEST_HEADERS = {
+  progress: "Latest Approved %",
+  approvedQuantity: "Latest Approved Qty",
+  earned: "Latest Earned to Date",
+  balance: "Latest Balance to Finish",
+  status: "Latest Status",
+  lastApprovedAt: "Last Approved On",
+  latestUpdate: "Latest Approved Update",
+  tasks: "Task Updates",
+} as const;
+const EXPORT_LATEST_HEADER_SET = new Set<string>(Object.values(EXPORT_LATEST_HEADERS));
+
 function collectAdditionalFields(
   headerRow: unknown[],
   columnField: Map<number, NormalizedField>,
@@ -281,7 +562,7 @@ function collectAdditionalFields(
   headerRow.forEach((headerCell, colIndex) => {
     if (columnField.has(colIndex)) return;
     const headerText = toStringOrNull(headerCell);
-    if (!headerText) return;
+    if (!headerText || EXPORT_LATEST_HEADER_SET.has(headerText)) return;
     const cell = row[colIndex];
     if (cell === undefined || cell === null || String(cell).trim() === "") return;
     fields ??= {};
@@ -326,6 +607,8 @@ export function parseProjectWorkbook(buffer: ArrayBuffer): ParseResult {
   const rows: ParsedWorkItemRow[] = [];
   const issues: ParseIssue[] = [];
   const sheetsScanned: string[] = [];
+  const columnMappings: ParseResult["columnMappings"] = [];
+  const diagnostics: string[] = [];
 
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
@@ -345,8 +628,29 @@ export function parseProjectWorkbook(buffer: ArrayBuffer): ParseResult {
     // silently skipped, rather than flooding issues with "missing
     // department" for every row of an unrelated sheet.
     const headerMatch = findHeaderRow(grid);
-    if (!headerMatch) continue;
+    if (!headerMatch) {
+      diagnostics.push(
+        `Sheet "${sheetName}": no row could be read as a work-item table header (a row naming the columns, with a work description column underneath).`
+      );
+      continue;
+    }
     const { index: headerRowIndex, columnField } = headerMatch;
+    const headerCells = grid[headerRowIndex];
+    const mappedFields = new Set(columnField.values());
+    const hasDepartmentColumn = mappedFields.has("department");
+    // A table that has item numbers/quantities/values: a line there with
+    // ONLY description text (a note, a legend) is not a work item.
+    const identifyingFields: NormalizedField[] = ["workItemNo", "csiLineCode", "plannedQuantity", "unitOfMeasure", "scheduledValue"];
+    const tableHasIdentifiers = identifyingFields.some((f) => mappedFields.has(f));
+    columnMappings.push({
+      sheet: sheetName,
+      headerRow: headerRowIndex + 1,
+      columns: [...columnField]
+        .sort(([a], [b]) => a - b)
+        .map(([col, field]) => ({ header: String(headerCells[col] ?? "").replace(/\s+/g, " ").trim(), field: FIELD_LABELS[field] })),
+    });
+    let unassignedCount = 0;
+    const rowsBefore = rows.length;
 
     sheetsScanned.push(sheetName);
     // (department, workItemNo) pairs already seen ON THIS SHEET — the
@@ -371,6 +675,31 @@ export function parseProjectWorkbook(buffer: ArrayBuffer): ParseResult {
         currentDivision = divisionHeader;
         continue;
       }
+      // Any other single-cell line (a title, legend, note or GRAND TOTAL
+      // label) is not a work item. In a sheet with no department column,
+      // a short ALL-CAPS line is a category heading for the rows below
+      // (e.g. "ELECTRICAL WORK"), the same way a DIVISION row is.
+      if (isSingleCellRow(row)) {
+        const text = row.map((cell) => toStringOrNull(cell)).find((cell) => cell !== null) ?? "";
+        if (
+          !hasDepartmentColumn &&
+          text.length <= 60 &&
+          /[A-Z]/.test(text) &&
+          text === text.toUpperCase() &&
+          !isTotalRowMarker(text)
+        ) {
+          currentDivision = text.trim();
+        }
+        continue;
+      }
+      // A repeated header row (multi-page sheets): two or more cells equal
+      // their own column's heading.
+      if (
+        row.filter((cell, c) => toStringOrNull(cell) !== null && normalizeHeader(cell) === normalizeHeader(headerCells[c]))
+          .length >= 2
+      ) {
+        continue;
+      }
 
       const sourceRow = r + 1;
       const get = (field: NormalizedField): unknown => {
@@ -380,7 +709,13 @@ export function parseProjectWorkbook(buffer: ArrayBuffer): ParseResult {
         return undefined;
       };
 
-      const department = toStringOrNull(get("department")) ?? currentDivision;
+      // A department cell may itself read "DIVISION 03 — CONCRETE": keep
+      // just the name, exactly as a DIVISION heading row does.
+      const departmentCell = toStringOrNull(get("department"));
+      const departmentFromCell = departmentCell
+        ? (departmentCell.match(/^division\s*[\w.]*\s*[-–—:]\s*(.+)$/i)?.[1].trim() ?? departmentCell)
+        : null;
+      let department = departmentFromCell ?? currentDivision;
       const rawDescription = toStringOrNull(get("description"));
       const workItemNo = toStringOrNull(get("workItemNo"));
       const csiLineCode = toStringOrNull(get("csiLineCode"));
@@ -402,9 +737,20 @@ export function parseProjectWorkbook(buffer: ArrayBuffer): ParseResult {
         continue;
       }
 
-      if (!department) {
-        issues.push({ sourceRow, sourceSheet: sheetName, message: "Missing department — row skipped." });
+      if (tableHasIdentifiers && identifyingFields.every((f) => toStringOrNull(get(f)) === null)) {
+        if (rawDescription) {
+          issues.push({
+            sourceRow,
+            sourceSheet: sheetName,
+            message: "No item number, CSI code, quantity, unit or value — read as a note, not a work item (skipped).",
+          });
+        }
         continue;
+      }
+
+      if (!department) {
+        department = UNASSIGNED_DEPARTMENT;
+        unassignedCount++;
       }
 
       // A row genuinely missing "Description of Work" isn't necessarily
@@ -472,9 +818,47 @@ export function parseProjectWorkbook(buffer: ArrayBuffer): ParseResult {
         additionalFields: collectAdditionalFields(grid[headerRowIndex], columnField, row),
       });
     }
+
+    if (unassignedCount > 0) {
+      issues.push({
+        sourceRow: headerRowIndex + 1,
+        sourceSheet: sheetName,
+        message: `${unassignedCount} row(s) have no department column or DIVISION/category heading — they will be placed under "${UNASSIGNED_DEPARTMENT}" (existing work items keep their own department).`,
+      });
+    }
+    if (rows.length === rowsBefore) {
+      const read = columnMappings[columnMappings.length - 1].columns.map((c) => `${c.header} → ${c.field}`).join(", ");
+      diagnostics.push(
+        `Sheet "${sheetName}": header row ${headerRowIndex + 1} was read (${read}), but no row below it had a work description or item number.`
+      );
+    }
   }
 
-  return { rows, issues, sheetsScanned };
+  return { rows, issues, sheetsScanned, columnMappings, diagnostics };
+}
+
+/**
+ * Layout helpers for the "Download updated Excel" export
+ * (lib/excelExport.ts), which re-opens the ORIGINAL uploaded workbook
+ * and must find exactly the header row, columns, division rows and
+ * total rows this parser found — so they're exposed here rather than
+ * re-implemented there. Pure, no behavior change to parsing.
+ */
+export function findSheetLayout(
+  grid: unknown[][]
+): { headerRowIndex: number; columnField: Map<number, NormalizedField> } | null {
+  const match = findHeaderRow(grid);
+  return match ? { headerRowIndex: match.index, columnField: match.columnField } : null;
+}
+
+/** Whether a row is an AIA G703 "DIVISION NN — Name" section heading. */
+export function isDivisionHeaderRow(row: unknown[]): boolean {
+  return extractDivisionHeader(row) !== null;
+}
+
+/** Whether a row is a SUBTOTAL / TOTAL / GRAND TOTAL line (any cell). */
+export function isTotalRow(row: unknown[]): boolean {
+  return row.some((cell) => typeof cell === "string" && isTotalRowMarker(cell));
 }
 
 /** Distinct department names found in a parse result, in first-seen

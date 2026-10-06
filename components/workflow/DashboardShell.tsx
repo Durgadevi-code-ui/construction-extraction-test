@@ -1,9 +1,12 @@
 "use client";
 
-import { useState } from "react";
-import { LogOut } from "lucide-react";
+import { useState, useSyncExternalStore } from "react";
+import { LogOut, Search } from "lucide-react";
 import NotificationBell from "@/components/workflow/NotificationBell";
 import ProfileChip from "@/components/workflow/ProfileChip";
+import ThemeToggle from "@/components/workflow/ThemeToggle";
+import Input from "@/components/ui/Input";
+import { timeOfDayGreeting } from "@/lib/format";
 import { logout } from "@/app/login/actions";
 
 export type ShellTab = {
@@ -48,8 +51,15 @@ type Props = {
    * above this shell (see components/workflow/TopNav.tsx). Omit for
    * every role that has nothing to relocate. */
   actions?: React.ReactNode;
+  /** The page's one search box for the current tab, rendered in the
+   * header toolbar right after the Project control (`actions`) — the
+   * same place on every role's page. The caller owns the value and
+   * whatever list it filters; omitted on tabs with nothing to search. */
+  search?: { value: string; onChange: (value: string) => void; placeholder: string; label: string };
   children: React.ReactNode;
 };
+
+const noSubscribe = () => () => {};
 
 /**
  * Shared page shell for every role — sidebar (brand + Notifications,
@@ -74,9 +84,14 @@ export default function DashboardShell({
   profileTabKey,
   showNotificationToasts = false,
   actions,
+  search,
   children,
 }: Props) {
   const [logoAvailable, setLogoAvailable] = useState(true);
+  // Read from the viewer's own clock on the client only (null during
+  // server render), so the greeting follows their local time and can
+  // never mismatch between server and browser time zones.
+  const greeting = useSyncExternalStore(noSubscribe, () => timeOfDayGreeting(new Date()), () => null);
 
   return (
     // No rounded corners/border/shadow/page padding around this shell —
@@ -150,26 +165,35 @@ export default function DashboardShell({
               />
             </div>
           )}
-          <form action={logout} className="shrink-0 lg:w-full">
-            <button
-              type="submit"
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm whitespace-nowrap text-white/70 transition-colors duration-150 hover:bg-white/10 hover:text-white"
-            >
-              <LogOut className="h-4 w-4" strokeWidth={1.8} />
-              Sign out
-            </button>
-          </form>
+          {/* Theme icon | Sign out — the one app-wide theme switch. */}
+          <div className="shrink-0 flex items-center gap-1 lg:w-full">
+            <ThemeToggle />
+            <form action={logout} className="flex-1 min-w-0">
+              <button
+                type="submit"
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm whitespace-nowrap text-white/70 transition-colors duration-150 hover:bg-white/10 hover:text-white"
+              >
+                <LogOut className="h-4 w-4" strokeWidth={1.8} />
+                Sign out
+              </button>
+            </form>
+          </div>
         </div>
       </aside>
 
       <div className="flex-1 min-w-0 p-5 sm:p-6 space-y-5">
-        {/* Page header: heading/subheading, with page-specific actions
-            (e.g. the Project dropdown) stacked under it below 2xl and on
-            the right from 2xl. Notifications, Profile and Sign out live in
-            the sidebar, the same place on every page. */}
-        <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-start 2xl:justify-between">
-          <div className="min-w-0 2xl:flex-1">
-            {showGreeting && <p className="text-xs font-medium text-foreground-muted">Good morning,</p>}
+        {/* Page header: heading/subheading on the left, and one
+            right-aligned toolbar — the Project control (+ Department where
+            the page has one, both via `actions`) followed by the page's
+            search — in the same place on every page. Side by side from xl;
+            below the heading (still right-aligned) on narrower screens, and
+            full-width stacked on a phone. Notifications, Profile, Theme and
+            Sign out live in the sidebar. */}
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div className="min-w-0 xl:flex-1">
+            {showGreeting && greeting && (
+              <p className="text-xs font-medium text-foreground-muted">{greeting},</p>
+            )}
             <h2 className="text-xl sm:text-2xl font-extrabold text-foreground tracking-tight">{heading}</h2>
             {subheading && (
               <p
@@ -180,9 +204,28 @@ export default function DashboardShell({
               </p>
             )}
           </div>
-          {actions && (
-            <div className="flex flex-wrap items-center gap-3 min-w-0 max-w-full 2xl:flex-nowrap 2xl:shrink-0">
+          {(actions || search) && (
+            // empty:hidden — a Project control that renders nothing (single
+            // project) must not leave an empty toolbar adding a gap.
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-3 min-w-0 max-w-full xl:max-w-[65%] xl:shrink-0 empty:hidden">
               {actions}
+              {search && (
+                <div className="relative w-full sm:w-80 max-w-full">
+                  <Search
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground-muted"
+                    strokeWidth={2}
+                    aria-hidden
+                  />
+                  <Input
+                    type="search"
+                    value={search.value}
+                    onChange={(e) => search.onChange(e.target.value)}
+                    placeholder={search.placeholder}
+                    aria-label={search.label}
+                    className="pl-9 !py-1.5 bg-white"
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReviewCardLayout from "@/components/workflow/ReviewCardLayout";
 import StatusFlow from "@/components/workflow/StatusFlow";
 import { formatPercent } from "@/lib/format";
@@ -9,10 +9,14 @@ import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import Input from "@/components/ui/Input";
+import SortControl, { type SortDir, type SortState } from "@/components/workflow/SortControl";
 
 import { errorMessage, readApiJson } from "@/lib/apiClient";
 export type ForemanQueueItem = {
   submissionId: string;
+  /** When it was submitted (extraction_submissions.created_at) — used
+   * only to sort the queue. */
+  submittedAt?: string;
   workerName: string;
   projectName: string;
   departmentName: string;
@@ -34,6 +38,23 @@ type Props = {
   /** Fallback focus when the notification carries no submission: this
    * work item's card(s). */
   focusWorkItemCode?: string | null;
+  /** The page's search text (header toolbar) — narrows the cards shown
+   * by work item code/name, worker or update text. */
+  query?: string;
+};
+
+type ReviewSortKey = "date" | "workItem" | "worker" | "progress";
+const REVIEW_SORT_OPTIONS: { key: ReviewSortKey; label: string }[] = [
+  { key: "date", label: "Date" },
+  { key: "workItem", label: "Work Item" },
+  { key: "worker", label: "Worker" },
+  { key: "progress", label: "Progress" },
+];
+const REVIEW_DEFAULT_DIR: Record<ReviewSortKey, SortDir> = {
+  date: "desc",
+  workItem: "asc",
+  worker: "asc",
+  progress: "desc",
 };
 
 /** Local, not-yet-forwarded edits for one submission — held in the UI
@@ -48,7 +69,40 @@ export default function ForemanQueue({
   items,
   focusSubmissionId = null,
   focusWorkItemCode = null,
+  query = "",
 }: Props) {
+  const [sort, setSort] = useState<SortState<ReviewSortKey>>({ key: "date", dir: "desc" });
+  // Search narrows, sort orders — the same rules as History (ties fall
+  // back to newest first). Bulk select only ever acts on what's shown.
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const matched = needle
+      ? items.filter((i) =>
+          [i.workItemCode, i.workItemDescription, i.workerName, i.description, i.departmentName].some((t) =>
+            (t ?? "").toLowerCase().includes(needle)
+          )
+        )
+      : items;
+    const byDate = (a: ForemanQueueItem, b: ForemanQueueItem) => (a.submittedAt ?? "").localeCompare(b.submittedAt ?? "");
+    const sign = sort.dir === "asc" ? 1 : -1;
+    return [...matched].sort((a, b) => {
+      let primary: number;
+      switch (sort.key) {
+        case "workItem":
+          primary = a.workItemCode.localeCompare(b.workItemCode, undefined, { numeric: true });
+          break;
+        case "worker":
+          primary = a.workerName.localeCompare(b.workerName);
+          break;
+        case "progress":
+          primary = a.submittedProgress - b.submittedProgress;
+          break;
+        default:
+          return sign * byDate(a, b);
+      }
+      return sign * primary || byDate(b, a);
+    });
+  }, [items, query, sort]);
   const focusBySubmission = !!focusSubmissionId && items.some((i) => i.submissionId === focusSubmissionId);
   const isFocused = (item: ForemanQueueItem) =>
     focusBySubmission
@@ -116,11 +170,11 @@ export default function ForemanQueue({
   // "Forward to Contractor" (the only action it has), so the one button
   // runs that same per-item action over the ticked items. A ref lock
   // stops repeated clicks from starting a second batch.
-  const selectedItems = items.filter((item) => selectedIds.has(item.submissionId));
-  const allSelected = items.length > 0 && selectedItems.length === items.length;
+  const selectedItems = visible.filter((item) => selectedIds.has(item.submissionId));
+  const allSelected = visible.length > 0 && selectedItems.length === visible.length;
 
   function selectAll() {
-    setSelectedIds(new Set(items.map((item) => item.submissionId)));
+    setSelectedIds(new Set(visible.map((item) => item.submissionId)));
   }
 
   async function forwardSelected() {
@@ -190,8 +244,18 @@ export default function ForemanQueue({
         <span className="text-xs text-foreground-muted">
           Tick items to forward them together. Double-click the checkbox to select all.
         </span>
+        <SortControl
+          className="sm:ml-auto"
+          options={REVIEW_SORT_OPTIONS}
+          sort={sort}
+          onChange={setSort}
+          defaultDir={REVIEW_DEFAULT_DIR}
+        />
       </div>
-      {items.map((item) => {
+      {visible.length === 0 && (
+        <p className="text-sm text-foreground-muted">No submissions match “{query.trim()}”.</p>
+      )}
+      {visible.map((item) => {
         const draft = drafts[item.submissionId];
         const isEditing = editingId === item.submissionId;
         const isCommenting = commentingId === item.submissionId;

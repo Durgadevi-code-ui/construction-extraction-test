@@ -41,7 +41,7 @@ export default function DateInput({
   }
 
   return (
-    <div className="relative flex w-full max-w-[10rem] items-center gap-2 rounded-lg border border-line bg-white px-2.5 py-2 text-sm transition-colors duration-150 focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/20">
+    <div className="relative flex h-10 w-full items-center gap-2 rounded-lg border border-line bg-white px-3 text-sm transition-colors duration-150 focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/20">
       <input
         type="text"
         readOnly
@@ -58,7 +58,7 @@ export default function DateInput({
             onChange("");
           }
         }}
-        className="min-w-0 flex-1 cursor-pointer bg-transparent tabular-nums text-foreground placeholder:text-foreground-muted focus:outline-none"
+        className="min-w-0 flex-1 cursor-pointer bg-transparent tabular-nums font-bold text-foreground placeholder:font-bold placeholder:text-foreground-secondary focus:outline-none"
       />
       <button
         type="button"

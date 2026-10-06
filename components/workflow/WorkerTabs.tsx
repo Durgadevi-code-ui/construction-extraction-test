@@ -19,14 +19,15 @@ import WorkItemSelector, {
   type WorkItemOptionView,
 } from "@/components/workflow/WorkItemSelector";
 import DailyWorkUpdate from "@/components/workflow/DailyWorkUpdate";
-import WorkItemList from "@/components/workflow/WorkItemList";
+import WorkItemList, { type WorkItemSortKey } from "@/components/workflow/WorkItemList";
+import SortControl, { nextSort, type SortDir, type SortState } from "@/components/workflow/SortControl";
+import WorkerTaskUpdates from "@/components/workflow/WorkerTaskUpdates";
 import SubmissionHistoryTable from "@/components/workflow/SubmissionHistoryTable";
 import NotificationFocusBanner from "@/components/workflow/NotificationFocusBanner";
 import type { WorkerSubmissionStatusCode } from "@/lib/format";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge, { type BadgeVariant } from "@/components/ui/Badge";
-import Input from "@/components/ui/Input";
 import EmptyState from "@/components/ui/EmptyState";
 
 export type WorkerHistoryItem = {
@@ -118,13 +119,9 @@ type Props = {
   workItems: WorkerWorkItemView[];
   history: WorkerHistoryItem[];
   approvedWork: WorkerApprovedWorkItem[];
-  /** Rendered in the header row — a "switch project" control (see
-   * app/workflow/worker/page.tsx), only non-null when this worker
-   * actually holds more than one active project assignment. */
+  /** The header Project control (the shared ProjectSelect, built in
+   * app/workflow/worker/page.tsx) — the one place Project is chosen. */
   projectSwitcher?: React.ReactNode;
-  /** The worker's own assigned projects + the one currently shown —
-   * feed the Project filter inside WorkItemSelector. */
-  projects?: { projectId: string; projectName: string }[];
   activeProjectId?: string;
   /** Admin on/off switch (per-project) for the Project/Work Item/Task
    * selection UI — see lib/admin.ts Project.taskContextEnabled's doc.
@@ -165,6 +162,16 @@ const SECTIONS = [
 
 type SectionKey = (typeof SECTIONS)[number]["key"];
 
+/** My Assigned Work sorting — same rules as History/Reviews (see
+ * SortControl nextSort): A–Z / highest progress first by default.
+ * Actions holds buttons, not data, so it is not a sort column. */
+const ASSIGNED_SORT_OPTIONS: { key: WorkItemSortKey; label: string }[] = [
+  { key: "workItem", label: "Work Item" },
+  { key: "progress", label: "Progress" },
+  { key: "status", label: "Status" },
+];
+const ASSIGNED_DEFAULT_DIR: Record<WorkItemSortKey, SortDir> = { workItem: "asc", progress: "desc", status: "asc" };
+
 function workItemStatus(w: WorkItemOptionView): { variant: BadgeVariant; label: string } {
   if (w.isCompleted) return { variant: "success", label: "Completed" };
   if (w.isEligible) return { variant: "brand", label: "Ready" };
@@ -199,7 +206,6 @@ export default function WorkerTabs({
   workItems,
   history,
   projectSwitcher,
-  projects,
   activeProjectId,
   taskContextEnabled,
 }: Props) {
@@ -220,6 +226,8 @@ export default function WorkerTabs({
     searchParams.get("tab") === "workItems" ? "assigned" : "dashboard"
   );
   const [query, setQuery] = useState("");
+  // My Assigned Work: which work item's Tasks panel is open (one at a time).
+  const [tasksOpenFor, setTasksOpenFor] = useState<string | null>(null);
 
   // Notification focus — same URL mechanism as the Contractor/
   // Subcontractor Reviews tab (lib/notifications.ts
@@ -297,6 +305,27 @@ export default function WorkerTabs({
         : workItems,
     [workItems, needle]
   );
+  // Display order only — the list's contents/figures are unchanged.
+  const [assignedSort, setAssignedSort] = useState<SortState<WorkItemSortKey>>({ key: "workItem", dir: "asc" });
+  const sortedWorkItems = useMemo(() => {
+    const sign = assignedSort.dir === "asc" ? 1 : -1;
+    const byCode = (a: WorkerWorkItemView, b: WorkerWorkItemView) =>
+      a.code.localeCompare(b.code, undefined, { numeric: true });
+    return [...filteredWorkItems].sort((a, b) => {
+      let primary: number;
+      switch (assignedSort.key) {
+        case "progress":
+          primary = (a.progressPercentage ?? -1) - (b.progressPercentage ?? -1);
+          break;
+        case "status":
+          primary = workItemStatus(a).label.localeCompare(workItemStatus(b).label);
+          break;
+        default:
+          return sign * byCode(a, b);
+      }
+      return sign * primary || byCode(a, b);
+    });
+  }, [filteredWorkItems, assignedSort]);
 
   const heading = HEADINGS[tab];
 
@@ -304,7 +333,10 @@ export default function WorkerTabs({
     <DashboardShell
       tabs={[...TABS]}
       activeTab={tab}
-      onTabChange={(key) => setTab(key as TabKey)}
+      onTabChange={(key) => {
+        setQuery("");
+        setTab(key as TabKey);
+      }}
       heading={heading}
       showGreeting={false}
       subheading={
@@ -319,11 +351,45 @@ export default function WorkerTabs({
       roleLabel="Worker"
       profileTabKey="profile"
       showNotificationToasts
-      actions={projectSwitcher}
+      // Not on Update Progress: the update form already works on the
+      // current project (from the URL, resolved server-side) and shows
+      // no Project control of its own; switching happens on other tabs.
+      actions={tab === "update" ? undefined : projectSwitcher}
+      // The page's one search, in the shared header toolbar next to the
+      // project control (same place as every other role's search). On
+      // Dashboard it searches My Assigned Work (typing on the DASHBOARD
+      // view opens that list); on Update Progress it narrows the Work
+      // Item picker.
+      search={
+        tab === "update" && current && taskContextEnabled && workItems.length > 0
+          ? { value: query, onChange: setQuery, placeholder: "Search work items by code, name or task", label: "Search work items" }
+          : tab === "dashboard"
+            ? {
+                value: query,
+                onChange: (value: string) => {
+                  setQuery(value);
+                  if (value.trim()) setSection("assigned");
+                },
+                placeholder: "Search by code, name or task",
+                label: "Search work items",
+              }
+            : tab === "history"
+              ? { value: query, onChange: setQuery, placeholder: "Search history by worker, work item or status", label: "Search history" }
+              : tab === "communication"
+                ? { value: query, onChange: setQuery, placeholder: "Search people or roles", label: "Search conversations" }
+                : undefined
+      }
     >
         {/* Dashboard tabs — Dashboard / My Assigned Work. */}
         {tab === "dashboard" && (
-          <TabNav tabs={[...SECTIONS]} active={section} onChange={(key) => setSection(key as SectionKey)} />
+          <TabNav
+            tabs={[...SECTIONS]}
+            active={section}
+            onChange={(key) => {
+              setQuery("");
+              setSection(key as SectionKey);
+            }}
+          />
         )}
 
         {/* ---------------- Dashboard ---------------- */}
@@ -373,31 +439,25 @@ export default function WorkerTabs({
                 missingMessage="This work item is no longer assigned to you — see History for your submissions."
               />
             )}
-            {/* Same Filters panel as History, so the two screens read alike. */}
-            <div className="rounded-lg border border-line bg-surface p-4 text-sm shadow-sm">
-              <div className="flex items-center justify-between gap-2 mb-2">
-                <p className="text-foreground-secondary font-medium">Filters</p>
-                <span className="text-xs text-foreground-muted tabular-nums">
-                  {filteredWorkItems.length === workItems.length
-                    ? `${workItems.length} work item${workItems.length === 1 ? "" : "s"}`
-                    : `${filteredWorkItems.length} of ${workItems.length} work items`}
-                </span>
-              </div>
-              <div className="relative max-w-md">
-                <Search
-                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground-muted"
-                  strokeWidth={2}
-                  aria-hidden
+            {/* Search only (no filters here) — the box itself is in the
+                header toolbar; this line just reports what it matched. */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-foreground-muted tabular-nums">
+                {filteredWorkItems.length === workItems.length
+                  ? `${workItems.length} work item${workItems.length === 1 ? "" : "s"}`
+                  : `${filteredWorkItems.length} of ${workItems.length} work items match “${query.trim()}”`}
+              </p>
+              {/* Mobile: the list's sortable headings are hidden, so the
+                  same sort is offered here (same pattern as History). */}
+              {filteredWorkItems.length > 1 && (
+                <SortControl
+                  className="xl:hidden"
+                  options={ASSIGNED_SORT_OPTIONS}
+                  sort={assignedSort}
+                  onChange={setAssignedSort}
+                  defaultDir={ASSIGNED_DEFAULT_DIR}
                 />
-                <Input
-                  type="search"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search by code, name or task"
-                  aria-label="Search work items"
-                  className="pl-9 bg-white"
-                />
-              </div>
+              )}
             </div>
 
             {!taskContextEnabled && workItems.length > 1 && (
@@ -423,7 +483,9 @@ export default function WorkerTabs({
               // earnedAmount is never passed for a Worker.
               <Card className="!p-0 overflow-hidden">
                 <WorkItemList
-                  rows={filteredWorkItems.map((w) => ({
+                  sort={assignedSort}
+                  onSort={(key) => setAssignedSort((prev) => nextSort(prev, key, ASSIGNED_DEFAULT_DIR))}
+                  rows={sortedWorkItems.map((w) => ({
                     workItemId: w.workItemId,
                     code: w.code,
                     description: w.description,
@@ -436,9 +498,38 @@ export default function WorkerTabs({
                         : undefined,
                   }))}
                   focusedWorkItemId={focusItemCode ? (workItems.find((w) => w.code === focusItemCode)?.workItemId ?? null) : null}
-                  // Actions: only the list's built-in View Updates. History
-                  // is its own sidebar entry, and Update Progress is the
-                  // way into the update form.
+                  // Actions: Tasks (the work item's tasks, with task-level
+                  // updates where the Contractor/Subcontractor allowed them)
+                  // plus the list's built-in View Updates. History is its own
+                  // sidebar entry, and Update Progress is the way into the
+                  // work item update form.
+                  renderActions={(row) => {
+                    const count = workItems.find((w) => w.workItemId === row.workItemId)?.tasks.length ?? 0;
+                    if (count === 0) return null;
+                    const open = tasksOpenFor === row.workItemId;
+                    return (
+                      <Button
+                        variant={open ? "primary" : "secondary"}
+                        size="sm"
+                        onClick={() => setTasksOpenFor(open ? null : row.workItemId)}
+                        aria-expanded={open}
+                      >
+                        Tasks ({count})
+                      </Button>
+                    );
+                  }}
+                  renderDetail={(row) => {
+                    if (tasksOpenFor !== row.workItemId) return null;
+                    const w = workItems.find((item) => item.workItemId === row.workItemId);
+                    if (!w || w.tasks.length === 0) return null;
+                    return (
+                      <WorkerTaskUpdates
+                        workItemId={w.workItemId}
+                        workItemLabel={`${w.code} — ${w.description}`}
+                        tasks={w.tasks}
+                      />
+                    );
+                  }}
                 />
               </Card>
             )}
@@ -463,18 +554,18 @@ export default function WorkerTabs({
           // not repeated here (the Dashboard tab shows current progress).
           // Full content width, same as the Dashboard tab.
           <div className="space-y-4">
-                {taskContextEnabled && (workItems.length > 0 || (projects?.length ?? 0) > 0) && (
+                {taskContextEnabled && workItems.length > 0 && (
                   <WorkItemSelector
                     workItems={workItems}
                     activeWorkItemId={current.activeWorkItemId}
                     isAutoSuggested={current.isAutoSuggested}
                     suggestionNote={current.suggestionNote}
-                    projects={projects}
                     activeProjectId={activeProjectId}
                     taskSelection={taskSel}
                     onTaskChange={(workItemId, taskId) => setTaskSel({ workItemId, taskId })}
                     pending={pending}
                     onNavigate={navigate}
+                    query={query}
                   />
                 )}
                 {current.noEligibleWorkNote && (
@@ -535,11 +626,12 @@ export default function WorkerTabs({
                   taskLabel: h.taskLabel ?? null,
                 }))}
                 focusSubmissionId={historyFocusId}
+                query={query}
               />
           </div>
         )}
 
-        {tab === "communication" && <ChatPanel contextProjectId={activeProjectId} />}
+        {tab === "communication" && <ChatPanel contextProjectId={activeProjectId} query={query} />}
 
         {/* ---------------- Profile ---------------- */}
         {tab === "profile" && (

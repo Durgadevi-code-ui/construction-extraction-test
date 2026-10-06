@@ -31,6 +31,8 @@ import NotificationFocusBanner from "@/components/workflow/NotificationFocusBann
 import SubmissionHistoryTable, { type SubmissionHistoryRow } from "@/components/workflow/SubmissionHistoryTable";
 import type { ReviewFocusState } from "@/lib/workflow";
 import ProfilePanel from "@/components/workflow/ProfilePanel";
+import ExcelDownloadButton from "@/components/workflow/ExcelDownloadButton";
+import DepartmentSelect from "@/components/workflow/DepartmentSelect";
 import type { DashboardData } from "@/lib/dashboard";
 
 type Props = {
@@ -156,13 +158,51 @@ export default function ContractorTabs({
   const focusWorkItemCode = searchParams.get("item");
   const notificationId = searchParams.get("n");
   const [dashboardView, setDashboardView] = useState<DashboardView>("dashboard");
+  // The page's one search box (header toolbar, next to Project) — what it
+  // searches follows the open tab; cleared when the tab changes.
+  const [query, setQuery] = useState("");
+  const search =
+    tab === "reviews"
+      ? { value: query, onChange: setQuery, placeholder: "Search reviews by work item or worker", label: "Search reviews" }
+      : tab === "workItems"
+        ? { value: query, onChange: setQuery, placeholder: "Search by code, name or department", label: "Search work items" }
+        : tab === "history"
+          ? { value: query, onChange: setQuery, placeholder: "Search history by worker, work item or status", label: "Search history" }
+          : tab === "communication"
+            ? { value: query, onChange: setQuery, placeholder: "Search people or roles", label: "Search conversations" }
+            : undefined;
+  function changeTab(next: string) {
+    setQuery("");
+    setTab(next);
+  }
+  // Dashboard Department filter — the compact header dropdown next to
+  // Project (same DepartmentSelect as the Subcontractor Dashboard). Same
+  // options and default the dashboard panel's own filter used: the
+  // departments in scope for this project, "All" unless there's one.
+  const [dashboardDepartmentId, setDashboardDepartmentId] = useState(
+    dashboardData.scopeDepartments.length === 1 ? dashboardData.scopeDepartments[0].departmentId : ""
+  );
+  const dashboardDepartmentOptions = dashboardData.scopeDepartments.filter((d) => d.projectId === projectId);
+  // Departments where this Contractor may configure tasks — the server's
+  // own rule (lib/workflow.ts assertCanManageWorkItemTasks): their own
+  // Contractor department(s) in this project, or a delegation with Work
+  // Item Management. The server re-checks every change regardless.
+  const taskManagementDepartmentIds = [
+    ...new Set([
+      departmentId,
+      ...projectOptions
+        .filter((o) => (o.path ?? "/workflow/supervisor") === "/workflow/supervisor" && o.projectId === projectId)
+        .map((o) => o.departmentId),
+      ...delegatedScopes.filter((s) => s.canManageWorkItems).map((s) => s.departmentId),
+    ]),
+  ];
   // KPI cards that lead somewhere real on this page.
   const kpiActions: KpiCardActions = {
-    assigned: { onClick: () => setTab("workItems"), label: "Open Work Items" },
-    completed: { onClick: () => setTab("workItems"), label: "Open Work Items" },
-    pending: { onClick: () => setTab("reviews"), label: "Open Reviews" },
+    assigned: { onClick: () => changeTab("workItems"), label: "Open Work Items" },
+    completed: { onClick: () => changeTab("workItems"), label: "Open Work Items" },
+    pending: { onClick: () => changeTab("reviews"), label: "Open Reviews" },
     progress: { onClick: () => setDashboardView("progress"), label: "Open Progress Tracking" },
-    remaining: { onClick: () => setTab("workItems"), label: "Open Work Items" },
+    remaining: { onClick: () => changeTab("workItems"), label: "Open Work Items" },
   };
 
   // Overall Health follows the dashboard's Department filter ("" = every
@@ -209,7 +249,7 @@ export default function ContractorTabs({
     <DashboardShell
       tabs={tabs}
       activeTab={tab}
-      onTabChange={setTab}
+      onTabChange={changeTab}
       heading={HEADINGS[tab]}
       subheading={`Current Project: ${projectName} · ${departmentName}${projectLocation ? ` · ${projectLocation}` : ""}`}
       userId={userId}
@@ -218,14 +258,25 @@ export default function ContractorTabs({
       profileTabKey="profile"
       showNotificationToasts
       actions={
-        <ProjectSelect
-          basePath="/workflow/supervisor"
-          options={projectOptions}
-          projectId={projectId}
-          departmentId={departmentId}
-          tab={tab}
-        />
+        <>
+          <ProjectSelect
+            basePath="/workflow/supervisor"
+            options={projectOptions}
+            projectId={projectId}
+            departmentId={departmentId}
+            tab={tab}
+          />
+          {tab === "dashboard" && (
+            <DepartmentSelect
+              value={dashboardDepartmentId}
+              options={dashboardDepartmentOptions}
+              onChange={setDashboardDepartmentId}
+              allLabel="All Departments"
+            />
+          )}
+        </>
       }
+      search={search}
     >
       {tab === "dashboard" && (
         <div className="space-y-5">
@@ -252,6 +303,8 @@ export default function ContractorTabs({
             onKpisChange={setDashboardKpis}
             kpiActions={kpiActions}
             departmentFilterOnly
+            departmentId={dashboardDepartmentId}
+            showFilters={false}
           />
           <DelegatedAdminPanel contractorUserId={userId} scopes={delegatedScopes} />
           </div>
@@ -272,13 +325,13 @@ export default function ContractorTabs({
             scheduledAmount={healthScheduled}
             monthApprovedValue={sumOrNull(healthDepartments.map((d) => d.currentMonthApprovedValue))}
             previousMonthApprovedValue={sumOrNull(healthDepartments.map((d) => d.previousMonthApprovedValue))}
-            onReviewSubmissions={() => setTab("reviews")}
+            onReviewSubmissions={() => changeTab("reviews")}
             description={dashboardKpis ? <KpiSummaryText scopeLabel={summaryScopeLabel} {...dashboardKpis} /> : undefined}
           />
           )}
           {dashboardView === "progress" && (
           <ExecutiveSummaryCard
-            onReviewSubmissions={() => setTab("reviews")}
+            onReviewSubmissions={() => changeTab("reviews")}
             showTotals={false}
             projectId={projectId}
             departmentId={departmentId}
@@ -293,7 +346,7 @@ export default function ContractorTabs({
             <NotificationFocusBanner
               notificationId={notificationId}
               focusState={reviewFocus}
-              onOpenHistory={() => setTab("history")}
+              onOpenHistory={() => changeTab("history")}
               recordInQueue={queue.some(
                 (q) =>
                   !(q.isCompleted && q.approvalStatus === "APPROVED") &&
@@ -305,6 +358,7 @@ export default function ContractorTabs({
           <SupervisorPanel {...panelProps} todaySection="reviews"
             focusSubmissionId={focusSubmissionId}
             focusWorkItemCode={focusWorkItemCode}
+            query={query}
           />
         </div>
       )}
@@ -316,13 +370,17 @@ export default function ContractorTabs({
           sections={["workItems"]}
           showLiveUpdatesColumn
           showSearch
+          query={query}
           lockProjectId={projectId}
+          taskManagementDepartmentIds={taskManagementDepartmentIds}
+          showFilters={false}
+          headerAction={<ExcelDownloadButton projectId={projectId} className="sm:mr-auto" />}
         />
       )}
 
-      {tab === "history" && <SubmissionHistoryTable items={history} />}
+      {tab === "history" && <SubmissionHistoryTable items={history} query={query} />}
 
-      {tab === "communication" && <ChatPanel contextProjectId={projectId} />}
+      {tab === "communication" && <ChatPanel contextProjectId={projectId} query={query} />}
 
       {tab === "profile" && (
         <ProfilePanel

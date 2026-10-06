@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useState } from "react";
-import { Camera } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Camera } from "lucide-react";
 import ProgressBar from "@/components/workflow/charts/ProgressBar";
 import { useCountUp } from "@/components/workflow/useCountUp";
 import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
@@ -26,6 +26,40 @@ export function workItemStatus(item: {
   if (item.isStuck) return { label: "Stuck", variant: "error" };
   if (item.progressPercentage === null) return { label: "Pending", variant: "neutral" };
   return { label: "In Progress", variant: "warning" };
+}
+
+/** Columns a caller may make sortable (see WorkItemList `sort`). Actions
+ * holds buttons, not data, so it is never sortable. */
+export type WorkItemSortKey = "workItem" | "progress" | "status";
+
+/** Sortable column heading — same look/behavior as Submission History's
+ * headings: the label is the button, ↑/↓ on the active column. */
+function SortableHeading({
+  label,
+  column,
+  sort,
+  onSort,
+}: {
+  label: string;
+  column: WorkItemSortKey;
+  sort: { key: WorkItemSortKey; dir: "asc" | "desc" };
+  onSort: (key: WorkItemSortKey) => void;
+}) {
+  const active = sort.key === column;
+  const Icon = !active ? ArrowUpDown : sort.dir === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <span aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        className="inline-flex items-center gap-1 uppercase tracking-wide font-bold transition-colors duration-150 hover:text-foreground"
+        title={`Sort by ${label}`}
+      >
+        {label}
+        <Icon className={`h-3 w-3 ${active ? "" : "opacity-40"}`} strokeWidth={2.25} aria-hidden />
+      </button>
+    </span>
+  );
 }
 
 export type WorkItemListRow = {
@@ -57,7 +91,7 @@ function WorkItemProgress({ percent }: { percent: number | null }) {
   const shown = useCountUp(percent);
   return (
     <div className="flex items-center gap-2">
-      <div className="w-20">
+      <div className="flex-1 min-w-16">
         <ProgressBar percent={shown} countingUp />
       </div>
       <span className="text-xs text-foreground-secondary whitespace-nowrap tabular-nums">
@@ -67,15 +101,20 @@ function WorkItemProgress({ percent }: { percent: number | null }) {
   );
 }
 
-/** Every track has a FIXED width (Work Item takes the rest). The header
- * and each row are separate grids, so an `auto` Actions track would be
- * sized per row by its own buttons — fixed tracks keep Work Item /
- * Progress / Status / (Workers) / Actions lined up under their headings
- * on every row. Actions is wide enough for the widest set any caller
- * renders: View Updates alone, or Manage/Activate + View Updates (with
- * the Workers column — the Subcontractor's Work Item Management). */
-const COLS = "sm:grid-cols-[minmax(0,1fr)_9.5rem_7rem_9rem]";
-const COLS_WITH_WORKERS = "sm:grid-cols-[minmax(0,1fr)_9.5rem_7rem_6.5rem_13.5rem]";
+/** One grid for the heading row and every work item row (rows are
+ * subgrids of it), so every cell lines up under its heading. Each column
+ * gets a proportional share of the row — Work Item 2.2 : Progress 1.3 :
+ * Status 1 : Actions 1.1 (Workers 0.8) — and never less than its content
+ * needs: Status the widest badge in the list ("Waiting on
+ * prerequisites"), Actions its widest button set on one line (Tasks +
+ * View Updates), so neither is squeezed while Work Item takes the row;
+ * every column is separated by the same gap. The Subcontractor's Actions
+ * (with Workers) may wrap its buttons rather than overflow. Columns from
+ * xl; below that each row stacks (the mobile layout). */
+const COLS =
+  "xl:grid-cols-[minmax(16rem,2.2fr)_minmax(11rem,1.3fr)_minmax(max-content,1fr)_minmax(max-content,1.1fr)]";
+const COLS_WITH_WORKERS =
+  "xl:grid-cols-[minmax(14rem,2fr)_minmax(10rem,1.2fr)_minmax(max-content,0.9fr)_minmax(6rem,0.8fr)_minmax(9rem,1.1fr)]";
 
 /**
  * Shared Work Items list — one layout for the Contractor's Work Items
@@ -96,6 +135,8 @@ export default function WorkItemList({
   renderActions,
   renderDetail,
   focusedWorkItemId = null,
+  sort,
+  onSort,
 }: {
   rows: WorkItemListRow[];
   /** Row a notification points at — highlighted and marked data-focused
@@ -106,23 +147,36 @@ export default function WorkItemList({
   renderActions?: (row: WorkItemListRow) => React.ReactNode;
   /** Expanded content under a row, or null when closed. */
   renderDetail?: (row: WorkItemListRow) => React.ReactNode | null;
+  /** Makes Work Item / Progress / Status headings sortable. The caller
+   * owns the order (it sorts `rows`); this only renders the headings. */
+  sort?: { key: WorkItemSortKey; dir: "asc" | "desc" };
+  onSort?: (key: WorkItemSortKey) => void;
 }) {
   // Which work item's Live Updates panel is open (one at a time).
   const [liveUpdatesFor, setLiveUpdatesFor] = useState<string | null>(null);
   const cols = showWorkers ? COLS_WITH_WORKERS : COLS;
 
   return (
-    <div className="text-sm">
+    <div className={`grid grid-cols-1 ${cols} xl:gap-x-6 divide-y divide-line text-sm`}>
       <div
-        className={`hidden sm:grid ${cols} gap-3 bg-surface-soft px-4 py-2.5 text-[11px] uppercase tracking-wide text-foreground-muted font-medium`}
+        className="hidden xl:grid xl:col-span-full xl:grid-cols-subgrid items-center bg-surface-soft px-4 py-2.5 text-[11px] uppercase tracking-wide text-foreground-secondary font-bold"
       >
-        <span>Work Item</span>
-        <span>Progress</span>
-        <span>Status</span>
+        {sort && onSort ? (
+          <>
+            <SortableHeading label="Work Item" column="workItem" sort={sort} onSort={onSort} />
+            <SortableHeading label="Progress" column="progress" sort={sort} onSort={onSort} />
+            <SortableHeading label="Status" column="status" sort={sort} onSort={onSort} />
+          </>
+        ) : (
+          <>
+            <span>Work Item</span>
+            <span>Progress</span>
+            <span>Status</span>
+          </>
+        )}
         {showWorkers && <span>Workers</span>}
         <span>Actions</span>
       </div>
-      <div className="divide-y divide-line">
         {rows.map((row) => {
           const detail = renderDetail?.(row) ?? null;
           const liveOpen = liveUpdatesFor === row.workItemId;
@@ -130,18 +184,19 @@ export default function WorkItemList({
             <Fragment key={row.workItemId}>
               <div
                 data-focused={row.workItemId === focusedWorkItemId ? "true" : undefined}
-                className={`scroll-mt-4 grid grid-cols-1 ${cols} items-center gap-x-3 gap-y-2 px-4 py-3 transition-colors duration-150 hover:bg-surface-hover ${
+                className={`scroll-mt-4 grid grid-cols-1 xl:col-span-full xl:grid-cols-subgrid items-center gap-y-2 px-4 py-3 transition-colors duration-150 hover:bg-surface-hover ${
                   row.dimmed ? "bg-surface-soft/60 text-foreground-muted" : ""
                 } ${row.workItemId === focusedWorkItemId ? "bg-warning-soft/40 ring-2 ring-inset ring-warning-border" : ""}`}
               >
                 <div className="min-w-0">
-                  <span className="font-medium">{row.code}</span>{" "}
+                  <span className="font-medium text-foreground-secondary">{row.code}</span>{" "}
                   {row.tag && (
                     <span className="mr-1 inline-flex rounded-full bg-brand-soft px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-brand">
                       {row.tag}
                     </span>
                   )}
-                  <span className={row.dimmed ? "" : "text-foreground-secondary"}>— {row.description}</span>
+                  {/* The work item name is the row's headline. */}
+                  <span className={`font-semibold ${row.dimmed ? "" : "text-foreground"}`}>— {row.description}</span>
                   {row.departmentName && (
                     <span className="block text-xs text-foreground-muted">{row.departmentName}</span>
                   )}
@@ -180,20 +235,19 @@ export default function WorkItemList({
                   )}
                 </div>
               </div>
-              {detail}
+              {detail && <div className="xl:col-span-full">{detail}</div>}
               {/* Directly under the row it belongs to — image-only, scoped to
                   exactly this work item (initialFilterCode); the feed itself
                   is fetched server-scoped to this reviewer's own project/
                   department (see /api/workflow/live-updates). */}
               {showLiveUpdates && liveOpen && (
-                <div className="border-t border-line-soft bg-surface-soft px-4 py-4">
+                <div className="xl:col-span-full border-t border-line-soft bg-surface-soft px-4 py-4">
                   <LiveUpdateFeed mode="imageOnly" initialFilterCode={row.code} />
                 </div>
               )}
             </Fragment>
           );
         })}
-      </div>
     </div>
   );
 }

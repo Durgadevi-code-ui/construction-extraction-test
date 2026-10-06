@@ -31,8 +31,9 @@ import { DashboardKpiCards, KpiSummaryText, type KpiCardActions } from "@/compon
 import { formatPercent } from "@/lib/format";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
-import { Select } from "@/components/ui/Input";
 import ErrorNotice from "@/components/ui/ErrorNotice";
+import ExcelDownloadButton from "@/components/workflow/ExcelDownloadButton";
+import DepartmentSelect from "@/components/workflow/DepartmentSelect";
 
 type Kpis = {
   totalWorkItems: number;
@@ -200,19 +201,34 @@ export default function ForemanTabs({
   }
   function changeDepartment(nextDepartmentId: string) {
     if (nextDepartmentId === departmentId) return;
-    const qs = new URLSearchParams({ projectId, departmentId: nextDepartmentId, tab: "dashboard" });
+    const qs = new URLSearchParams({ projectId, departmentId: nextDepartmentId, tab });
     startDepartmentTransition(() => router.push(`${BASE_PATH}?${qs.toString()}`));
   }
   // A submission opened from Awaiting Contractor Review — History opens
   // filtered to its work item with that row highlighted. Cleared when
   // the user navigates tabs themselves.
   const [historyFocus, setHistoryFocus] = useState<{ submissionId: string; workItemCode: string } | null>(null);
+  // The page's one search box (header toolbar, next to Project) — what it
+  // searches follows the open tab; cleared when the tab changes.
+  const [query, setQuery] = useState("");
+  const search =
+    tab === "reviews"
+      ? { value: query, onChange: setQuery, placeholder: "Search reviews by work item or worker", label: "Search reviews" }
+      : tab === "workItems"
+        ? { value: query, onChange: setQuery, placeholder: "Search by code, name, task or worker", label: "Search work items" }
+        : tab === "history"
+          ? { value: query, onChange: setQuery, placeholder: "Search history by worker, work item or status", label: "Search history" }
+          : tab === "communication"
+            ? { value: query, onChange: setQuery, placeholder: "Search people or roles", label: "Search conversations" }
+            : undefined;
   function changeTab(next: string) {
     setHistoryFocus(null);
+    setQuery("");
     setTab(next);
   }
   function openInHistory(item: AwaitingContractorItem) {
     setHistoryFocus({ submissionId: item.submissionId, workItemCode: item.workItemCode });
+    setQuery("");
     setTab("history");
   }
   useEffect(() => {
@@ -224,11 +240,11 @@ export default function ForemanTabs({
   }, [tab, historyFocus]);
   // KPI cards that lead somewhere real on this page.
   const kpiActions: KpiCardActions = {
-    assigned: { onClick: () => setTab("workItems"), label: "Open Work Item Management" },
-    completed: { onClick: () => setTab("workItems"), label: "Open Work Item Management" },
-    pending: { onClick: () => setTab("reviews"), label: "Open Reviews" },
+    assigned: { onClick: () => changeTab("workItems"), label: "Open Work Item Management" },
+    completed: { onClick: () => changeTab("workItems"), label: "Open Work Item Management" },
+    pending: { onClick: () => changeTab("reviews"), label: "Open Reviews" },
     progress: { onClick: () => setDashboardView("progress"), label: "Open Progress Tracking" },
-    remaining: { onClick: () => setTab("workItems"), label: "Open Work Item Management" },
+    remaining: { onClick: () => changeTab("workItems"), label: "Open Work Item Management" },
   };
 
   return (
@@ -244,14 +260,29 @@ export default function ForemanTabs({
       profileTabKey="profile"
       showNotificationToasts
       actions={
-        <ProjectSelect
-          basePath="/workflow/foreman"
-          options={projectOptions}
-          projectId={projectId}
-          departmentId={departmentId}
-          tab={tab}
-        />
+        <>
+          <ProjectSelect
+            basePath="/workflow/foreman"
+            options={projectOptions}
+            projectId={projectId}
+            departmentId={departmentId}
+            tab={tab}
+          />
+          {/* Dashboard Department filter — compact, right after Project
+              (it used to be a full-width Filters card). Same options and
+              behavior: this Subcontractor's own departments in the
+              current project; choosing one reloads that department. */}
+          {tab === "dashboard" && (
+            <DepartmentSelect
+              value={departmentId}
+              options={departmentOptions}
+              onChange={changeDepartment}
+              disabled={departmentPending}
+            />
+          )}
+        </>
       }
+      search={search}
     >
       {tab === "dashboard" && (
         <div className="space-y-5">
@@ -260,31 +291,6 @@ export default function ForemanTabs({
             active={dashboardView}
             onChange={(key) => setDashboardView(key as DashboardView)}
           />
-          {/* Department filter — the same Filters card as the Contractor
-              Dashboard (DashboardPanel), Department only; shown on the
-              Dashboard view, which Summary/Progress Tracking follow. */}
-          {dashboardView === "dashboard" && (
-            <div className="rounded-lg border border-line bg-surface p-4 text-sm shadow-sm">
-              <p className="text-foreground-secondary font-medium mb-2">Filters</p>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-foreground-secondary mb-1">Department</label>
-                  <Select
-                    value={departmentId}
-                    onChange={(e) => changeDepartment(e.target.value)}
-                    disabled={departmentPending}
-                    aria-label="Department"
-                  >
-                    {departmentOptions.map((o) => (
-                      <option key={o.departmentId} value={o.departmentId}>
-                        {o.departmentName}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-              </div>
-            </div>
-          )}
           {dashboardView === "dashboard" && !kpis && (
             <ErrorNotice message={BOARD_UNAVAILABLE} onRetry={() => window.location.reload()} />
           )}
@@ -305,7 +311,7 @@ export default function ForemanTabs({
             // numbers as the Dashboard cards, so the two never disagree.
             <ExecutiveSummaryCard
               view="summary"
-              onReviewSubmissions={() => setTab("reviews")}
+              onReviewSubmissions={() => changeTab("reviews")}
               showTotals={false}
               projectId={projectId}
               departmentId={departmentId}
@@ -327,7 +333,7 @@ export default function ForemanTabs({
           {dashboardView === "progress" && (
             <ExecutiveSummaryCard
               view="progress"
-              onReviewSubmissions={() => setTab("reviews")}
+              onReviewSubmissions={() => changeTab("reviews")}
               showTotals={false}
               projectId={projectId}
               departmentId={departmentId}
@@ -342,7 +348,7 @@ export default function ForemanTabs({
             <NotificationFocusBanner
               notificationId={notificationId}
               focusState={reviewFocus}
-              onOpenHistory={() => setTab("history")}
+              onOpenHistory={() => changeTab("history")}
               recordInQueue={queue.some(
                 (q) =>
                   (!!focusSubmissionId && q.submissionId === focusSubmissionId) ||
@@ -359,6 +365,7 @@ export default function ForemanTabs({
             <ForemanQueue foremanUserId={foremanUserId} items={queue}
               focusSubmissionId={focusSubmissionId}
               focusWorkItemCode={focusWorkItemCode}
+              query={query}
             />
           )}
 
@@ -416,6 +423,8 @@ export default function ForemanTabs({
           assignments={board.assignments}
           inactiveWorkItems={board.inactiveWorkItems}
           canChangeWorkItemStatus
+          query={query}
+          headerAction={<ExcelDownloadButton projectId={projectId} departmentId={departmentId} />}
         />
       )}
 
@@ -428,10 +437,11 @@ export default function ForemanTabs({
               : ""
           }
           focusSubmissionId={historyFocus?.submissionId ?? null}
+          query={query}
         />
       )}
 
-      {tab === "communication" && <ChatPanel contextProjectId={projectId} />}
+      {tab === "communication" && <ChatPanel contextProjectId={projectId} query={query} />}
 
       {tab === "profile" && (
         <ProfilePanel

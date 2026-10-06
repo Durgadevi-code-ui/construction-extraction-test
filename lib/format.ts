@@ -176,3 +176,31 @@ export function formatDateTimeUS(input: string | Date | null | undefined): strin
     minute: "2-digit",
   });
 }
+
+/**
+ * Time of day only ("10:59 AM") for a point-in-time timestamp, in the
+ * viewer's local time — paired with formatDateUS(x, "/") wherever a list
+ * shows date and time as two parts (e.g. Submission History), so every
+ * date/time in that list reads the same way. Locale pinned to en-US for
+ * the same reason as formatDateTimeUS. A date-only string has no time.
+ */
+export function formatTimeUS(input: string | Date | null | undefined): string {
+  if (!input) return "";
+  if (typeof input === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input)) return "";
+  const date = typeof input === "string" ? new Date(input) : input;
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+/**
+ * Time-based greeting for the dashboard header — the one place this
+ * rule lives (morning before 12:00, afternoon before 17:00, evening
+ * after), so no screen hardcodes a single greeting. Pass the viewer's
+ * own clock (see DashboardShell, which reads it client-side only).
+ */
+export function timeOfDayGreeting(now: Date): string {
+  const hour = now.getHours();
+  if (hour < 12) return "Good Morning";
+  if (hour < 17) return "Good Afternoon";
+  return "Good Evening";
+}

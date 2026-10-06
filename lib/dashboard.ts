@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getUserContext, isAdminUser, CONTRACTOR_ROLES } from "./authContext";
 import { getActiveDelegationsForUser } from "./delegation";
 import { listDepartments, listProjects, listWorkItems } from "./admin";
-import { getWorkItemCurrentStatus } from "./workflow";
+import { getWorkItemCurrentStatus, parseWorkItemTasks, type WorkItemTask } from "./workflow";
 import { calculateEstimatedAmount, calculateOverallProgress } from "./calculations";
 
 /**
@@ -72,6 +72,9 @@ export type DashboardWorkItemRow = {
    * fake 0, for a caller without financial visibility. */
   scheduledValue?: number | null;
   estimatedAmount?: number | null;
+  /** This work item's tasks (Active and Inactive, with any Worker task
+   * updates) — for the Contractor's task management on Work Items. */
+  tasks: WorkItemTask[];
 };
 
 export type DashboardDepartmentSummary = {
@@ -330,6 +333,7 @@ export async function getDashboardData(
         estimatedAmount: scope.includeFinancials
           ? calculateEstimatedAmount(w.scheduledValue, status.progressPercentage)
           : undefined,
+        tasks: parseWorkItemTasks(w.additionalFields),
       };
     })
   );

@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import PlannedQuantityEditor from "./PlannedQuantityEditor";
-import WorkItemTaskManager from "./WorkItemTaskManager";
+import WorkItemTaskManager, { type ManagedTask } from "./WorkItemTaskManager";
 import WorkItemList, { workItemStatus, type WorkItemListRow } from "@/components/workflow/WorkItemList";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
@@ -29,7 +29,7 @@ export type AssignmentWorkItemOption = {
    * lib/workflow.ts WorkItemTask. Optional only so any older caller
    * that doesn't pass it keeps compiling; every real caller (see
    * app/workflow/foreman/page.tsx) supplies it. */
-  tasks?: { id: string; label: string; conditional: boolean; status: "Active" | "Inactive" }[];
+  tasks?: ManagedTask[];
   /** Cumulative approved progress (WorkItemOption.progressPercentage) and
    * completion — shown in the shared Work Items list, same as the
    * Contractor's. Optional so a caller without them still compiles. */
@@ -67,6 +67,13 @@ type Props = {
    * server authorizes to configure work items (the department's own
    * Subcontractor); a Worker Assignment delegation alone does not. */
   canChangeWorkItemStatus?: boolean;
+  /** Search text owned by the page (the shared header toolbar search).
+   * When given, this card's own search box is not rendered and this
+   * value is used instead — same matching either way. */
+  query?: string;
+  /** Excel download for this department's work items (see
+   * ExcelDownloadButton) — rendered in the card header when given. */
+  headerAction?: React.ReactNode;
 };
 
 /**
@@ -91,6 +98,8 @@ export default function AssignmentManager({
   assignments,
   inactiveWorkItems = [],
   canChangeWorkItemStatus = false,
+  query: queryProp,
+  headerAction,
 }: Props) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -99,8 +108,12 @@ export default function AssignmentManager({
   // Workers ticked in the open panel's "Add workers" list.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busyKey, setBusyKey] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
+  const [ownQuery, setQuery] = useState("");
+  const query = queryProp ?? ownQuery;
   const needle = query.trim().toLowerCase();
+  // Narrows the open panel's "Add workers" list — existing department
+  // workers only; it can never add anyone who isn't already in the list.
+  const [workerQuery, setWorkerQuery] = useState("");
   const matches = (...texts: (string | null | undefined)[]) =>
     !needle || texts.some((t) => (t ?? "").toLowerCase().includes(needle));
 
@@ -144,6 +157,7 @@ export default function AssignmentManager({
   function toggleOpen(workItemId: string) {
     setOpenId((prev) => (prev === workItemId ? null : workItemId));
     setSelected(new Set());
+    setWorkerQuery("");
     setError(null);
   }
 
@@ -270,6 +284,10 @@ export default function AssignmentManager({
     const assigned = assignedTo(w.workItemId);
     const assignedIds = new Set(assigned.map((a) => a.userId));
     const available = workers.filter((wk) => !assignedIds.has(wk.userId));
+    const workerNeedle = workerQuery.trim().toLowerCase();
+    const shownAvailable = workerNeedle
+      ? available.filter((wk) => [wk.displayName, wk.email].some((t) => t.toLowerCase().includes(workerNeedle)))
+      : available;
     return (
       <div className="space-y-3 border-t border-line-soft bg-surface-soft px-4 py-3">
         <div>
@@ -304,14 +322,39 @@ export default function AssignmentManager({
         </div>
 
         <div>
-          <p className="text-xs font-medium text-foreground-secondary mb-1.5">Add workers</p>
+          <p className="text-xs font-medium text-foreground-secondary mb-1.5">
+            Add workers <span className="font-normal text-foreground-muted">(existing workers in {departmentName})</span>
+          </p>
           {workers.length === 0 ? (
-            <p className="text-foreground-muted">No active workers in {departmentName} yet.</p>
+            <p className="text-foreground-muted">
+              No active workers in {departmentName} yet — a worker must be added to this department (Admin Setup → Users) before they can be assigned.
+            </p>
           ) : available.length === 0 ? (
             <p className="text-foreground-muted">Every worker in {departmentName} is already assigned.</p>
           ) : (
+            <div className="space-y-2">
+            {available.length > 1 && (
+              <div className="relative max-w-xs">
+                <Search
+                  className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-foreground-muted"
+                  strokeWidth={2}
+                  aria-hidden
+                />
+                <Input
+                  type="search"
+                  value={workerQuery}
+                  onChange={(e) => setWorkerQuery(e.target.value)}
+                  placeholder="Search workers by name or email"
+                  aria-label="Search workers to assign"
+                  className="pl-8 !py-1.5 text-xs bg-white"
+                />
+              </div>
+            )}
+            {shownAvailable.length === 0 && (
+              <p className="text-xs text-foreground-muted">No workers match “{workerQuery.trim()}”.</p>
+            )}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-              {available.map((wk) => (
+              {shownAvailable.map((wk) => (
                 <label key={wk.userId} className="flex items-center gap-1.5 text-xs" title={wk.email}>
                   <input type="checkbox" checked={selected.has(wk.userId)} onChange={() => toggleSelected(wk.userId)} />
                   {wk.displayName}
@@ -324,6 +367,7 @@ export default function AssignmentManager({
               >
                 {busyKey === `assign:${w.workItemId}` ? "Assigning…" : `Assign${selected.size ? ` (${selected.size})` : ""}`}
               </Button>
+            </div>
             </div>
           )}
         </div>
@@ -349,7 +393,7 @@ export default function AssignmentManager({
             </Button>
           )}
         </div>
-        <WorkItemTaskManager workItemId={w.workItemId} tasks={w.tasks ?? []} />
+        <WorkItemTaskManager workItemId={w.workItemId} tasks={w.tasks ?? []} workItemLabel={`${w.code} — ${w.description}`} />
       </div>
     );
   }
@@ -368,12 +412,16 @@ export default function AssignmentManager({
             Each work item&apos;s photos and voice notes are under View Updates.
           </p>
         </div>
-        <p className="text-sm shrink-0">
-          <span className="text-foreground-secondary">Department:</span>{" "}
-          <span className="font-medium text-foreground">{departmentName}</span>
-        </p>
+        <div className="flex flex-wrap items-center gap-3 shrink-0">
+          <p className="text-sm">
+            <span className="text-foreground-secondary">Department:</span>{" "}
+            <span className="font-medium text-foreground">{departmentName}</span>
+          </p>
+          {headerAction}
+        </div>
       </div>
 
+      {queryProp === undefined && (
       <div className="relative max-w-md">
         <Search
           className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground-muted"
@@ -389,6 +437,7 @@ export default function AssignmentManager({
           className="pl-9"
         />
       </div>
+      )}
       {noMatches && <p className="text-foreground-muted">No work items or workers match “{query.trim()}”.</p>}
 
       {error && (

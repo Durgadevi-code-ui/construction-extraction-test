@@ -53,6 +53,58 @@
   --info-border: #c3e0ea;
 }
 
+/* Dark theme — the same tokens, re-valued; switched app-wide by
+   <html data-theme="dark"> (components/workflow/ThemeToggle.tsx, set
+   before first paint by app/layout.tsx). Surfaces step up in lightness
+   (page < card < hover), text stays >= 4.5:1 on cards, and each status
+   keeps its hue with a dark "soft" tint so text-<status> on
+   bg-<status>-soft stays readable. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --background: #0e161b;
+  --foreground: #e4ebee;
+  --foreground-secondary: #a7b2c4;
+  --foreground-muted: #8a95a9;
+  --foreground-placeholder: #657084;
+
+  --surface: #162129;
+  --surface-soft: #1c2830;
+  --surface-hover: #23323b;
+
+  --line: #2a3943;
+  --line-strong: #3b4c57;
+  --line-soft: #22303a;
+
+  --brand: #11948f;
+  --brand-hover: #16aaa5;
+  --brand-soft: #123a3a;
+  --brand-border: #1f5958;
+
+  --navy: #0f2c38;
+  --navy-deep: #091d25;
+
+  --success: #3db478;
+  --success-soft: #12301f;
+  --success-border: #1f4d33;
+
+  --warning: #e8a23a;
+  --warning-soft: #392a12;
+  --warning-border: #5c441b;
+
+  --caution: #e2c23c;
+  --caution-soft: #342e12;
+  --caution-border: #594e1d;
+
+  --error: #ec6a6a;
+  --error-soft: #3a1818;
+  --error-border: #5e2828;
+
+  --info: #44aed0;
+  --info-soft: #102f3a;
+  --info-border: #1e4c5c;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -100,6 +152,37 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
+}
+
+/* Dark theme: the few hard-coded light colors still in components
+   (white cards/inputs, #FAFAFA read-only boxes, chart label/track fills)
+   follow the surface/text tokens instead. In the utilities layer and
+   only as specific as the class itself (:where adds nothing), so
+   hover:/focus:/disabled: variants on the same element still win. */
+@layer utilities {
+  :where(:root[data-theme="dark"]) .bg-white,
+  :where(:root[data-theme="dark"]) .file\:bg-white::file-selector-button {
+    background-color: var(--surface);
+  }
+  :where(:root[data-theme="dark"]) .bg-white\/70 {
+    background-color: var(--line-soft);
+  }
+  :where(:root[data-theme="dark"]) .hover\:bg-white\/60:hover {
+    background-color: var(--surface-hover);
+  }
+  :where(:root[data-theme="dark"]) .bg-\[\#FAFAFA\],
+  :where(:root[data-theme="dark"]) .disabled\:bg-\[\#FAFAFA\]:disabled {
+    background-color: var(--surface-soft);
+  }
+  :where(:root[data-theme="dark"]) .fill-\[\#111827\] {
+    fill: var(--foreground);
+  }
+  :where(:root[data-theme="dark"]) .fill-\[\#4b5563\] {
+    fill: var(--foreground-secondary);
+  }
+  :where(:root[data-theme="dark"]) .fill-\[\#f0f1f3\] {
+    fill: var(--line-soft);
+  }
 }
 
 /* Shared, minimal entrance motion for dropdowns/popovers/toasts — plain

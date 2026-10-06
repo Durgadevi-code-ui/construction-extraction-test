@@ -14,6 +14,7 @@ import type {
 import type { Delegation, DelegationPermission } from "@/lib/delegationTypes";
 import DelegationManager, { type ContractorOption } from "./DelegationManager";
 import ExcelImportPanel from "./ExcelImportPanel";
+import ExcelDownloadButton from "@/components/workflow/ExcelDownloadButton";
 import { formatPercent, formatQuantity, humanizeRole } from "@/lib/format";
 import {
   Inbox,
@@ -514,7 +515,14 @@ function ProjectRow({ adminUserId, project }: { adminUserId: string; project: Pr
         still chosen automatically and every input method keeps working.
       </p>
 
-      <ExcelImportPanel projectId={project.projectId} />
+      {/* Excel actions on one row: [Import Excel] [Download updated Excel]
+          — the download returns the same workbook with the latest
+          approved progress (scope/amounts decided server-side). The
+          import panel, once opened, takes its own full-width line below. */}
+      <div className="mt-3 flex flex-wrap items-start gap-2">
+        <ExcelImportPanel projectId={project.projectId} />
+        <ExcelDownloadButton projectId={project.projectId} />
+      </div>
 
       {editing && (
         <div className="mt-2 space-y-2 bg-surface-soft rounded-lg p-3">

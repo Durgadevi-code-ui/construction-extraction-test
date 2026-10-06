@@ -489,7 +489,9 @@ export async function findOrCreateProjectDepartment(
  * anything else is compared case-insensitively, same as department
  * names.
  */
-function normalizeLineItemNo(raw: string): string {
+/** Exported for the updated-Excel export, which must match an uploaded
+ * row to its work item exactly the way this import did. */
+export function normalizeLineItemNo(raw: string): string {
   const trimmed = raw.trim();
   return /^\d+$/.test(trimmed) ? String(parseInt(trimmed, 10)) : trimmed.toLowerCase();
 }
@@ -603,14 +605,19 @@ export async function upsertWorkItemFromImport(
       existing.additional_fields || params.additionalFields
         ? { ...(existing.additional_fields ?? {}), ...(params.additionalFields ?? {}) }
         : null;
+    // A field the uploaded file leaves empty (e.g. no Quantity/Unit column
+    // in a G703) keeps its current value — a re-import must never blank a
+    // planned quantity/unit set in the app, which would silently switch
+    // the item from quantity to percentage progress. Values the file does
+    // provide still refresh the work item, as before.
     const { error: updateError } = await supabase
       .from("work_items")
       .update({
         description_of_work: params.description,
-        planned_quantity: params.plannedQuantity,
-        unit_of_measure: params.unitOfMeasure,
-        scheduled_value: params.scheduledValue,
-        csi_line_code: params.csiLineCode,
+        ...(params.plannedQuantity !== null ? { planned_quantity: params.plannedQuantity } : {}),
+        ...(params.unitOfMeasure !== null ? { unit_of_measure: params.unitOfMeasure } : {}),
+        ...(params.scheduledValue !== null ? { scheduled_value: params.scheduledValue } : {}),
+        ...(params.csiLineCode !== null ? { csi_line_code: params.csiLineCode } : {}),
         additional_fields: mergedAdditionalFields,
       })
       .eq("work_item_id", existing.work_item_id);
@@ -668,13 +675,16 @@ export type AdminWorkItem = {
   plannedQuantity: number | null;
   retainagePercent: number | null;
   status: string;
+  /** work_items.additional_fields as stored (imported extra columns,
+   * __tasks) — null when none. Read-only here. */
+  additionalFields: Record<string, unknown> | null;
 };
 
 export async function listWorkItems(supabase: SupabaseClient): Promise<AdminWorkItem[]> {
   const { data, error } = await supabase
     .from("work_items")
     .select(
-      "work_item_id, department_id, line_item_no, csi_line_code, description_of_work, scheduled_value, unit_of_measure, planned_quantity, retainage_percent, status, departments(department_name)"
+      "work_item_id, department_id, line_item_no, csi_line_code, description_of_work, scheduled_value, unit_of_measure, planned_quantity, retainage_percent, status, additional_fields, departments(department_name)"
     )
     .order("line_item_no", { ascending: true });
 
@@ -696,6 +706,7 @@ export async function listWorkItems(supabase: SupabaseClient): Promise<AdminWork
     plannedQuantity: w.planned_quantity,
     retainagePercent: w.retainage_percent,
     status: w.status,
+    additionalFields: (w.additional_fields as Record<string, unknown> | null) ?? null,
   }));
 }
 

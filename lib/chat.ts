@@ -90,14 +90,17 @@ export async function listChatMessages(
     .eq("project_id", projectId)
     .eq("status", "Active")
     .is("recipient_user_id", null)
-    .order("created_at", { ascending: true })
+    // Newest RECENT_LIMIT first, then flipped back to oldest-first for
+    // display — ascending + limit returned the OLDEST messages, so a
+    // thread past the limit stopped showing anything new.
+    .order("created_at", { ascending: false })
     .limit(RECENT_LIMIT);
 
   if (error) {
     throw new Error(`Failed to load messages: ${error.message}`);
   }
 
-  return (data ?? []).map((row) => ({
+  return (data ?? []).reverse().map((row) => ({
     chatMessageId: row.chat_message_id as string,
     senderName: row.sender_name as string,
     senderRole: row.sender_role as string,
@@ -264,14 +267,17 @@ export async function listDirectMessages(
     .or(
       `and(sender_user_id.eq.${userId},recipient_user_id.eq.${peerUserId}),and(sender_user_id.eq.${peerUserId},recipient_user_id.eq.${userId})`
     )
-    .order("created_at", { ascending: true })
+    // Newest RECENT_LIMIT first, then flipped back to oldest-first for
+    // display — ascending + limit returned the OLDEST messages, so a
+    // thread past the limit stopped showing anything new.
+    .order("created_at", { ascending: false })
     .limit(RECENT_LIMIT);
 
   if (error) {
     throw new Error(`Failed to load messages: ${error.message}`);
   }
 
-  return (data ?? []).map((row) => ({
+  return (data ?? []).reverse().map((row) => ({
     chatMessageId: row.chat_message_id as string,
     senderName: row.sender_name as string,
     senderRole: row.sender_role as string,

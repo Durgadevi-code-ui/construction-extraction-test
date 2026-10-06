@@ -51,6 +51,8 @@ type Props = {
    * callers that never pass this (e.g. the standalone Extraction Accuracy
    * Test tool) keep the old behavior. */
   workItemExplicitlySelected?: boolean;
+  /** Card heading — defaults to the original "Normal Typed Text". */
+  title?: string;
 };
 
 export default function TextInput({
@@ -63,6 +65,7 @@ export default function TextInput({
   workItemDescription,
   departmentName,
   workItemExplicitlySelected = true,
+  title = "Normal Typed Text",
 }: Props) {
   const [text, setText] = useState("");
   const [status, setStatus] = useState<"IDLE" | "PROCESSING" | "VALID" | "INVALID">("IDLE");
@@ -172,7 +175,7 @@ export default function TextInput({
 
   return (
     <div className={`bg-surface rounded-lg border border-line shadow-sm p-5 space-y-3 ${locked ? "opacity-50" : ""}`}>
-      <h2 className="font-semibold text-foreground">Normal Typed Text</h2>
+      <h2 className="font-semibold text-foreground">{title}</h2>
       <textarea
         value={text}
         disabled={locked}

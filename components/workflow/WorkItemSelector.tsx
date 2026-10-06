@@ -5,7 +5,22 @@ import { Select } from "@/components/ui/Input";
 
 /** One task/activity option for a work item: data from the work item's
  * own definitions (work_items.additional_fields.__tasks), never listed here. */
-export type WorkItemTaskView = { id: string; label: string; conditional: boolean };
+export type WorkItemTaskView = {
+  id: string;
+  label: string;
+  conditional: boolean;
+  /** Task Update Access (set by Contractor/Subcontractor) and the latest
+   * Worker task update — see lib/workflow.ts WorkItemTask. Optional:
+   * the selector itself only needs id/label/conditional. */
+  updateAccess?: boolean;
+  progress?: {
+    percent: number | null;
+    completed: boolean;
+    note: string | null;
+    updatedAt: string;
+    updatedByName: string;
+  } | null;
+};
 
 export type WorkItemOptionView = {
   workItemId: string;
@@ -45,6 +60,9 @@ type Props = {
     url: string,
     pending: { kind: "project" | "workItem"; workItemId: string; projectId?: string }
   ) => void;
+  /** The page's header search: narrows the Work Item options by code,
+   * name or task (the selected item always stays listed). */
+  query?: string;
 };
 
 /**
@@ -71,6 +89,7 @@ export default function WorkItemSelector({
   onTaskChange,
   pending = null,
   onNavigate,
+  query = "",
 }: Props) {
   function go(
     params: { projectId?: string; workItemId?: string },
@@ -95,6 +114,12 @@ export default function WorkItemSelector({
   const noItem = displayItemId === "";
   const tasks = workItems.find((w) => w.workItemId === displayItemId)?.tasks ?? [];
   const taskValue = taskSelection?.workItemId === displayItemId ? taskSelection.taskId : "";
+  const needle = query.trim().toLowerCase();
+  const matches = (item: WorkItemOptionView) =>
+    !needle ||
+    [item.code, item.description, ...item.tasks.map((t) => t.label)].some((text) => text.toLowerCase().includes(needle));
+  const matchCount = workItems.filter(matches).length;
+  const shownItems = workItems.filter((item) => item.workItemId === displayItemId || matches(item));
 
   return (
     <Card className="space-y-2 text-sm">
@@ -120,7 +145,7 @@ export default function WorkItemSelector({
         onChange={(e) => go({ projectId: activeProjectId, workItemId: e.target.value }, "workItem")}
       >
         <option value="">All assigned — suggested item</option>
-        {workItems.map((item) => (
+        {shownItems.map((item) => (
           <option key={item.workItemId} value={item.workItemId}>
             {item.code} — {item.description}
             {item.isCompleted
@@ -153,6 +178,13 @@ export default function WorkItemSelector({
           </option>
         ))}
       </Select>
+      {needle && (
+        <p className="text-xs text-foreground-secondary">
+          {matchCount === 0
+            ? `No work items match “${query.trim()}”.`
+            : `${matchCount} of ${workItems.length} work items match “${query.trim()}”.`}
+        </p>
+      )}
       {!noItem && !projectPending && tasks.length === 0 && (
         <p className="text-xs text-foreground-secondary">
           No task options configured for this work item.

@@ -45,12 +45,11 @@ type Props = {
  * existing Progress Workflow. Extraction success alone never submits
  * anything — only the explicit "Submit Progress" click does.
  *
- * Typed text is the primary, immediately-visible path (see AGENTS.md
- * master prompt section 3/13: "typed text must remain available...
- * immediately accessible... do not force the Worker through
- * Handwriting -> Voice -> Text... before reaching the actual work
- * update"). Handwriting/Voice remain fully functional but sit behind a
- * collapsed "Other ways to update" toggle, not the default view.
+ * Voice is the primary path (shown first, with the prominent Record
+ * button); typed text is the secondary path, always visible directly
+ * below it — never hidden behind a toggle, so a Worker who can't speak
+ * on site still reaches it immediately. Both run exactly the same
+ * validate -> review -> submit flow as before.
  */
 export default function DailyWorkUpdate({
   workerId,
@@ -68,7 +67,6 @@ export default function DailyWorkUpdate({
   const [lockState, setLockState] = useState(initialLockState);
   const [reviewedText, setReviewedText] = useState<string | null>(null);
   const [submittedMessage, setSubmittedMessage] = useState<string | null>(null);
-  const [showOtherMethods, setShowOtherMethods] = useState(false);
   // Step 2 (after a successful submit): the work item to offer a photo
   // for — see LiveUpdateBar. Null when no prompt is showing.
   const [photoPromptFor, setPhotoPromptFor] = useState<string | null>(null);
@@ -129,7 +127,7 @@ export default function DailyWorkUpdate({
       <div>
         <h2 className="font-semibold text-foreground">Today&apos;s Update</h2>
         <p className="text-sm text-foreground-secondary">
-          Type or record what you completed today, then review and submit.
+          Record what you completed today (or type it), then review and submit.
         </p>
         {submittedTaskId && submittedTaskLabel && (
           <p className="text-xs text-foreground-secondary">Task: {submittedTaskLabel}</p>
@@ -156,7 +154,25 @@ export default function DailyWorkUpdate({
       )}
 
       <div className="grid gap-4">
+        {/* 1. Voice — primary. */}
+        <VoiceUpload
+          recordOnly
+          primary
+          title="Speak your update"
+          locked={isLocked(lockState, "VOICE")}
+          onResult={(status, text, confirmed, task) => handleResult("VOICE", status, text, confirmed, task)}
+          workItemId={workItemId}
+          taskId={effectiveTaskId}
+          taskLabel={taskLabel}
+          workItemCode={workItemCode}
+          workItemDescription={workItemDescription}
+          departmentName={departmentName}
+          workItemExplicitlySelected={workItemExplicitlySelected}
+        />
+
+        {/* 2. Text — secondary, always available. */}
         <TextInput
+          title="Or type your update"
           locked={isLocked(lockState, "TEXT")}
           onResult={(status, text, confirmed, task) => handleResult("TEXT", status, text, confirmed, task)}
           workItemId={workItemId}
@@ -167,31 +183,6 @@ export default function DailyWorkUpdate({
           departmentName={departmentName}
           workItemExplicitlySelected={workItemExplicitlySelected}
         />
-
-        {!showOtherMethods ? (
-          <button
-            type="button"
-            onClick={() => setShowOtherMethods(true)}
-            className="text-xs text-foreground-muted hover:text-foreground-secondary hover:underline self-start"
-          >
-            Or record a voice update ▾
-          </button>
-        ) : (
-          <>
-            <VoiceUpload
-              recordOnly
-              locked={isLocked(lockState, "VOICE")}
-              onResult={(status, text, confirmed, task) => handleResult("VOICE", status, text, confirmed, task)}
-              workItemId={workItemId}
-              taskId={effectiveTaskId}
-              taskLabel={taskLabel}
-              workItemCode={workItemCode}
-              workItemDescription={workItemDescription}
-              departmentName={departmentName}
-              workItemExplicitlySelected={workItemExplicitlySelected}
-            />
-          </>
-        )}
       </div>
 
       {reviewedText && (

@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/session";
 import { assertAdminOrDelegated } from "@/lib/delegation";
 import { parseProjectWorkbook, distinctDepartments } from "@/lib/excelImport";
 import { upsertWorkItemFromImport } from "@/lib/admin";
+import { saveProjectImportFile } from "@/lib/projectDocuments";
 
 export const runtime = "nodejs";
 
@@ -61,9 +62,10 @@ export async function POST(request: NextRequest) {
       projectId,
     });
 
+    const fileBytes = await file.arrayBuffer();
     let parsed;
     try {
-      parsed = parseProjectWorkbook(await file.arrayBuffer());
+      parsed = parseProjectWorkbook(fileBytes);
     } catch {
       return NextResponse.json(
         { error: "Could not read this file. Upload a valid .xlsx/.xls/.csv workbook." },
@@ -74,8 +76,13 @@ export async function POST(request: NextRequest) {
     if (parsed.rows.length === 0) {
       return NextResponse.json(
         {
-          error:
-            "No department/work item rows were recognized in this file. Check that it has a header row with Department and Description columns.",
+          // Say what was actually read, not just which headings were
+          // expected — columns are interpreted from headings AND content.
+          error: [
+            `The workbook was read (${parsed.diagnostics.length} sheet${parsed.diagnostics.length === 1 ? "" : "s"}), but no reliable work-item structure could be inferred — no sheet had a table with a work description column and rows of work items under it.`,
+            ...parsed.diagnostics,
+          ].join(" "),
+          diagnostics: parsed.diagnostics,
           issues: parsed.issues,
         },
         { status: 422 }
@@ -88,6 +95,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         preview: true,
         sheetsScanned: parsed.sheetsScanned,
+        columnMappings: parsed.columnMappings,
         departments,
         workItemCount: parsed.rows.length,
         rows: parsed.rows,
@@ -122,12 +130,23 @@ export async function POST(request: NextRequest) {
       if (result.departmentWasCreated) departmentsCreated++;
     }
 
+    // Keep the original workbook under this project's documents
+    // (projects/<projectId>/imports/) so "Download updated Excel" can
+    // return the same file structure with the latest data filled in.
+    // Best-effort: the import above is already committed either way.
+    const storedOriginal = await saveProjectImportFile(projectId, {
+      name: file.name,
+      bytes: fileBytes,
+      contentType: file.type,
+    });
+
     return NextResponse.json({
       preview: false,
       departmentsActivated: departments.length,
       departmentsCreated,
       workItemsCreated,
       workItemsUpdated,
+      originalStored: storedOriginal !== null,
       issues: parsed.issues,
     });
   } catch (err) {
