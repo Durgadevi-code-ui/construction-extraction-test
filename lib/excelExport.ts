@@ -286,6 +286,7 @@ const LATEST_COLUMNS: { key: keyof LatestValues; header: string; amount: boolean
   { key: "latestUpdate", header: EXPORT_LATEST_HEADERS.latestUpdate, amount: false, wch: 40 },
   { key: "tasks", header: EXPORT_LATEST_HEADERS.tasks, amount: false, wch: 40 },
 ];
+type LatestColumn = (typeof LATEST_COLUMNS)[number];
 
 function latestCell(key: keyof LatestValues, values: LatestValues, amountsAllowed: boolean): XLSX.CellObject | null {
   const column = LATEST_COLUMNS.find((c) => c.key === key)!;
@@ -409,7 +410,10 @@ export function refillOriginalWorkbook(
   /** Filled with the names of the sheets holding the caller's own work
    * item rows, in workbook order (the sheet a restricted download opens
    * on — see buildProjectExcelExport). */
-  dataSheets?: string[]
+  dataSheets?: string[],
+  /** The "Latest …" columns to append, in LATEST_COLUMNS order — all of
+   * them unless the caller chose fewer (see buildProjectExcelExport). */
+  latestColumns: LatestColumn[] = LATEST_COLUMNS
 ): XLSX.WorkBook {
   const wb = XLSX.read(bytes, { type: "array", cellFormula: true, cellNF: true, cellStyles: true });
   // The importer's own row positions (sheet + 1-based row within the
@@ -465,14 +469,16 @@ export function refillOriginalWorkbook(
     const reuseLatest =
       existingLatestAt >= 0 && LATEST_COLUMNS.every((col, i) => headerRow[existingLatestAt + i] === col.header);
     const firstNewCol = reuseLatest ? existingLatestAt : width;
-    LATEST_COLUMNS.forEach((col, i) => {
-      ws[addr(headerRowIndex, firstNewCol + i)] = { t: "s", v: col.header };
-    });
+    // The whole existing block (headings included) is cleared, so columns
+    // the caller left out of this download don't linger from it.
     if (reuseLatest) {
-      for (let r = headerRowIndex + 1; r < grid.length; r++) {
+      for (let r = headerRowIndex; r < grid.length; r++) {
         LATEST_COLUMNS.forEach((_, i) => delete ws[addr(r, firstNewCol + i)]);
       }
     }
+    latestColumns.forEach((col, i) => {
+      ws[addr(headerRowIndex, firstNewCol + i)] = { t: "s", v: col.header };
+    });
 
     // Division sections — a DIVISION heading, the rows under it and its
     // subtotal. For a caller without full access, a section holding none
@@ -583,7 +589,7 @@ export function refillOriginalWorkbook(
       }
       // The whole "Latest …" block on every work item row — a value, or an
       // empty cell — so the row's own table style runs across all of it.
-      LATEST_COLUMNS.forEach((col, i) => {
+      latestColumns.forEach((col, i) => {
         ws[addr(r, firstNewCol + i)] = latestCell(col.key, values, amountsAllowed) ?? { t: "z" };
       });
     }
@@ -597,7 +603,7 @@ export function refillOriginalWorkbook(
     // original layout, with nothing in those rows).
     if (!scope.fullAccess) {
       const rowsMeta = [...(ws["!rows"] ?? [])];
-      const lastCol = firstNewCol + LATEST_COLUMNS.length;
+      const lastCol = firstNewCol + latestColumns.length;
       for (let r = headerRowIndex + 1; r < grid.length; r++) {
         let empty = true;
         for (let c = 0; c < lastCol && empty; c++) {
@@ -611,11 +617,11 @@ export function refillOriginalWorkbook(
 
     ws["!ref"] = XLSX.utils.encode_range({
       s: range.s,
-      e: { r: Math.max(range.e.r, range.s.r + grid.length - 1), c: Math.max(range.e.c, range.s.c + firstNewCol + LATEST_COLUMNS.length - 1) },
+      e: { r: Math.max(range.e.r, range.s.r + grid.length - 1), c: Math.max(range.e.c, range.s.c + firstNewCol + latestColumns.length - 1) },
     });
     const cols = [...(ws["!cols"] ?? [])];
     while (cols.length < range.s.c + firstNewCol) cols.push({});
-    LATEST_COLUMNS.forEach((col, i) => {
+    latestColumns.forEach((col, i) => {
       cols[range.s.c + firstNewCol + i] = { wch: col.wch };
     });
     ws["!cols"] = cols;
@@ -631,7 +637,9 @@ export function refillOriginalWorkbook(
 export function buildGeneratedWorkbook(
   scope: ExportScope,
   items: ExportWorkItem[],
-  latest: Map<string, LatestValues>
+  latest: Map<string, LatestValues>,
+  /** As in refillOriginalWorkbook: the "Latest …" columns to append. */
+  latestColumns: LatestColumn[] = LATEST_COLUMNS
 ): XLSX.WorkBook {
   const inScope = items.filter((w) => scope.departmentIds.has(w.departmentId));
   const extraHeaders = [
@@ -648,7 +656,7 @@ export function buildGeneratedWorkbook(
     "Planned Quantity",
     "Unit",
     ...extraHeaders,
-    ...LATEST_COLUMNS.map((c) => c.header),
+    ...latestColumns.map((c) => c.header),
   ];
   const now = new Date();
   const aoa: unknown[][] = [
@@ -684,11 +692,11 @@ export function buildGeneratedWorkbook(
           const v = w.additionalFields?.[h];
           return typeof v === "string" || typeof v === "number" ? v : null;
         }),
-        ...LATEST_COLUMNS.map(() => null),
+        ...latestColumns.map(() => null),
       ]);
       const values = latest.get(w.workItemId);
       if (values) {
-        LATEST_COLUMNS.forEach((col, i) => {
+        latestColumns.forEach((col, i) => {
           const cell = latestCell(col.key, values, amountsAllowed);
           if (cell) cellOverrides.push({ r, c: 6 + extraHeaders.length + i, cell });
         });
@@ -709,7 +717,7 @@ export function buildGeneratedWorkbook(
     { wch: 14 },
     { wch: 8 },
     ...extraHeaders.map(() => ({ wch: 16 })),
-    ...LATEST_COLUMNS.map((c) => ({ wch: c.wch })),
+    ...latestColumns.map((c) => ({ wch: c.wch })),
   ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Work Items");
@@ -770,8 +778,16 @@ export async function buildProjectExcelExport(
   projectId: string,
   /** Narrows the caller's scope to this one department (see
    * resolveExcelExportScope); omitted = their whole authorized scope. */
-  departmentId?: string | null
+  departmentId?: string | null,
+  /** Which "Latest …" columns to append after the sheet's own columns
+   * (keys of LATEST_COLUMNS; unknown keys ignored, order and duplicates
+   * don't matter). Omitted = all of them, as before. The sheet's own
+   * columns are always included. */
+  latestColumnKeys?: readonly string[] | null
 ): Promise<ExcelExportResult> {
+  const latestColumns = latestColumnKeys
+    ? LATEST_COLUMNS.filter((c) => latestColumnKeys.includes(c.key))
+    : LATEST_COLUMNS;
   const scope = await resolveExcelExportScope(supabase, userId, projectId, departmentId);
   const items = await loadProjectWorkItems(supabase, projectId);
   // Figures are only ever computed for work items the caller may see.
@@ -785,13 +801,13 @@ export async function buildProjectExcelExport(
   const dataSheets: string[] = [];
   if (original) {
     try {
-      wb = refillOriginalWorkbook(original.bytes, scope, items, latest, dataSheets);
+      wb = refillOriginalWorkbook(original.bytes, scope, items, latest, dataSheets, latestColumns);
     } catch (err) {
       console.error("Could not refill the stored workbook — rebuilding instead:", err);
     }
   }
   const source = wb ? "original" : "generated";
-  wb ??= buildGeneratedWorkbook(scope, items, latest);
+  wb ??= buildGeneratedWorkbook(scope, items, latest, latestColumns);
 
   // The original upload is returned as that file itself, with only the
   // changed cells patched in (formatting, comments, merges intact — see

@@ -1,5 +1,6 @@
 import "server-only";
 import * as XLSX from "xlsx";
+import { EXPORT_LATEST_HEADERS } from "./excelExportColumns";
 
 /**
  * Reusable project-file ingestion layer (see AGENTS.md master prompt
@@ -535,22 +536,13 @@ function synthesizeDescription(workItemNo: string | null, csiLineCode: string | 
  * rather than `{}` when there's nothing to report, so
  * ParsedWorkItemRow.additionalFields can mean "none" cleanly. */
 /**
- * Headings of the columns "Download updated Excel" appends
- * (lib/excelExport.ts uses these exact names). They hold figures computed
- * from the app's own approved progress, never source data, so when a
- * downloaded file is uploaded again they are not stored as work item
- * fields. Defined here, once, so the two sides can't drift apart.
+ * Headings of the columns "Download updated Excel" appends — defined in
+ * lib/excelExportColumns.ts (client-safe, shared with the download
+ * dialog). They hold figures computed from the app's own approved
+ * progress, never source data, so when a downloaded file is uploaded
+ * again they are not stored as work item fields.
  */
-export const EXPORT_LATEST_HEADERS = {
-  progress: "Latest Approved %",
-  approvedQuantity: "Latest Approved Qty",
-  earned: "Latest Earned to Date",
-  balance: "Latest Balance to Finish",
-  status: "Latest Status",
-  lastApprovedAt: "Last Approved On",
-  latestUpdate: "Latest Approved Update",
-  tasks: "Task Updates",
-} as const;
+export { EXPORT_LATEST_HEADERS };
 const EXPORT_LATEST_HEADER_SET = new Set<string>(Object.values(EXPORT_LATEST_HEADERS));
 
 function collectAdditionalFields(

@@ -103,16 +103,18 @@ function WorkItemProgress({ percent }: { percent: number | null }) {
 
 /** One grid for the heading row and every work item row (rows are
  * subgrids of it), so every cell lines up under its heading. Each column
- * gets a proportional share of the row — Work Item 2.2 : Progress 1.3 :
- * Status 1 : Actions 1.1 (Workers 0.8) — and never less than its content
- * needs: Status the widest badge in the list ("Waiting on
- * prerequisites"), Actions its widest button set on one line (Tasks +
- * View Updates), so neither is squeezed while Work Item takes the row;
- * every column is separated by the same gap. The Subcontractor's Actions
- * (with Workers) may wrap its buttons rather than overflow. Columns from
- * xl; below that each row stacks (the mobile layout). */
-const COLS =
-  "xl:grid-cols-[minmax(16rem,2.2fr)_minmax(11rem,1.3fr)_minmax(max-content,1fr)_minmax(max-content,1.1fr)]";
+ * is as wide as its content — Work Item up to its longest name/detail
+ * (at least 16rem), Progress a fixed 11rem bar, Status the widest badge
+ * in the list, Actions its widest button set on one line (Tasks + View
+ * Updates) — and the row's spare width is shared equally between the
+ * columns (justify-between), so the space from one column's content to
+ * the next column is the same all the way across; a list whose Work
+ * Item text fills the row leaves just the gap. With Workers
+ * (Subcontractor) the share is Work Item 2 : Progress 1.2 : Status 0.9
+ * : Workers 0.8 : Actions 1.1, and Actions may wrap its buttons rather
+ * than overflow. Columns from xl; below that each row stacks (the
+ * mobile layout). */
+const COLS = "xl:grid-cols-[minmax(16rem,max-content)_11rem_max-content_max-content] xl:justify-between";
 const COLS_WITH_WORKERS =
   "xl:grid-cols-[minmax(14rem,2fr)_minmax(10rem,1.2fr)_minmax(max-content,0.9fr)_minmax(6rem,0.8fr)_minmax(9rem,1.1fr)]";
 

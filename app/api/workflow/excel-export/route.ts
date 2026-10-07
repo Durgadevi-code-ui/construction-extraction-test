@@ -30,8 +30,20 @@ export async function GET(request: NextRequest) {
   // caller's own scope (see buildProjectExcelExport).
   const departmentId = request.nextUrl.searchParams.get("departmentId");
 
+  // Optional: comma-separated keys of the additional "Latest …" columns
+  // to append (the download dialog's choice; empty = the sheet's own
+  // columns only). Absent = every additional column, as before.
+  const columnsParam = request.nextUrl.searchParams.get("columns");
+  const latestColumnKeys = columnsParam === null ? null : columnsParam.split(",").filter(Boolean);
+
   try {
-    const result = await buildProjectExcelExport(getSupabaseClient(), currentUser.userId, projectId, departmentId);
+    const result = await buildProjectExcelExport(
+      getSupabaseClient(),
+      currentUser.userId,
+      projectId,
+      departmentId,
+      latestColumnKeys
+    );
     const asciiName = result.fileName.replace(/[^\x20-\x7E]/g, "_").replace(/"/g, "");
     return new Response(new Uint8Array(result.buffer), {
       headers: {
