@@ -138,46 +138,54 @@ export default function WorkItemSelector({
           </Select>
         </div>
       )}
-      <label className="block font-medium text-foreground-secondary mb-1">Work Item</label>
-      <Select
-        value={displayItemId}
-        disabled={projectPending}
-        onChange={(e) => go({ projectId: activeProjectId, workItemId: e.target.value }, "workItem")}
-      >
-        <option value="">All assigned — suggested item</option>
-        {shownItems.map((item) => (
-          <option key={item.workItemId} value={item.workItemId}>
-            {item.code} — {item.description}
-            {item.isCompleted
-              ? " (Completed)"
-              : item.isEligible
-                ? " (Ready)"
-                : " (Waiting on prerequisites)"}
-          </option>
-        ))}
-      </Select>
-      <label className="block font-medium text-foreground-secondary mb-1">
-        Task <span className="font-normal text-foreground-muted">(for the selected work item)</span>
-      </label>
-      <Select
-        value={taskValue}
-        disabled={noItem || projectPending || tasks.length === 0}
-        onChange={(e) => onTaskChange?.(displayItemId, e.target.value)}
-      >
-        <option value="">
-          {noItem || projectPending
-            ? "Select a work item first"
-            : tasks.length === 0
-              ? "No tasks available"
-              : "All tasks"}
-        </option>
-        {tasks.map((t) => (
-          <option key={t.id} value={t.id}>
-            {t.label}
-            {t.conditional ? " (if applicable)" : ""}
-          </option>
-        ))}
-      </Select>
+      {/* Work Item + Task side by side from md (stacked on phones) — keeps
+          the Record & Validate step below it within a laptop screen. */}
+      <div className="grid gap-2 md:grid-cols-2 md:gap-3">
+        <div className="min-w-0">
+          <label className="block font-medium text-foreground-secondary mb-1">Work Item</label>
+          <Select
+            value={displayItemId}
+            disabled={projectPending}
+            onChange={(e) => go({ projectId: activeProjectId, workItemId: e.target.value }, "workItem")}
+          >
+            <option value="">All assigned — suggested item</option>
+            {shownItems.map((item) => (
+              <option key={item.workItemId} value={item.workItemId}>
+                {item.code} — {item.description}
+                {item.isCompleted
+                  ? " (Completed)"
+                  : item.isEligible
+                    ? " (Ready)"
+                    : " (Waiting on prerequisites)"}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="min-w-0">
+          <label className="block font-medium text-foreground-secondary mb-1">
+            Task <span className="font-normal text-foreground-muted">(for the selected work item)</span>
+          </label>
+          <Select
+            value={taskValue}
+            disabled={noItem || projectPending || tasks.length === 0}
+            onChange={(e) => onTaskChange?.(displayItemId, e.target.value)}
+          >
+            <option value="">
+              {noItem || projectPending
+                ? "Select a work item first"
+                : tasks.length === 0
+                  ? "No tasks available"
+                  : "All tasks"}
+            </option>
+            {tasks.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+                {t.conditional ? " (if applicable)" : ""}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </div>
       {needle && (
         <p className="text-xs text-foreground-secondary">
           {matchCount === 0

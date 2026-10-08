@@ -1,5 +1,8 @@
 "use client";
 
+import { useRef } from "react";
+import useScrollActiveIntoView from "@/components/workflow/useScrollActiveIntoView";
+
 export type TabDef = { key: string; label: string };
 
 /**
@@ -18,8 +21,10 @@ export default function TabNav({
   active: string;
   onChange: (key: string) => void;
 }) {
+  const stripRef = useRef<HTMLDivElement>(null);
+  useScrollActiveIntoView(stripRef, active);
   return (
-    <div className="flex gap-1 bg-surface-soft border border-line-soft rounded-lg p-1 w-fit max-w-full overflow-x-auto">
+    <div ref={stripRef} className="flex gap-1 bg-surface-soft border border-line-soft rounded-lg p-1 w-fit max-w-full overflow-x-auto">
       {tabs.map((tab) => (
         <button
           key={tab.key}

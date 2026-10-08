@@ -412,7 +412,7 @@ export default function AssignmentManager({
             Each work item&apos;s photos and voice notes are under View Updates.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3 shrink-0">
+        <div className="flex flex-wrap items-center gap-3 shrink-0 max-w-full">
           <p className="text-sm">
             <span className="text-foreground-secondary">Department:</span>{" "}
             <span className="font-medium text-foreground">{departmentName}</span>

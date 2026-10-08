@@ -28,14 +28,18 @@ export default function Badge({
   variant = "neutral",
   children,
   dot = true,
+  className = "whitespace-nowrap",
 }: {
   variant?: BadgeVariant;
   children: React.ReactNode;
   dot?: boolean;
+  /** Overrides the default whitespace-nowrap, e.g. "whitespace-normal" where
+   * a long label must wrap inside a narrow (mobile) container. */
+  className?: string;
 }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium whitespace-nowrap ${VARIANT_STYLES[variant]}`}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${className} ${VARIANT_STYLES[variant]}`}
     >
       {dot && <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT_STYLES[variant]}`} />}
       {children}

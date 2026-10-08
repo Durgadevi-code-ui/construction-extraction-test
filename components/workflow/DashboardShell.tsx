@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { LogOut, Search } from "lucide-react";
 import NotificationBell from "@/components/workflow/NotificationBell";
 import ProfileChip from "@/components/workflow/ProfileChip";
 import ThemeToggle from "@/components/workflow/ThemeToggle";
 import Input from "@/components/ui/Input";
+import useScrollActiveIntoView from "@/components/workflow/useScrollActiveIntoView";
 import { timeOfDayGreeting } from "@/lib/format";
 import { logout } from "@/app/login/actions";
 
@@ -92,6 +93,9 @@ export default function DashboardShell({
   // server render), so the greeting follows their local time and can
   // never mismatch between server and browser time zones.
   const greeting = useSyncExternalStore(noSubscribe, () => timeOfDayGreeting(new Date()), () => null);
+  // Below lg the nav is a horizontal strip — keep the active tab visible.
+  const navRef = useRef<HTMLElement>(null);
+  useScrollActiveIntoView(navRef, activeTab);
 
   return (
     // No rounded corners/border/shadow/page padding around this shell —
@@ -123,7 +127,7 @@ export default function DashboardShell({
           )}
         </div>
 
-        <nav className="flex-1 px-3 py-4 space-y-1 overflow-x-auto lg:overflow-visible">
+        <nav ref={navRef} className="flex-1 px-3 py-4 space-y-1 overflow-x-auto lg:overflow-visible">
           <div className="flex lg:flex-col gap-1">
             {tabs.filter((t) => t.key !== profileTabKey).map(({ key, label, icon: Icon, badge, badgeClassName }) => (
               <button

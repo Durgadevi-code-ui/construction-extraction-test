@@ -18,7 +18,7 @@ import WorkerHeroCard from "@/components/workflow/WorkerHeroCard";
 import WorkItemSelector, {
   type WorkItemOptionView,
 } from "@/components/workflow/WorkItemSelector";
-import DailyWorkUpdate from "@/components/workflow/DailyWorkUpdate";
+import DailyWorkUpdate, { type UpdateStep } from "@/components/workflow/DailyWorkUpdate";
 import WorkItemList, { type WorkItemSortKey } from "@/components/workflow/WorkItemList";
 import SortControl, { nextSort, type SortDir, type SortState } from "@/components/workflow/SortControl";
 import WorkerTaskUpdates from "@/components/workflow/WorkerTaskUpdates";
@@ -228,6 +228,11 @@ export default function WorkerTabs({
   const [query, setQuery] = useState("");
   // My Assigned Work: which work item's Tasks panel is open (one at a time).
   const [tasksOpenFor, setTasksOpenFor] = useState<string | null>(null);
+  // Update Progress: DailyWorkUpdate's current step. The work item picker
+  // (and its search) belongs to the first step only, so Review & Submit
+  // and Submitted each fill the screen on their own.
+  const [updateStep, setUpdateStep] = useState<UpdateStep>("capture");
+  const onCaptureStep = updateStep === "capture";
 
   // Notification focus — same URL mechanism as the Contractor/
   // Subcontractor Reviews tab (lib/notifications.ts
@@ -361,7 +366,7 @@ export default function WorkerTabs({
       // view opens that list); on Update Progress it narrows the Work
       // Item picker.
       search={
-        tab === "update" && current && taskContextEnabled && workItems.length > 0
+        tab === "update" && current && taskContextEnabled && workItems.length > 0 && onCaptureStep
           ? { value: query, onChange: setQuery, placeholder: "Search work items by code, name or task", label: "Search work items" }
           : tab === "dashboard"
             ? {
@@ -554,7 +559,7 @@ export default function WorkerTabs({
           // not repeated here (the Dashboard tab shows current progress).
           // Full content width, same as the Dashboard tab.
           <div className="space-y-4">
-                {taskContextEnabled && workItems.length > 0 && (
+                {taskContextEnabled && workItems.length > 0 && onCaptureStep && (
                   <WorkItemSelector
                     workItems={workItems}
                     activeWorkItemId={current.activeWorkItemId}
@@ -568,7 +573,7 @@ export default function WorkerTabs({
                     query={query}
                   />
                 )}
-                {current.noEligibleWorkNote && (
+                {current.noEligibleWorkNote && onCaptureStep && (
                   <p className="text-sm text-foreground-secondary bg-surface-soft border border-line rounded-lg p-3">
                     {current.noEligibleWorkNote}
                   </p>
@@ -589,6 +594,7 @@ export default function WorkerTabs({
                     taskLabel={selectedTask?.label ?? null}
                     workItemExplicitlySelected={!current.isAutoSuggested}
                     approvedProgress={current.progressPercentage}
+                    onStepChange={setUpdateStep}
                   />
                 </div>
           </div>

@@ -389,7 +389,7 @@ export default function SubmissionHistoryView({
                   </p>
                   <DateTime value={item.submittedAt} className="shrink-0 text-right text-xs text-foreground-secondary" />
                 </div>
-                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
                   <dt className="font-bold uppercase tracking-wide text-foreground-secondary">Worker</dt>
                   <dd>
                     {item.workerName} <span className="text-foreground-muted">({item.departmentName})</span>
@@ -406,7 +406,9 @@ export default function SubmissionHistoryView({
                   <dt className="font-bold uppercase tracking-wide text-foreground-secondary">Status</dt>
                   <dd className="space-y-0.5">
                     {item.reviewStatusCode ? (
-                      <Badge variant={STATUS_VARIANT[item.reviewStatusCode]}>{item.reviewStatusLabel}</Badge>
+                      <Badge variant={STATUS_VARIANT[item.reviewStatusCode]} className="whitespace-normal">
+                        {item.reviewStatusLabel}
+                      </Badge>
                     ) : (
                       item.reviewStatusLabel
                     )}
