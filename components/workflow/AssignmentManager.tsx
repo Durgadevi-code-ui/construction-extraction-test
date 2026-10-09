@@ -478,6 +478,7 @@ export default function AssignmentManager({
                       type="button"
                       onClick={() => toggleOpen(a.workItemId)}
                       title={`${a.workItemDescription} — open to manage`}
+                      className="max-lg:py-1.5"
                     >
                       <Badge variant="brand" dot={false}>
                         {a.workItemCode}

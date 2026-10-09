@@ -151,7 +151,7 @@ export default function HandwritingUpload({
           accept="image/*"
           disabled={locked}
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          className="block text-sm text-foreground-muted"
+          className="block max-w-full min-w-0 text-sm text-foreground-muted"
         />
         <span className="text-xs text-foreground-muted">or</span>
         <button

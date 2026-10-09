@@ -370,7 +370,7 @@ export function ExecutiveSummaryCard({
               key={t.key}
               type="button"
               onClick={() => selectPeriod(t.key)}
-              className={`px-2.5 py-1 rounded-full border text-xs font-medium transition-colors duration-150 ${
+              className={`px-2.5 py-1 max-lg:px-3 max-lg:py-2 rounded-full border text-xs font-medium transition-colors duration-150 ${
                 period === t.key
                   ? "bg-brand-soft text-brand border-brand-border"
                   : "bg-surface-soft text-foreground-secondary border-transparent hover:bg-surface-hover"

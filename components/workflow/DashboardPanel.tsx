@@ -474,7 +474,7 @@ export default function DashboardPanel({
             {data.includeFinancials && (
               <Card className="mt-6">
                 <h2 className="font-semibold text-foreground text-sm mb-3">Project Value</h2>
-                <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
                   <div>
                     <p className="text-lg font-bold text-foreground tabular-nums">
                       {data.kpis.totalEstimatedAmount !== null ? formatMoney(data.kpis.totalEstimatedAmount) : "—"}

@@ -55,13 +55,13 @@ export default function ProfileChip({
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-brand text-xs font-semibold">
         {initialsFromEmail(email)}
       </span>
-      <span className="min-w-0 text-left text-xs leading-tight">
+      <span className="hidden lg:block min-w-0 text-left text-xs leading-tight">
         <span className="block font-medium truncate">{displayNameFromEmail(email)}</span>
         <span className="block text-white/60 truncate">{roleLabel}</span>
       </span>
     </>
   );
-  const className = `w-full min-w-0 flex items-center gap-2.5 rounded-lg px-2 py-2 transition-colors duration-150 ${
+  const className = `w-full min-w-0 flex items-center gap-2.5 rounded-lg p-1 lg:px-2 lg:py-2 transition-colors duration-150 ${
     active ? "bg-brand text-white shadow-sm" : "text-white/90"
   }`;
   if (!onClick) return <div className={className}>{content}</div>;

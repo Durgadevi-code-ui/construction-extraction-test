@@ -104,9 +104,14 @@ export default function DashboardShell({
     // any screen that uses this shell, so this claims the full viewport
     // height (not calc(100vh-64px), a stale TopNav-height offset that
     // would otherwise leave a dead gap at the bottom).
+    // Below lg the sidebar is a sticky top bar: brand + Notifications on
+    // the left and Profile/Theme/Sign out on the right in one compact
+    // row, with the same horizontal nav strip under it — so navigation
+    // stays reachable on long pages. Every lg: class restores the
+    // desktop sidebar exactly.
     <div className="flex flex-col lg:flex-row bg-background min-h-screen">
-      <aside className="lg:w-60 shrink-0 bg-gradient-to-b from-navy-deep via-navy to-brand text-white flex flex-col">
-        <div className="px-5 py-5 border-b border-white/10 flex items-center gap-2.5">
+      <aside className="sticky top-0 z-40 lg:static lg:z-auto lg:w-60 shrink-0 bg-gradient-to-b from-navy-deep via-navy to-brand text-white flex flex-row flex-wrap items-center lg:flex-col lg:flex-nowrap lg:items-stretch pt-[env(safe-area-inset-top)] lg:pt-0">
+        <div className="flex-1 min-w-0 lg:flex-initial pl-4 pr-1 py-2 lg:px-5 lg:py-5 lg:border-b border-white/10 flex items-center gap-2.5">
           {logoAvailable && (
             // eslint-disable-next-line @next/next/no-img-element -- small static brand mark, matches TopNav's own use of the same asset
             <img
@@ -127,7 +132,12 @@ export default function DashboardShell({
           )}
         </div>
 
-        <nav ref={navRef} className="flex-1 px-3 py-4 space-y-1 overflow-x-auto lg:overflow-visible">
+        {/* Below lg: a full-width second row (order-last), scrolling
+            sideways when the tabs don't fit. */}
+        <nav
+          ref={navRef}
+          className="basis-full order-last lg:order-none lg:flex-1 px-3 pb-2 lg:py-4 space-y-1 overflow-x-auto lg:overflow-visible"
+        >
           <div className="flex lg:flex-col gap-1">
             {tabs.filter((t) => t.key !== profileTabKey).map(({ key, label, icon: Icon, badge, badgeClassName }) => (
               <button
@@ -135,7 +145,7 @@ export default function DashboardShell({
                 type="button"
                 onClick={() => onTabChange(key)}
                 aria-current={activeTab === key ? "page" : undefined}
-                className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors duration-150 ${
+                className={`flex items-center gap-2.5 px-3 py-2 lg:py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors duration-150 ${
                   activeTab === key
                     ? "bg-brand text-white shadow-sm"
                     : "text-white/70 hover:bg-white/10 hover:text-white"
@@ -156,11 +166,11 @@ export default function DashboardShell({
           </div>
         </nav>
 
-        {/* Profile directly above Sign out — side by side on a small
-            screen (where the sidebar becomes a top bar), stacked from lg. */}
-        <div className="px-3 py-3 lg:py-4 border-t border-white/10 flex items-center gap-2 lg:flex-col lg:items-stretch lg:gap-1">
+        {/* Profile directly above Sign out — on the brand row on a small
+            screen (avatar and icons only), stacked from lg. */}
+        <div className="shrink-0 lg:shrink pr-2 lg:px-3 lg:py-4 lg:border-t border-white/10 flex items-center gap-0.5 lg:flex-col lg:items-stretch lg:gap-1">
           {userEmail && roleLabel && (
-            <div className="flex-1 min-w-0 lg:flex-none">
+            <div className="shrink-0 min-w-0 lg:flex-none">
               <ProfileChip
                 email={userEmail}
                 roleLabel={roleLabel}
@@ -175,10 +185,10 @@ export default function DashboardShell({
             <form action={logout} className="flex-1 min-w-0">
               <button
                 type="submit"
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm whitespace-nowrap text-white/70 transition-colors duration-150 hover:bg-white/10 hover:text-white"
+                className="w-full flex items-center gap-2.5 px-2.5 lg:px-3 py-2 rounded-lg text-sm whitespace-nowrap text-white/70 transition-colors duration-150 hover:bg-white/10 hover:text-white"
               >
                 <LogOut className="h-4 w-4" strokeWidth={1.8} />
-                Sign out
+                <span className="sr-only lg:not-sr-only lg:whitespace-nowrap">Sign out</span>
               </button>
             </form>
           </div>

@@ -22,7 +22,8 @@ const VARIANT_STYLES: Record<ButtonVariant, string> = {
 };
 
 const SIZE_STYLES: Record<ButtonSize, string> = {
-  sm: "text-xs px-3 py-1.5",
+  // max-lg: a comfortable phone tap height; desktop unchanged.
+  sm: "text-xs px-3 py-1.5 max-lg:min-h-9",
   md: "text-sm px-4 py-2",
 };
 

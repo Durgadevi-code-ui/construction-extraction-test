@@ -416,20 +416,20 @@ function DelegatedWorkItemManager({
         <p className="text-xs text-foreground-secondary mt-0.5">Delegated Admin capability (temporary).</p>
       </div>
 
-      <form onSubmit={handleCreate} className="grid grid-cols-2 gap-2">
+      <form onSubmit={handleCreate} className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <input
           value={lineItemNo}
           onChange={(e) => setLineItemNo(e.target.value)}
           placeholder="Line Item No"
           required
-          className="rounded border border-line px-2 py-1.5 text-sm col-span-1"
+          className="rounded border border-line px-2 py-1.5 text-sm sm:col-span-1"
         />
         <input
           value={descriptionOfWork}
           onChange={(e) => setDescriptionOfWork(e.target.value)}
           placeholder="Description of Work"
           required
-          className="rounded border border-line px-2 py-1.5 text-sm col-span-1"
+          className="rounded border border-line px-2 py-1.5 text-sm sm:col-span-1"
         />
         <input
           type="number"
@@ -449,16 +449,16 @@ function DelegatedWorkItemManager({
           value={scheduledValue}
           onChange={(e) => setScheduledValue(e.target.value)}
           placeholder="Scheduled Value"
-          className="rounded border border-line px-2 py-1.5 text-sm col-span-2"
+          className="rounded border border-line px-2 py-1.5 text-sm sm:col-span-2"
         />
         <button
           type="submit"
           disabled={submitting}
-          className="col-span-2 rounded bg-brand text-white text-sm font-medium px-4 py-1.5 disabled:opacity-50"
+          className="sm:col-span-2 rounded bg-brand text-white text-sm font-medium px-4 py-1.5 disabled:opacity-50"
         >
           {submitting ? "Creating…" : "Create Work Item"}
         </button>
-        {error && <p className="col-span-2 text-sm text-error">{error}</p>}
+        {error && <p className="sm:col-span-2 text-sm text-error">{error}</p>}
       </form>
 
       <div>

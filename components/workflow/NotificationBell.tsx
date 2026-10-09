@@ -313,7 +313,7 @@ export default function NotificationBell({
         <div
           role="status"
           aria-live="polite"
-          className="fixed right-4 top-4 z-50 w-80 max-w-[calc(100vw-2rem)] animate-dropdown-in rounded-lg border border-warning-border bg-white p-3 shadow-lg"
+          className="fixed right-4 top-4 max-lg:top-[calc(6.75rem+env(safe-area-inset-top))] z-50 w-80 max-w-[calc(100vw-2rem)] animate-dropdown-in rounded-lg border border-warning-border bg-white p-3 shadow-lg"
         >
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
@@ -332,7 +332,7 @@ export default function NotificationBell({
               type="button"
               onClick={() => setToast(null)}
               aria-label="Dismiss"
-              className="rounded p-0.5 text-foreground-muted hover:bg-surface-hover hover:text-foreground"
+              className="rounded p-0.5 max-lg:-m-2 max-lg:p-2.5 text-foreground-muted hover:bg-surface-hover hover:text-foreground"
             >
               <X className="h-4 w-4" strokeWidth={2} />
             </button>
@@ -345,7 +345,7 @@ export default function NotificationBell({
                 setToast(null);
                 handleClick(item);
               }}
-              className="mt-2 text-xs font-semibold text-brand hover:underline"
+              className="mt-2 max-lg:mt-0.5 max-lg:py-2 text-xs font-semibold text-brand hover:underline"
             >
               {toast.item.actionLabel ?? "Open"} →
             </button>
@@ -390,7 +390,7 @@ export default function NotificationBell({
             )}
           </div>
 
-          <div className="max-h-96 overflow-y-auto">
+          <div className="max-h-[min(24rem,calc(100dvh-9rem))] lg:max-h-96 overflow-y-auto max-lg:overscroll-contain">
             {loading ? (
               <div className="p-3">
                 <SkeletonRows count={3} rowHeight="h-16" />

@@ -187,7 +187,7 @@ export default function AdminSetupPanel({
         <div className="flex items-center gap-1.5">
           <Link
             href="/workflow/dashboard"
-            className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground-secondary border border-line transition-colors duration-150 hover:bg-surface-hover hover:text-foreground whitespace-nowrap"
+            className="rounded-lg px-2.5 py-2 lg:py-1.5 text-xs font-medium text-foreground-secondary border border-line transition-colors duration-150 hover:bg-surface-hover hover:text-foreground whitespace-nowrap"
           >
             Dashboard
           </Link>
@@ -195,7 +195,7 @@ export default function AdminSetupPanel({
             <Link
               href="/dev/extraction-test"
               title="Developer/testing tool for the extraction pipeline"
-              className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground-secondary border border-line transition-colors duration-150 hover:bg-surface-hover hover:text-foreground whitespace-nowrap"
+              className="rounded-lg px-2.5 py-2 lg:py-1.5 text-xs font-medium text-foreground-secondary border border-line transition-colors duration-150 hover:bg-surface-hover hover:text-foreground whitespace-nowrap"
             >
               Extraction Test (Dev)
             </Link>
@@ -775,7 +775,7 @@ function WorkItemsTab({
           unitOfMeasure={unitOfMeasure}
           onUnitOfMeasureChange={setUnitOfMeasure}
         />
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field
             label="Scheduled Value"
             value={scheduledValue}
@@ -963,7 +963,7 @@ function WorkItemRow({
             unitOfMeasure={unitOfMeasure}
             onUnitOfMeasureChange={setUnitOfMeasure}
           />
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field
               label="Scheduled Value"
               value={scheduledValue}
@@ -1080,7 +1080,7 @@ function UsersTab({
           </p>
         )}
         <Field label="Email" value={email} onChange={setEmail} required type="email" />
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="First Name" value={firstName} onChange={setFirstName} />
           <Field label="Last Name" value={lastName} onChange={setLastName} />
         </div>
@@ -1370,7 +1370,7 @@ function QuantityUomFields({
       <label className="block text-sm font-medium text-foreground-secondary mb-1">
         Planned Quantity &amp; Unit of Measure
       </label>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Input
           type="number"
           step="any"

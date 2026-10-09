@@ -215,7 +215,7 @@ export default function VoiceUpload({
               accept="audio/*"
               disabled={locked}
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              className="block text-sm text-foreground-muted"
+              className="block max-w-full min-w-0 text-sm text-foreground-muted"
             />
           </>
         )}

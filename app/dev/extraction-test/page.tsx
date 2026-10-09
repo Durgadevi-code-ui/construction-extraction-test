@@ -45,7 +45,7 @@ export default function Home() {
           </div>
         )}
 
-        <div className="grid gap-6">
+        <div className="grid grid-cols-1 gap-6">
           <HandwritingUpload
             locked={isLocked(lockState, "HANDWRITTEN")}
             onResult={(status) => handleResult("HANDWRITTEN", status)}

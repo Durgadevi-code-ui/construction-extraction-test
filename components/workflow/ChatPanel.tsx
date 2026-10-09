@@ -388,7 +388,7 @@ export default function ChatPanel({
           <button
             type="button"
             onClick={() => setShowThreadOnMobile(false)}
-            className="lg:hidden -ml-1 p-1 text-foreground-secondary"
+            className="lg:hidden -ml-2.5 p-2.5 rounded-lg text-foreground-secondary hover:bg-surface-hover"
             aria-label="Back to conversations"
           >
             <ArrowLeft className="h-4 w-4" strokeWidth={2} />
