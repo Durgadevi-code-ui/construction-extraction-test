@@ -108,9 +108,12 @@ export default function DashboardShell({
     // the left and Profile/Theme/Sign out on the right in one compact
     // row, with the same horizontal nav strip under it — so navigation
     // stays reachable on long pages. Every lg: class restores the
-    // desktop sidebar exactly.
+    // desktop sidebar exactly. On a phone (below sm) the same bar is
+    // moved to the bottom instead (order-last + sticky bottom-0): it still
+    // takes its own space at the end of the page flow, so the last content
+    // always scrolls clear above it.
     <div className="flex flex-col lg:flex-row bg-background min-h-screen">
-      <aside className="sticky top-0 z-40 lg:static lg:z-auto lg:w-60 shrink-0 bg-gradient-to-b from-navy-deep via-navy to-brand text-white flex flex-row flex-wrap items-center lg:flex-col lg:flex-nowrap lg:items-stretch pt-[env(safe-area-inset-top)] lg:pt-0">
+      <aside className="sticky top-0 max-sm:top-auto max-sm:bottom-0 max-sm:order-last z-40 lg:static lg:z-auto lg:w-60 shrink-0 bg-gradient-to-b from-navy-deep via-navy to-brand text-white flex flex-row flex-wrap items-center lg:flex-col lg:flex-nowrap lg:items-stretch pt-[env(safe-area-inset-top)] max-sm:pt-0 max-sm:pb-[env(safe-area-inset-bottom)] lg:pt-0">
         <div className="flex-1 min-w-0 lg:flex-initial pl-4 pr-1 py-2 lg:px-5 lg:py-5 lg:border-b border-white/10 flex items-center gap-2.5">
           {logoAvailable && (
             // eslint-disable-next-line @next/next/no-img-element -- small static brand mark, matches TopNav's own use of the same asset
@@ -195,7 +198,7 @@ export default function DashboardShell({
         </div>
       </aside>
 
-      <div className="flex-1 min-w-0 p-5 sm:p-6 space-y-5">
+      <div className="flex-1 min-w-0 p-5 max-sm:pt-[calc(1.25rem+env(safe-area-inset-top))] sm:p-6 space-y-5">
         {/* Page header: heading/subheading on the left, and one
             right-aligned toolbar — the Project control (+ Department where
             the page has one, both via `actions`) followed by the page's
