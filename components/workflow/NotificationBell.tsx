@@ -374,7 +374,7 @@ export default function NotificationBell({
         <div
           className={`z-30 animate-dropdown-in rounded-lg border border-line bg-surface text-foreground shadow-lg ${
             placement === "sidebar"
-              ? "fixed left-4 right-4 top-16 max-sm:top-auto max-sm:bottom-[calc(6.5rem+env(safe-area-inset-bottom))] sm:absolute sm:left-0 sm:right-auto sm:top-auto sm:mt-2 sm:w-80"
+              ? "fixed left-4 right-4 top-16 sm:absolute sm:left-0 sm:right-auto sm:top-auto sm:mt-2 sm:w-80"
               : "absolute right-0 mt-2 w-80 max-w-[90vw]"
           }`}
         >

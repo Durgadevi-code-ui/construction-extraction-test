@@ -252,6 +252,7 @@ export default function ContractorTabs({
       onTabChange={changeTab}
       heading={HEADINGS[tab]}
       subheading={`Current Project: ${projectName} · ${departmentName}${projectLocation ? ` · ${projectLocation}` : ""}`}
+      projectName={projectName}
       userId={userId}
       userEmail={userEmail}
       roleLabel="Contractor"

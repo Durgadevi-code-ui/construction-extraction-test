@@ -351,6 +351,7 @@ export default function WorkerTabs({
           {projectLocation ? ` · ${projectLocation}` : ""}
         </>
       }
+      projectName={projectName}
       userId={workerId}
       userEmail={userEmail}
       roleLabel="Worker"

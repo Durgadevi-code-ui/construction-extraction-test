@@ -57,6 +57,10 @@ type Props = {
    * same place on every role's page. The caller owns the value and
    * whatever list it filters; omitted on tabs with nothing to search. */
   search?: { value: string; onChange: (value: string) => void; placeholder: string; label: string };
+  /** The current project's name — shown on a phone in the top bar under
+   * "Agentic Atoms" (in place of the tagline). Omit when the page has no
+   * current project (Admin). */
+  projectName?: string;
   children: React.ReactNode;
 };
 
@@ -86,6 +90,7 @@ export default function DashboardShell({
   showNotificationToasts = false,
   actions,
   search,
+  projectName,
   children,
 }: Props) {
   const [logoAvailable, setLogoAvailable] = useState(true);
@@ -96,6 +101,11 @@ export default function DashboardShell({
   // Below lg the nav is a horizontal strip — keep the active tab visible.
   const navRef = useRef<HTMLElement>(null);
   useScrollActiveIntoView(navRef, activeTab);
+  const navTabs = tabs.filter((t) => t.key !== profileTabKey);
+  // Phone bottom bar: up to 5 tabs share its width; with more, each is a
+  // fifth of it (wider only for a longer word) and the bar scrolls
+  // sideways to the rest.
+  const navScrolls = navTabs.length > 5;
 
   return (
     // No rounded corners/border/shadow/page padding around this shell —
@@ -108,12 +118,10 @@ export default function DashboardShell({
     // the left and Profile/Theme/Sign out on the right in one compact
     // row, with the same horizontal nav strip under it — so navigation
     // stays reachable on long pages. Every lg: class restores the
-    // desktop sidebar exactly. On a phone (below sm) the same bar is
-    // moved to the bottom instead (order-last + sticky bottom-0): it still
-    // takes its own space at the end of the page flow, so the last content
-    // always scrolls clear above it.
+    // desktop sidebar exactly. On a phone (below sm) only the brand/controls
+    // row stays in that top bar; the nav strip becomes a bottom bar.
     <div className="flex flex-col lg:flex-row bg-background min-h-screen">
-      <aside className="sticky top-0 max-sm:top-auto max-sm:bottom-0 max-sm:order-last z-40 lg:static lg:z-auto lg:w-60 shrink-0 bg-gradient-to-b from-navy-deep via-navy to-brand text-white flex flex-row flex-wrap items-center lg:flex-col lg:flex-nowrap lg:items-stretch pt-[env(safe-area-inset-top)] max-sm:pt-0 max-sm:pb-[env(safe-area-inset-bottom)] lg:pt-0">
+      <aside className="sticky top-0 z-40 lg:static lg:z-auto lg:w-60 shrink-0 bg-gradient-to-b from-navy-deep via-navy to-brand text-white flex flex-row flex-wrap items-center lg:flex-col lg:flex-nowrap lg:items-stretch pt-[env(safe-area-inset-top)] lg:pt-0">
         <div className="flex-1 min-w-0 lg:flex-initial pl-4 pr-1 py-2 lg:px-5 lg:py-5 lg:border-b border-white/10 flex items-center gap-2.5">
           {logoAvailable && (
             // eslint-disable-next-line @next/next/no-img-element -- small static brand mark, matches TopNav's own use of the same asset
@@ -126,7 +134,14 @@ export default function DashboardShell({
           )}
           <div className="min-w-0 flex-1">
             <p className="text-sm font-bold tracking-tight truncate">Agentic Atoms</p>
-            <p className="text-[11px] text-white/60 truncate">Construction Automation</p>
+            <p className="text-[11px] text-white/60 truncate">
+              <span className={projectName ? "max-sm:hidden" : undefined}>Construction Automation</span>
+              {projectName && (
+                <span className="sm:hidden" title={`Current Project: ${projectName}`}>
+                  {projectName}
+                </span>
+              )}
+            </p>
           </div>
           {userId && (
             <div className="shrink-0">
@@ -136,29 +151,33 @@ export default function DashboardShell({
         </div>
 
         {/* Below lg: a full-width second row (order-last), scrolling
-            sideways when the tabs don't fit. */}
+            sideways when the tabs don't fit. On a phone (below sm) it is
+            instead a bar fixed to the bottom of the screen, icon over
+            label (the content keeps room for it with bottom padding). */}
         <nav
           ref={navRef}
-          className="basis-full order-last lg:order-none lg:flex-1 px-3 pb-2 lg:py-4 space-y-1 overflow-x-auto lg:overflow-visible"
+          className="basis-full order-last lg:order-none lg:flex-1 px-3 pb-2 lg:py-4 space-y-1 overflow-x-auto lg:overflow-visible max-sm:flex max-sm:fixed max-sm:inset-x-0 max-sm:bottom-0 max-sm:z-40 max-sm:px-1 max-sm:pt-1 max-sm:pb-[calc(0.25rem+env(safe-area-inset-bottom))] max-sm:bg-navy-deep max-sm:border-t max-sm:border-white/10"
         >
-          <div className="flex lg:flex-col gap-1">
-            {tabs.filter((t) => t.key !== profileTabKey).map(({ key, label, icon: Icon, badge, badgeClassName }) => (
+          <div className="flex lg:flex-col gap-1 max-sm:contents">
+            {navTabs.map(({ key, label, icon: Icon, badge, badgeClassName }) => (
               <button
                 key={key}
                 type="button"
                 onClick={() => onTabChange(key)}
                 aria-current={activeTab === key ? "page" : undefined}
-                className={`flex items-center gap-2.5 px-3 py-2 lg:py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors duration-150 ${
+                className={`flex items-center gap-2.5 px-3 py-2 lg:py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors duration-150 max-sm:relative max-sm:flex-col max-sm:gap-0.5 max-sm:px-0.5 max-sm:py-1.5 max-sm:text-[10px] max-sm:leading-tight max-sm:text-center max-sm:whitespace-normal ${
+                  navScrolls ? "max-sm:basis-1/5 max-sm:shrink-0" : "max-sm:flex-1 max-sm:basis-0"
+                } ${
                   activeTab === key
                     ? "bg-brand text-white shadow-sm"
                     : "text-white/70 hover:bg-white/10 hover:text-white"
                 }`}
               >
-                <Icon className="h-4 w-4 shrink-0" strokeWidth={1.8} />
+                <Icon className="h-4 w-4 shrink-0 max-sm:h-5 max-sm:w-5" strokeWidth={1.8} />
                 {label}
                 {!!badge && badge > 0 && (
                   <span
-                    className={`ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-semibold leading-none text-white tabular-nums ${badgeClassName ?? "bg-success"}`}
+                    className={`ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-semibold leading-none text-white tabular-nums max-sm:absolute max-sm:top-0.5 max-sm:left-1/2 max-sm:ml-1.5 ${badgeClassName ?? "bg-success"}`}
                     aria-label={`${badge} unread`}
                   >
                     {badge > 99 ? "99+" : badge}
@@ -198,7 +217,7 @@ export default function DashboardShell({
         </div>
       </aside>
 
-      <div className="flex-1 min-w-0 p-5 max-sm:pt-[calc(1.25rem+env(safe-area-inset-top))] sm:p-6 space-y-5">
+      <div className="flex-1 min-w-0 p-5 max-sm:pb-[calc(5.75rem+env(safe-area-inset-bottom))] sm:p-6 space-y-5">
         {/* Page header: heading/subheading on the left, and one
             right-aligned toolbar — the Project control (+ Department where
             the page has one, both via `actions`) followed by the page's
