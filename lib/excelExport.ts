@@ -1,6 +1,7 @@
 import "server-only";
 import * as XLSX from "xlsx";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { readWorkbookGuarded } from "./safeWorkbookRead";
 import { getUserContext, isAdminUser, CONTRACTOR_ROLES } from "./authContext";
 import { getActiveDelegationsForUser } from "./delegation";
 import { listDepartments, normalizeLineItemNo } from "./admin";
@@ -415,7 +416,7 @@ export function refillOriginalWorkbook(
    * them unless the caller chose fewer (see buildProjectExcelExport). */
   latestColumns: LatestColumn[] = LATEST_COLUMNS
 ): XLSX.WorkBook {
-  const wb = XLSX.read(bytes, { type: "array", cellFormula: true, cellNF: true, cellStyles: true });
+  const wb = readWorkbookGuarded(bytes, { type: "array", cellFormula: true, cellNF: true, cellStyles: true });
   // The importer's own row positions (sheet + 1-based row within the
   // sheet's used range) — so every row here is the row it imported.
   const parsedByPosition = new Map(

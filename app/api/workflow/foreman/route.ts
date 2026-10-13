@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import {
   foremanAddComment,
@@ -7,6 +8,7 @@ import {
   listForemanQueue,
 } from "@/lib/workflow";
 import { getCurrentUser } from "@/lib/session";
+import { MAX_COMMENT_LENGTH, MAX_DESCRIPTION_LENGTH, tooLongError } from "@/lib/inputLimits";
 
 export const runtime = "nodejs";
 
@@ -32,7 +34,7 @@ export async function GET() {
   } catch (err) {
     console.error("Failed to load foreman queue:", err);
     const message = err instanceof Error ? err.message : "Failed to load queue.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }
 
@@ -48,6 +50,13 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const action: unknown = body?.action;
+
+    const tooLong =
+      tooLongError(body?.description, MAX_DESCRIPTION_LENGTH, "Description") ??
+      tooLongError(body?.comment, MAX_COMMENT_LENGTH, "Comment");
+    if (tooLong) {
+      return NextResponse.json({ error: tooLong }, { status: 400 });
+    }
 
     if (action === "submit") {
       const submissionId: unknown = body?.submissionId;
@@ -93,6 +102,6 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error("Foreman action failed:", err);
     const message = err instanceof Error ? err.message : "Action failed.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }

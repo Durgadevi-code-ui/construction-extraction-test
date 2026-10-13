@@ -32,6 +32,10 @@ export type ChatContact = {
 
 const RECENT_LIMIT = 200;
 const MAX_MESSAGE_LENGTH = 2000;
+/** A users.user_id. listDirectMessages interpolates the peer id into a
+ * PostgREST `or` filter string, so anything else (commas, parentheses)
+ * could rewrite that filter — it must be rejected, never escaped. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Which project a caller's chat activity is scoped to, and what role
@@ -257,6 +261,9 @@ export async function listDirectMessages(
   peerUserId: string,
   requestedProjectId?: string | null
 ): Promise<ChatMessageRecord[]> {
+  if (!UUID_PATTERN.test(peerUserId)) {
+    throw new Error("Invalid conversation.");
+  }
   const { projectId } = await resolveSenderContext(supabase, userId, requestedProjectId);
 
   const { data, error } = await supabase

@@ -1,7 +1,11 @@
 "use server";
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabaseServer";
+import { safeNextPath } from "@/lib/safeRedirect";
+import { getSupabaseServiceRoleClient } from "@/lib/supabaseAdmin";
+import { RATE_LIMITS, checkRateLimit, clientIp, rateLimitMessage } from "@/lib/rateLimit";
 
 export type AuthFormState = { error?: string; message?: string } | undefined;
 
@@ -24,7 +28,7 @@ export async function login(
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
   const next = String(formData.get("next") ?? "").trim();
-  const redirectTo = next.startsWith("/") ? next : "/workflow";
+  const redirectTo = safeNextPath(next, "/workflow");
 
   // Format validation only — never used to tell an attacker whether an
   // email is registered (see the generic "Invalid email or password"
@@ -35,6 +39,18 @@ export async function login(
   }
   if (!password) {
     return { error: "Password is required." };
+  }
+
+  // Password guessing: capped per client IP and per target email before
+  // Supabase Auth is contacted (lib/rateLimit.ts). Supabase's own auth
+  // limits see this server's IP, not the user's, so they can't do this.
+  const ip = clientIp(await headers());
+  for (const [rule, identifier] of [
+    [RATE_LIMITS.loginPerIp, ip],
+    [RATE_LIMITS.loginPerEmail, email.toLowerCase()],
+  ] as const) {
+    const limit = await checkRateLimit(rule, identifier);
+    if (!limit.allowed) return { error: rateLimitMessage(limit) };
   }
 
   const supabase = await createSupabaseServerClient();
@@ -61,7 +77,7 @@ export async function login(
   // safe onboarding, not silent privilege). Sign back out immediately
   // rather than leaving an authenticated-but-unusable session sitting
   // around, which would just bounce confusingly between pages.
-  const { data: profile } = await supabase
+  const { data: profile } = await getSupabaseServiceRoleClient()
     .from("users")
     .select("user_id")
     .eq("auth_user_id", data.user.id)

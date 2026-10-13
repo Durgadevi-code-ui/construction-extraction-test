@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { getCurrentUser } from "@/lib/session";
+import { RATE_LIMITS, rateLimitResponse } from "@/lib/rateLimit";
 import { assertAdminOrDelegated } from "@/lib/delegation";
 import { parseProjectWorkbook, distinctDepartments } from "@/lib/excelImport";
 import { upsertWorkItemFromImport } from "@/lib/admin";
 import { saveProjectImportFile } from "@/lib/projectDocuments";
+import { hasWorkbookExtension, looksLikeWorkbook } from "@/lib/fileSignature";
 
 export const runtime = "nodejs";
 
@@ -33,6 +36,8 @@ export async function POST(request: NextRequest) {
   if (!currentUser) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  const limited = await rateLimitResponse(RATE_LIMITS.workbookImport, currentUser.userId);
+  if (limited) return limited;
 
   const supabase = getSupabaseClient();
   const actorUserId = currentUser.userId;
@@ -63,6 +68,14 @@ export async function POST(request: NextRequest) {
     });
 
     const fileBytes = await file.arrayBuffer();
+    // Same file types the picker offers, checked by name AND content
+    // (never by the browser-supplied MIME type) before the parser runs.
+    if (!hasWorkbookExtension(file.name) || !looksLikeWorkbook(new Uint8Array(fileBytes))) {
+      return NextResponse.json(
+        { error: "Could not read this file. Upload a valid .xlsx/.xls/.csv workbook." },
+        { status: 400 }
+      );
+    }
     let parsed;
     try {
       parsed = parseProjectWorkbook(fileBytes);
@@ -156,6 +169,6 @@ export async function POST(request: NextRequest) {
     // authorization failure (assertAdminOrDelegated, or getUserContext
     // for a caller with no role at all) reads as 403, not a generic 500.
     const unauthorized = message.includes("not authorized") || message.includes("No active project/department assignment");
-    return NextResponse.json({ error: message }, { status: unauthorized ? 403 : 500 });
+    return jsonError(message, unauthorized ? 403 : 500);
   }
 }

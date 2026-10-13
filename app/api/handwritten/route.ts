@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient, STORAGE_BUCKETS } from "@/lib/supabase";
 import { runOCR } from "@/lib/ocr";
 import { normalizeText, validateHandwritten } from "@/lib/validation";
@@ -12,7 +13,11 @@ import {
   type WorkItemAmbiguityResult,
 } from "@/lib/construction";
 import { getCurrentUser } from "@/lib/session";
+import { MAX_DESCRIPTION_LENGTH, tooLongError } from "@/lib/inputLimits";
+import { RATE_LIMITS, rateLimitResponse } from "@/lib/rateLimit";
+import { createReviewToken } from "@/lib/submissionReviewToken";
 import { resolveTaskForWorker } from "@/lib/workflow";
+import { detectImageKind } from "@/lib/fileSignature";
 
 export const runtime = "nodejs";
 
@@ -26,6 +31,17 @@ const ALLOWED_TYPES = [
 const MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
 
 export async function POST(request: NextRequest) {
+  // Same session requirement as every other workflow route: this one
+  // runs paid OCR and writes storage + extraction_submissions, so it must
+  // never be reachable anonymously.
+  const sessionUser = await getCurrentUser();
+  if (!sessionUser) {
+    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  // Per-user cap on the paid extraction pipeline (lib/rateLimit.ts).
+  const limited = await rateLimitResponse(RATE_LIMITS.extraction, sessionUser.userId);
+  if (limited) return limited;
+
   const supabase = getSupabaseClient();
 
   try {
@@ -50,6 +66,11 @@ export async function POST(request: NextRequest) {
     // ------------------------------------------------------------
     // 1. Validate image
     // ------------------------------------------------------------
+
+    const descriptionError = tooLongError(selectedWorkItemDescription, MAX_DESCRIPTION_LENGTH, "Work item description");
+    if (descriptionError) {
+      return NextResponse.json({ error: descriptionError }, { status: 400 });
+    }
 
     if (!file || !(file instanceof File)) {
       return NextResponse.json(
@@ -78,6 +99,15 @@ export async function POST(request: NextRequest) {
 
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
+
+    // The declared type above is browser-supplied; the bytes must really
+    // be one of the allowed image formats before OCR or storage.
+    if (!detectImageKind(buffer)) {
+      return NextResponse.json(
+        { error: "This file is not a valid PNG, JPEG, WebP or HEIC image." },
+        { status: 400 }
+      );
+    }
 
     // ------------------------------------------------------------
     // 3. Run OCR
@@ -227,10 +257,7 @@ export async function POST(request: NextRequest) {
 
     if (uploadError) {
       console.error("Storage upload failed:", uploadError);
-      return NextResponse.json(
-        { error: `Storage upload failed: ${uploadError.message}` },
-        { status: 500 }
-      );
+      return jsonError("Failed to upload the file: " + uploadError.message, 500);
     }
 
     // ------------------------------------------------------------
@@ -274,14 +301,9 @@ export async function POST(request: NextRequest) {
 
     if (insertError || !submission) {
       console.error("Failed to save extraction_submissions:", insertError);
-      return NextResponse.json(
-        {
-          error: `Failed to save submission: ${
-            insertError?.message ?? "unknown error"
-          }`,
-        },
-        { status: 500 }
-      );
+      // No row points at the file just stored — don't leave it behind.
+      await supabase.storage.from(STORAGE_BUCKETS.HANDWRITTEN).remove([path]).catch(() => undefined);
+      return jsonError(`Failed to save submission: ${insertError?.message ?? "unknown error"}`, 500);
     }
 
     // ------------------------------------------------------------
@@ -294,6 +316,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       submissionId: submission.extraction_submission_id,
+      // Required by /api/user-validation to confirm this submission
+      // (only this signed-in user can — lib/submissionReviewToken.ts).
+      reviewToken: createReviewToken(submission.extraction_submission_id, sessionUser.userId),
       rawText,
       normalizedText: normalized,
       confidence,
@@ -312,6 +337,6 @@ export async function POST(request: NextRequest) {
 
     const message = err instanceof Error ? err.message : "Processing failed.";
 
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }

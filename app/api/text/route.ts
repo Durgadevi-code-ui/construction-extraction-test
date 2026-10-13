@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { normalizeText, validateTypedText } from "@/lib/validation";
 import {
@@ -11,11 +12,25 @@ import {
 } from "@/lib/construction";
 
 import { getCurrentUser } from "@/lib/session";
+import { RATE_LIMITS, rateLimitResponse } from "@/lib/rateLimit";
+import { createReviewToken } from "@/lib/submissionReviewToken";
 import { resolveTaskForWorker } from "@/lib/workflow";
+import { MAX_DESCRIPTION_LENGTH, tooLongError } from "@/lib/inputLimits";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
+  // Same session requirement as every other workflow route: this one
+  // writes extraction_submissions, so it must never be reachable
+  // anonymously.
+  const sessionUser = await getCurrentUser();
+  if (!sessionUser) {
+    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  // Per-user cap on the paid extraction pipeline (lib/rateLimit.ts).
+  const limited = await rateLimitResponse(RATE_LIMITS.extraction, sessionUser.userId);
+  if (limited) return limited;
+
   const supabase = getSupabaseClient();
 
   try {
@@ -37,6 +52,12 @@ export async function POST(request: NextRequest) {
         { error: "No text provided." },
         { status: 400 }
       );
+    }
+    const textError =
+      tooLongError(originalText, MAX_DESCRIPTION_LENGTH, "Text") ??
+      tooLongError(selectedWorkItemDescription, MAX_DESCRIPTION_LENGTH, "Work item description");
+    if (textError) {
+      return NextResponse.json({ error: textError }, { status: 400 });
     }
 
     // ------------------------------------------------------------
@@ -240,14 +261,7 @@ export async function POST(request: NextRequest) {
 
     if (insertError || !submission) {
       console.error("Failed to save extraction_submissions:", insertError);
-      return NextResponse.json(
-        {
-          error: `Failed to save submission: ${
-            insertError?.message ?? "unknown error"
-          }`,
-        },
-        { status: 500 }
-      );
+      return jsonError(`Failed to save submission: ${insertError?.message ?? "unknown error"}`, 500);
     }
 
     // ------------------------------------------------------------
@@ -256,6 +270,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       submissionId: submission.extraction_submission_id,
+      // Required by /api/user-validation to confirm this submission
+      // (only this signed-in user can — lib/submissionReviewToken.ts).
+      reviewToken: createReviewToken(submission.extraction_submission_id, sessionUser.userId),
       rawText: originalText,
       normalizedText: normalized,
       confidence: null,
@@ -279,6 +296,6 @@ export async function POST(request: NextRequest) {
 
     const message = err instanceof Error ? err.message : "Processing failed.";
 
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }

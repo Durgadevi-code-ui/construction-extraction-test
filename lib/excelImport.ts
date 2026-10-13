@@ -1,6 +1,7 @@
 import "server-only";
 import * as XLSX from "xlsx";
 import { EXPORT_LATEST_HEADERS } from "./excelExportColumns";
+import { readWorkbookGuarded } from "./safeWorkbookRead";
 
 /**
  * Reusable project-file ingestion layer (see AGENTS.md master prompt
@@ -594,7 +595,7 @@ function toDateStringOrNull(value: unknown): string | null {
  * SheetJS input shape (if any) genuinely does throw.
  */
 export function parseProjectWorkbook(buffer: ArrayBuffer): ParseResult {
-  const workbook = XLSX.read(buffer, { type: "array", cellDates: false });
+  const workbook = readWorkbookGuarded(buffer, { type: "array", cellDates: false });
 
   const rows: ParsedWorkItemRow[] = [];
   const issues: ParseIssue[] = [];

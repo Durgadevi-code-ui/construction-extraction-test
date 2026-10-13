@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseServiceRoleClient } from "@/lib/supabaseAdmin";
 import { getCurrentUser } from "@/lib/session";
 import {
@@ -27,7 +28,8 @@ function errorStatus(message: string): number {
     message.includes("No active project/department assignment") ||
     message.includes("cannot be empty") ||
     message.includes("too long") ||
-    message.includes("your own project")
+    message.includes("your own project") ||
+    message.includes("Invalid conversation")
     ? 400
     : 500;
 }
@@ -66,7 +68,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ messages });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load messages.";
-    return NextResponse.json({ error: message }, { status: errorStatus(message) });
+    return jsonError(message, errorStatus(message));
   }
 }
 
@@ -93,6 +95,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to send message.";
-    return NextResponse.json({ error: message }, { status: errorStatus(message) });
+    return jsonError(message, errorStatus(message));
   }
 }

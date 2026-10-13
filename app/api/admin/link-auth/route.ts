@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { getSupabaseServiceRoleClient } from "@/lib/supabaseAdmin";
 import { getUserLinkContext, getDepartmentProjectId, linkUserToAuthAccount } from "@/lib/admin";
@@ -73,6 +74,6 @@ export async function POST(request: NextRequest) {
     // ever logged (the password itself never appears in any error path
     // above).
     const message = err instanceof Error ? err.message : "Failed to link login.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }

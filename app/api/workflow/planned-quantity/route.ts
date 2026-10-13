@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { updatePlannedQuantity } from "@/lib/workflow";
 import { getCurrentUser } from "@/lib/session";
@@ -55,6 +56,6 @@ export async function PATCH(request: NextRequest) {
   } catch (err) {
     console.error("Failed to update planned quantity:", err);
     const message = err instanceof Error ? err.message : "Failed to update planned quantity.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }

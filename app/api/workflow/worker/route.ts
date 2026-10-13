@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { getWorkerDashboard, submitWorkerProgress } from "@/lib/workflow";
 import { getCurrentUser } from "@/lib/session";
+import { MAX_DESCRIPTION_LENGTH, tooLongError } from "@/lib/inputLimits";
 
 export const runtime = "nodejs";
 
@@ -20,7 +22,7 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     console.error("Failed to load worker dashboard:", err);
     const message = err instanceof Error ? err.message : "Failed to load dashboard.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }
 
@@ -79,6 +81,10 @@ export async function POST(request: NextRequest) {
     if (typeof description !== "string" || !description.trim()) {
       return NextResponse.json({ error: "description is required." }, { status: 400 });
     }
+    const descriptionError = tooLongError(description, MAX_DESCRIPTION_LENGTH, "Description");
+    if (descriptionError) {
+      return NextResponse.json({ error: descriptionError }, { status: 400 });
+    }
 
     await submitWorkerProgress(supabase, {
       workerId: currentUser.userId,
@@ -93,6 +99,6 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error("Failed to submit progress:", err);
     const message = err instanceof Error ? err.message : "Failed to submit progress.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }

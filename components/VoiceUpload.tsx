@@ -63,6 +63,8 @@ export default function VoiceUpload({
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
   const [submissionId, setSubmissionId] = useState<string | null>(null);
+  // Issued with submissionId; /api/user-validation requires it.
+  const [reviewToken, setReviewToken] = useState<string | null>(null);
   const [relevance, setRelevance] = useState<RelevanceCheckResult | undefined>(undefined);
   const [userValidation, setUserValidation] = useState<"valid" | null>(null);
   const [userValidationBusy, setUserValidationBusy] = useState(false);
@@ -112,6 +114,7 @@ export default function VoiceUpload({
     setError("");
     setUserValidation(null);
     setSubmissionId(null);
+    setReviewToken(null);
     setCandidates(null);
     setConfirmedWorkItem(null);
     setTaskConflict(null);
@@ -150,6 +153,7 @@ export default function VoiceUpload({
       setReason(data.reason);
       setStatus(data.status);
       setSubmissionId(data.submissionId);
+      setReviewToken(typeof data.reviewToken === "string" ? data.reviewToken : null);
       setRelevance(data.relevance);
       if (data.status === "INVALID") {
         onResult("INVALID");
@@ -168,7 +172,7 @@ export default function VoiceUpload({
       const res = await fetch("/api/user-validation", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ submissionId, decision: "valid" }),
+        body: JSON.stringify({ submissionId, reviewToken, decision: "valid" }),
       });
       const data = await res.json();
       if (!res.ok) {

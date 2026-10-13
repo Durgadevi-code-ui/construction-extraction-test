@@ -1,6 +1,7 @@
 import "server-only";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "./supabaseServer";
+import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
 
 /**
  * Server-verified identity for the current request — the "DAL" Next.js
@@ -49,7 +50,10 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 
   if (authError || !authUser) return null;
 
-  const { data: profile, error: profileError } = await supabase
+  // Looked up with the service-role client, keyed on the id getUser()
+  // just verified — so this keeps working once public.users has no
+  // anon/authenticated policy (00000000000022).
+  const { data: profile, error: profileError } = await getSupabaseServiceRoleClient()
     .from("users")
     .select("user_id, user_mail")
     .eq("auth_user_id", authUser.id)

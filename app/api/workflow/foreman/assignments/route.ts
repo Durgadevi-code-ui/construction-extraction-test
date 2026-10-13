@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import {
   assignWorkItemToWorker,
@@ -26,7 +27,7 @@ export async function GET() {
     // Role/scope rejection (assertRole: board is Subcontractor-only) is a
     // 403, not a server error — same mapping as app/api/workflow/dashboard.
     const unauthorized = message.includes("not authorized");
-    return NextResponse.json({ error: message }, { status: unauthorized ? 403 : 500 });
+    return jsonError(message, unauthorized ? 403 : 500);
   }
 }
 
@@ -69,6 +70,6 @@ export async function POST(request: NextRequest) {
     // Caller not allowed to manage this assignment (assertCanManageAssignments)
     // is a 403, not a server error — same mapping as app/api/workflow/dashboard.
     const unauthorized = message.includes("not authorized");
-    return NextResponse.json({ error: message }, { status: unauthorized ? 403 : 500 });
+    return jsonError(message, unauthorized ? 403 : 500);
   }
 }

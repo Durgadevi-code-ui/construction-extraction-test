@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { createWorkItemTask, updateWorkItemTask } from "@/lib/workflow";
 import { getCurrentUser } from "@/lib/session";
@@ -51,7 +52,7 @@ export async function POST(request: NextRequest) {
     console.error("Failed to create task:", err);
     const message = err instanceof Error ? err.message : "Failed to create task.";
     const forbidden = message.includes("is not authorized");
-    return NextResponse.json({ error: message }, { status: forbidden ? 403 : 500 });
+    return jsonError(message, forbidden ? 403 : 500);
   }
 }
 
@@ -99,6 +100,6 @@ export async function PATCH(request: NextRequest) {
     console.error("Failed to update task:", err);
     const message = err instanceof Error ? err.message : "Failed to update task.";
     const forbidden = message.includes("is not authorized");
-    return NextResponse.json({ error: message }, { status: forbidden ? 403 : 500 });
+    return jsonError(message, forbidden ? 403 : 500);
   }
 }

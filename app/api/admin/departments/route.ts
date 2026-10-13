@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { createDepartment, updateDepartment, getDepartmentProjectId } from "@/lib/admin";
 import { assertAdminOrDelegated } from "@/lib/delegation";
@@ -58,7 +59,7 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error("Failed to create department:", err);
     const message = err instanceof Error ? err.message : "Failed to create department.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }
 
@@ -102,6 +103,6 @@ export async function PATCH(request: NextRequest) {
   } catch (err) {
     console.error("Failed to update department:", err);
     const message = err instanceof Error ? err.message : "Failed to update department.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }

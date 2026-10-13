@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { getCurrentUser } from "@/lib/session";
+import { RATE_LIMITS, rateLimitResponse } from "@/lib/rateLimit";
 import { buildProjectExcelExport } from "@/lib/excelExport";
 
 export const runtime = "nodejs";
@@ -20,6 +22,8 @@ export async function GET(request: NextRequest) {
   if (!currentUser) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  const limited = await rateLimitResponse(RATE_LIMITS.workbookExport, currentUser.userId);
+  if (limited) return limited;
 
   const projectId = request.nextUrl.searchParams.get("projectId");
   if (!projectId) {
@@ -61,6 +65,6 @@ export async function GET(request: NextRequest) {
       : message.includes("not authorized") || message.includes("No active project/department assignment")
         ? 403
         : 500;
-    return NextResponse.json({ error: message }, { status });
+    return jsonError(message, status);
   }
 }

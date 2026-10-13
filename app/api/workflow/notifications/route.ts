@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { getCurrentUser } from "@/lib/session";
 import { resolveActorRole } from "@/lib/authContext";
@@ -41,7 +42,7 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     console.error("Failed to load notifications:", err);
     const message = err instanceof Error ? err.message : "Failed to load notifications.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }
 
@@ -81,6 +82,6 @@ export async function POST(request: NextRequest) {
     // crafted cross-user request reads as "forbidden" rather than
     // "server error".
     const forbidden = message === "Notification not found for this user.";
-    return NextResponse.json({ error: message }, { status: forbidden ? 403 : 500 });
+    return jsonError(message, forbidden ? 403 : 500);
   }
 }

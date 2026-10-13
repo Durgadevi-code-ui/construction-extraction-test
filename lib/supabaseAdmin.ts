@@ -25,6 +25,11 @@ import { createClient } from "@supabase/supabase-js";
  * A general Invite/Link UI for real Admin provisioning (use #1's natural
  * next step) is still NOT built.
  *
+ * Since the core-table lockdown, lib/supabase.ts getSupabaseClient() —
+ * the client every other route uses — also returns this client (see that
+ * file and supabase/migrations/00000000000022_lock_core_tables_service_role_only.sql),
+ * so the anon key is now used only for Supabase Auth sessions.
+ *
  * Requires SUPABASE_SERVICE_ROLE_KEY, a server-only secret (unlike
  * NEXT_PUBLIC_SUPABASE_ANON_KEY, which is safe to be public) — add it to
  * .env.local only, never commit it, and never reference it from a "use

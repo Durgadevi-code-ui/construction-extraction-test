@@ -926,6 +926,17 @@ export async function bootstrapAdminUser(
   supabase: SupabaseClient,
   params: { email: string; departmentId: string }
 ): Promise<string> {
+  // Checked FIRST: the endpoint calling this is unauthenticated, so once
+  // an Admin exists it must answer the same for every email — looking
+  // the email up first returned any registered user's user_id to
+  // anyone who asked.
+  const existingAdmins = await listAdminUsers(supabase);
+  if (existingAdmins.length > 0) {
+    throw new Error(
+      "An Admin account already exists. Ask an existing Admin to create additional Admin accounts via Admin Setup → Users."
+    );
+  }
+
   const { data: existing, error: findError } = await supabase
     .from("users")
     .select("user_id")
@@ -934,13 +945,6 @@ export async function bootstrapAdminUser(
 
   if (findError) throw new Error(`Failed to look up user: ${findError.message}`);
   if (existing) return existing.user_id;
-
-  const existingAdmins = await listAdminUsers(supabase);
-  if (existingAdmins.length > 0) {
-    throw new Error(
-      "An Admin account already exists. Ask an existing Admin to create additional Admin accounts via Admin Setup → Users."
-    );
-  }
 
   const { data: created, error: createError } = await supabase
     .from("users")

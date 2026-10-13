@@ -1,10 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { bootstrapAdminUser } from "@/lib/admin";
+import { RATE_LIMITS, clientIp, rateLimitResponse } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
+  // Unauthenticated by necessity (no Admin exists yet), so capped per
+  // client IP (lib/rateLimit.ts).
+  const limited = await rateLimitResponse(RATE_LIMITS.bootstrap, clientIp(request.headers));
+  if (limited) return limited;
+
   const supabase = getSupabaseClient();
 
   try {
@@ -24,6 +31,6 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error("Failed to bootstrap admin user:", err);
     const message = err instanceof Error ? err.message : "Failed to create admin user.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }

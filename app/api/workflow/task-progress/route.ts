@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { updateTaskProgressAsWorker } from "@/lib/workflow";
 import { getCurrentUser } from "@/lib/session";
@@ -61,6 +62,6 @@ export async function POST(request: NextRequest) {
       message.includes("is not assigned") ||
       message.includes("not enabled") ||
       message.includes("does not belong");
-    return NextResponse.json({ error: message }, { status: forbidden ? 403 : 500 });
+    return jsonError(message, forbidden ? 403 : 500);
   }
 }

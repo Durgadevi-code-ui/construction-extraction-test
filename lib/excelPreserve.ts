@@ -1,5 +1,6 @@
 import "server-only";
 import * as XLSX from "xlsx";
+import { readWorkbookGuarded } from "./safeWorkbookRead";
 
 /**
  * Writes the "Download updated Excel" result back INTO the original
@@ -470,7 +471,7 @@ export function patchOriginalWorkbook(
   if (!paths.includes("xl/workbook.xml") || !paths.includes("xl/styles.xml")) return null;
   if (!fullAccess && paths.some((p) => DATA_COPY_PARTS.test(p))) return null;
 
-  const before = XLSX.read(originalBytes, { type: "array", cellFormula: true, cellNF: true, cellStyles: true });
+  const before = readWorkbookGuarded(originalBytes, { type: "array", cellFormula: true, cellNF: true, cellStyles: true });
   const sheets = sheetPaths(zip);
   const styles = styleEditor(readText(zip, "xl/styles.xml")!);
   let removedFormula = false;

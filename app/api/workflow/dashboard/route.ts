@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { getDashboardData, type DashboardFilters } from "@/lib/dashboard";
 import { getCurrentUser } from "@/lib/session";
@@ -54,6 +55,6 @@ export async function GET(request: NextRequest) {
     console.error("Failed to load dashboard:", err);
     const message = err instanceof Error ? err.message : "Failed to load dashboard.";
     const unauthorized = message.includes("not authorized");
-    return NextResponse.json({ error: message }, { status: unauthorized ? 403 : 500 });
+    return jsonError(message, unauthorized ? 403 : 500);
   }
 }

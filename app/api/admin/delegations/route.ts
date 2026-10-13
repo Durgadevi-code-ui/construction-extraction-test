@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import {
   createDelegation,
@@ -35,7 +36,7 @@ export async function GET() {
   } catch (err) {
     console.error("Failed to load delegations:", err);
     const message = err instanceof Error ? err.message : "Failed to load delegations.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }
 
@@ -103,7 +104,7 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error("Failed to create delegation:", err);
     const message = err instanceof Error ? err.message : "Failed to create delegation.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }
 
@@ -128,6 +129,6 @@ export async function DELETE(request: NextRequest) {
   } catch (err) {
     console.error("Failed to revoke delegation:", err);
     const message = err instanceof Error ? err.message : "Failed to revoke delegation.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }

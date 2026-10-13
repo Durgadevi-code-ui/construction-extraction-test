@@ -1,7 +1,9 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseServiceRoleClient } from "@/lib/supabaseAdmin";
 import { getCurrentUser } from "@/lib/session";
+import { RATE_LIMITS, rateLimitResponse } from "@/lib/rateLimit";
 import { getUserContext } from "@/lib/workflow";
 import {
   createLiveUpdate,
@@ -9,6 +11,8 @@ import {
   listLiveUpdatesForWorker,
   type LiveUpdateType,
 } from "@/lib/liveUpdates";
+import { detectImageKind, looksLikeAudio } from "@/lib/fileSignature";
+import { MAX_CAPTION_LENGTH, tooLongError } from "@/lib/inputLimits";
 
 /**
  * Review / Live Update evidence — entirely separate endpoint from the
@@ -80,7 +84,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ updates });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load live updates.";
-    return NextResponse.json({ error: message }, { status: errorStatus(message) });
+    return jsonError(message, errorStatus(message));
   }
 }
 
@@ -89,6 +93,8 @@ export async function POST(request: NextRequest) {
   if (!currentUser) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  const limited = await rateLimitResponse(RATE_LIMITS.liveUpdateUpload, currentUser.userId);
+  if (limited) return limited;
 
   const supabase = getSupabaseServiceRoleClient();
 
@@ -104,6 +110,10 @@ export async function POST(request: NextRequest) {
     }
     if (type !== "PHOTO" && type !== "VOICE") {
       return NextResponse.json({ error: "Invalid update type." }, { status: 400 });
+    }
+    const captionError = tooLongError(caption, MAX_CAPTION_LENGTH, "Caption");
+    if (captionError) {
+      return NextResponse.json({ error: captionError }, { status: 400 });
     }
 
     if (type === "PHOTO") {
@@ -131,6 +141,20 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
+    // The declared type above is browser-supplied; check the actual bytes
+    // before anything is stored.
+    if (type === "PHOTO" ? !detectImageKind(buffer) : !looksLikeAudio(buffer)) {
+      return NextResponse.json(
+        {
+          error:
+            type === "PHOTO"
+              ? "This file is not a valid PNG, JPEG, WebP or HEIC image."
+              : "This file is not a supported audio recording.",
+        },
+        { status: 400 }
+      );
+    }
+
     // No department classification runs against a Live Update photo —
     // department-based image blocking was intentionally removed. Any
     // relevant construction/site photo is accepted; department/context
@@ -151,23 +175,28 @@ export async function POST(request: NextRequest) {
     });
 
     if (uploadError) {
-      return NextResponse.json(
-        { error: `Storage upload failed: ${uploadError.message}` },
-        { status: 500 }
-      );
+      return jsonError("Failed to upload the file: " + uploadError.message, 500);
     }
 
-    await createLiveUpdate(supabase, {
-      workerId: currentUser.userId,
-      workItemId: typeof workItemId === "string" && workItemId ? workItemId : null,
-      updateType: type as LiveUpdateType,
-      storagePath: path,
-      caption: typeof caption === "string" ? caption : null,
-    });
+    // createLiveUpdate is where the Worker role / work item assignment is
+    // checked — if it refuses, don't leave the just-uploaded file behind
+    // with no row pointing at it.
+    try {
+      await createLiveUpdate(supabase, {
+        workerId: currentUser.userId,
+        workItemId: typeof workItemId === "string" && workItemId ? workItemId : null,
+        updateType: type as LiveUpdateType,
+        storagePath: path,
+        caption: typeof caption === "string" ? caption : null,
+      });
+    } catch (err) {
+      await supabase.storage.from(BUCKET).remove([path]).catch(() => undefined);
+      throw err;
+    }
 
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to save live update.";
-    return NextResponse.json({ error: message }, { status: errorStatus(message) });
+    return jsonError(message, errorStatus(message));
   }
 }

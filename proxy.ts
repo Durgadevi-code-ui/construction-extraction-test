@@ -24,7 +24,9 @@ import { createServerClient } from "@supabase/ssr";
  * yet by definition; that page/route already self-gates ("only works
  * when zero Admins exist" — see lib/admin.ts bootstrapAdminUser).
  */
-const PROTECTED_PREFIXES = ["/workflow", "/admin/setup", "/account"];
+// /dev: the Extraction Test tool — the /api/text|voice|handwritten and
+// /api/user-validation routes it calls require a session.
+const PROTECTED_PREFIXES = ["/workflow", "/admin/setup", "/account", "/dev"];
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -84,5 +86,6 @@ export const config = {
     "/workflow/:path*",
     "/admin/setup",
     "/admin/setup/:path*",
+    "/dev/:path*",
   ],
 };

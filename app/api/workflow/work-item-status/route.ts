@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { setWorkItemActive } from "@/lib/workflow";
 import { getCurrentUser } from "@/lib/session";
@@ -39,6 +40,6 @@ export async function PATCH(request: NextRequest) {
     console.error("Failed to change work item status:", err);
     const message = err instanceof Error ? err.message : "Failed to change work item status.";
     const forbidden = message.includes("is not authorized");
-    return NextResponse.json({ error: message }, { status: forbidden ? 403 : 500 });
+    return jsonError(message, forbidden ? 403 : 500);
   }
 }

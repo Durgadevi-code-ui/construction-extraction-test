@@ -1,47 +1,35 @@
 /**
- * Supabase client — anon key only.
+ * The Supabase client every API route / server module uses for the
+ * app's own tables and the handwritten/voice storage buckets.
  *
- * STALE-COMMENT FIX (this doc previously said the app has no auth at
- * all and no service-role client — both are now false): real Supabase
- * Auth is wired up (see lib/session.ts getCurrentUser()/
- * requireCurrentUser(), lib/supabaseServer.ts for the cookie-aware
- * client behind it, and proxy.ts for session refresh), and a genuinely
- * privileged service-role client exists at lib/supabaseAdmin.ts.
- * Authorization itself is enforced in application code — lib/authContext.ts
+ * Server-only, and backed by the SERVICE-ROLE key (lib/supabaseAdmin.ts).
+ * It used to be a plain anon-key client, which meant every table it
+ * touched needed a fully-open `using (true)` RLS policy for the anon
+ * role — so anyone holding the (by design non-secret) anon key could
+ * read and write those tables through Supabase's REST API directly,
+ * bypassing every check below. Authorization was, and still is,
+ * enforced in application code — lib/authContext.ts
  * (getUserContext/isAdminUser/assertRole), lib/delegation.ts, and every
  * lib/workflow.ts action — keyed off the server-verified user id
- * getCurrentUser() returns, never a client-supplied one.
+ * getCurrentUser() returns (lib/session.ts), never a client-supplied one.
  *
- * What genuinely has NOT changed: every table this client (getSupabaseClient(),
- * the plain anon-key client below) reads/writes still has a fully-open
- * RLS policy for the anon role (see the WARNING in
- * supabase/migrations/00000000000001_schema.sql), because this client
- * carries no per-request Postgres identity for RLS to key on — the anon
- * key is public (safe to ship to the browser) and RLS cannot distinguish
- * this app's own server calling with it from anyone else doing the same.
- * Authorization for all of those tables is therefore enforced entirely
- * in the application code above, not by the database. Tightening that
- * to real per-table RLS would require switching every existing route to
- * the service-role client — a large change intentionally not done here;
- * see lib/liveUpdates.ts / app/api/workflow/live-updates/route.ts for the
- * one table (live_updates) that WAS given this stricter treatment, as a
- * template for doing the same to the rest later if that's ever required.
+ * Moving this client to the service role is the code half of the same
+ * lockdown already done for live_updates (00000000000014) and the 8
+ * tables in 00000000000016: with the app no longer depending on anon
+ * access, supabase/migrations/00000000000022_lock_core_tables_service_role_only.sql
+ * can drop the remaining anon-open policies. Until that migration is
+ * applied nothing changes in behavior (the service role bypasses RLS,
+ * and the anon policies it replaces were unconditional anyway).
+ *
+ * Nothing in the browser talks to Supabase directly (every component
+ * goes through /api/*), and "server-only" makes importing this from a
+ * client component a build error.
  */
-import { createClient } from "@supabase/supabase-js";
-
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
+import "server-only";
+import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
 
 export function getSupabaseClient() {
-  return createClient(
-    required("NEXT_PUBLIC_SUPABASE_URL"),
-    required("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-  );
+  return getSupabaseServiceRoleClient();
 }
 
 export const STORAGE_BUCKETS = {
