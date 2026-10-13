@@ -32,7 +32,22 @@ import "server-only";
  *     completely unmodified and always available.
  */
 
-export const DEMO_MODE_ENABLED = process.env.DEMO_MODE === "true";
+/**
+ * DEMO_MODE=true turns demo login on — except in a Vercel PRODUCTION
+ * deployment (VERCEL_ENV=production), where it stays off unless
+ * DEMO_MODE_ALLOW_PRODUCTION=true is also set. Demo login hands out
+ * real sessions, including Admin, to anyone who opens /login, so a
+ * public production site must not offer it by accident; Preview
+ * deployments (behind Vercel Authentication) and local development
+ * keep honoring DEMO_MODE alone.
+ */
+export function demoModeEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  if (env.DEMO_MODE !== "true") return false;
+  if (env.VERCEL_ENV === "production" && env.DEMO_MODE_ALLOW_PRODUCTION !== "true") return false;
+  return true;
+}
+
+export const DEMO_MODE_ENABLED = demoModeEnabled();
 
 /**
  * One slot per real, distinct test account this app currently has —

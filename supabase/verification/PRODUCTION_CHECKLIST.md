@@ -1,92 +1,150 @@
 # Production security checklist
 
-For the deployment review of the security changes. Nothing here has been
-run against production. Every step is read-only unless it says **CHANGE**,
-and each CHANGE needs an explicit go-ahead.
+For whoever applies the database changes and changes Vercel settings. Current
+state:
 
-## Order of operations
+- **Done:** app commit `7fbe06f` is deployed to both Vercel production projects
+  and confirmed working with the service-role key.
+- **Not done:** migrations 22 and 23. Rate limiting is off.
+- **Open, by decision:** `DEMO_MODE` is on in both projects.
+- **Supabase project:** `adqerwabeihdbhldzgba`, used by both Vercel projects.
 
-1. **Before deploying:** run `security_review.sql` (read-only) in the Supabase
-   SQL editor for the production project. Save the output as the "before" state.
-2. Confirm `SUPABASE_SERVICE_ROLE_KEY` is set for Production (and Preview, if used)
-   in Vercel. The app now uses it for every table, not just live updates and chat.
-   If it is missing, every API route returns a generic 500.
-3. **CHANGE: deploy the code.** Behavior is unchanged while the anon policies
-   still exist.
-4. Smoke-test each role: Worker (text, voice, handwritten, live-update
-   photo/voice, confirmation step), Subcontractor/Foreman review, Contractor
-   approval and dashboard, and Admin setup, workbook import and export.
-5. **CHANGE: apply `00000000000022_lock_core_tables_service_role_only.sql`** to
-   staging first, repeat step 4, then apply it to production.
-6. **CHANGE: apply `00000000000023_rate_limits.sql`**, then set
-   `RATE_LIMIT_BACKEND=supabase` in Vercel and redeploy.
-7. Re-run `security_review.sql` and compare it with the "before" output.
+Use the **working-tree** copies of the SQL files. They are newer than the
+copies in `7fbe06f`: each now runs in one explicit transaction, skips (and
+reports) objects `postgres` does not own instead of failing, and migration 23
+reloads the API schema cache.
 
-The reverse order (migration 22 before the code) breaks the app, because the
-old code reads these tables with the anon key.
+## 1. Before running anything
 
-## Supabase (`security_review.sql`)
+1. Dashboard → Database → Backups: confirm a backup from today exists, or that
+   Point-in-Time Recovery is enabled. Note the current time. Migration 22
+   changes permissions, not data (apart from each bucket's `public` flag), so
+   PITR is only a last resort: restoring it would also undo every write since.
+2. SQL editor: run `supabase/verification/security_review.sql` (read-only) and
+   save **all** of its output. Section 2 is the exact record of every policy that
+   migration 22 drops.
+3. Optional: if `ROLLBACK` appears as the last line of that output, nothing was
+   changed. It always should.
 
-What each section of the output should show after the migrations:
+## 2. Execution order
 
-| Section | Expected |
-|---|---|
-| 1. RLS per table | `rls_enabled = true` on every app table |
-| 2. Policies | No policy whose `roles` include `anon`, `authenticated` or `public`. Check every `unconditional = true` row. |
-| 3. Table grants | No rows |
-| 4. Executable functions | No rows |
-| 5. Buckets | `public = false` for handwritten, voice, live-updates, project-documents |
-| 6. Rate limiting | Table exists, RLS on, service_role can execute, anon cannot |
-| 7. Expected tables | All exist (otherwise check for a renamed table) |
+| Step | Where | Action | Expected |
+|---|---|---|---|
+| 1 | SQL editor | Run `00000000000022_lock_core_tables_service_role_only.sql` | `COMMIT`. Read every `WARNING` line (see below). |
+| 2 | Browser | Sign in on both sites and open one Worker page and the Admin setup page | Loads normally |
+| 3 | SQL editor | Run `00000000000023_rate_limits.sql` | `COMMIT` |
+| 4 | SQL editor | Run `supabase/verification/post_migration_checks.sql` | All expectations met; last statement fails with `permission denied for table users` |
+| 5 | Vercel (both projects) | Add `RATE_LIMIT_BACKEND=supabase` (Production), then redeploy | See section 4 |
+| 6 | Terminal | External anon probe (section 3) | 401 or `42501` for every table |
+| 7 | Both sites | Smoke tests (section 6) | All pass |
 
-Also check in the dashboard (Authentication → Rate Limits) that Supabase Auth's
-own limits are on. They complement, but don't replace, the app's per-IP and
-per-email login limits.
+Never set `RATE_LIMIT_BACKEND=supabase` before step 3. Without the function, the
+upload, extraction and workbook routes answer 503 by design.
 
-## Vercel
+### Warnings from migration 22
 
-Use the dashboard (or `vercel env ls production`, which lists names only). Don't
-print values.
+- `NOT DROPPED (not owner): storage policy …` means `postgres` can't drop that
+  `storage.objects` policy. Delete it under Dashboard → Storage → Policies. This
+  matters: a private bucket still serves files to anyone a policy allows.
+- `RLS NOT ENABLED` or `STILL REACHABLE … spatial_ref_sys` (or another extension
+  table) is extension reference data. Acceptable if it holds no app data;
+  otherwise ask the extension owner to fix it.
+- `no privileges were granted/revoked for "<function>"` refers to an extension
+  function `postgres` doesn't own. Section C of `post_migration_checks.sql`
+  lists any that remain executable.
+- `BUCKETS NOT UPDATED`: set the buckets to private under Storage → Settings.
 
-- **`DEMO_MODE`**: must be absent or not exactly `true` in **Production**.
-  If it is `true`, the role-picker login on `/login` works for anyone. Also
-  confirm no `DEMO_USER_*_EMAIL` variables are set in Production.
-- **`RATE_LIMIT_BACKEND`**: `supabase` once migration 23 is applied. While it is
-  unset, rate limiting is off (the app logs a one-time warning).
-- **`SUPABASE_SERVICE_ROLE_KEY`**: present, and never in a `NEXT_PUBLIC_*` variable.
-- **`SUBMISSION_TOKEN_SECRET`** (optional): a random value of at least 32
-  characters, if review tokens should not be derived from the service-role key.
-- **Deployment Protection**: Settings → Deployment Protection. Preview
-  deployments should require Vercel Authentication. They use real
-  environment variables, so an unprotected preview URL exposes a full copy of
-  the app.
-- **Firewall (optional)**: a Vercel WAF rate-limit rule on `/login` and
-  `/api/admin/bootstrap` adds edge-level protection on top of the app's limits.
+## 3. External anon probe (after step 4)
 
-### Response headers on the deployed site
+Run on a machine that has `.env.local`. It prints only status codes.
 
 ```sh
-curl -sI https://<production-domain>/login
+node -e '
+const fs=require("fs");const e=Object.fromEntries(fs.readFileSync(".env.local","utf8").split(/\r?\n/).filter(l=>/^[A-Z_]+=/.test(l)).map(l=>[l.split("=")[0],l.slice(l.indexOf("=")+1).replace(/^"|"$/g,"")]));
+const k=e.NEXT_PUBLIC_SUPABASE_ANON_KEY,h={apikey:k,Authorization:"Bearer "+k};
+(async()=>{for(const t of ["users","user_project_roles","projects","work_items","extraction_submissions","companies","departments","unified_records","user_validations","rate_limit_counters"]){
+ const r=await fetch(`${e.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/${t}?select=*&limit=1`,{headers:h});const b=await r.json().catch(()=>({}));
+ console.log(t.padEnd(24),r.status,b.code??(Array.isArray(b)?"ROWS RETURNED - STILL OPEN":""));}
+ const r=await fetch(`${e.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/rpc/rate_limit_hit`,{method:"POST",headers:{...h,"content-type":"application/json"},body:"{\"p_key\":\"x\",\"p_window_seconds\":60}"});
+ console.log("rpc rate_limit_hit".padEnd(24),r.status);})()'
 ```
 
-Expect:
+For every line, expect `401 42501` (permission denied) or `404`. Any `ROWS RETURNED`
+line means that table is still open.
 
-- `Content-Security-Policy` with `default-src 'self'`, `object-src 'none'`,
-  `frame-ancestors 'self'` and `upgrade-insecure-requests`
-- `Strict-Transport-Security`
-- `X-Frame-Options: SAMEORIGIN`
-- `X-Content-Type-Options: nosniff`
-- `Referrer-Policy`
-- `Permissions-Policy` with `camera=(self), microphone=(self)`
+## 4. Vercel settings
 
-Then open the site and the browser console as a signed-in Worker, take a
-live-update photo, record voice, and view the live-update feed. The console
-should show no "Content Security Policy" errors.
+Set these in **both** `construction-extraction-test` and
+`construction-extraction-test-rnld`, under Settings → Environment Variables →
+Production:
 
-### Access checks on the deployed site
+| Variable | Value | Notes |
+|---|---|---|
+| `RATE_LIMIT_BACKEND` | leave unset | Since the follow-up to `7fbe06f`, an unset value means `supabase` in Vercel production (migration 23 is applied). Set `off` only as an emergency kill switch. |
+| `SUPABASE_SERVICE_ROLE_KEY` | (existing) | Confirmed working. Must never have a `NEXT_PUBLIC_` prefix. |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | (existing) | Leave unchanged |
+| `DEMO_MODE` | delete it | Code now ignores it in Vercel production unless `DEMO_MODE_ALLOW_PRODUCTION=true` is also set; deleting it removes the last trace |
+| `DEMO_USER_*_EMAIL` | delete them | Same time as `DEMO_MODE` |
+| `SUBMISSION_TOKEN_SECRET` | optional: random, at least 32 characters | Setting it voids pending confirmations (users resubmit) |
+| `RATE_LIMIT_TRUST_PROXY_HEADERS` | **do not set** | Vercel's own headers are already trusted |
 
-- Signed out, `/dev/extraction-test`, `/workflow`, `/admin/setup` and `/account`
-  should redirect to `/login`.
-- Signed out, `POST /api/text`, `/api/voice`, `/api/handwritten`,
-  `/api/user-validation` and `/api/workflow/live-updates` should return 401.
-- `POST /api/admin/bootstrap` should be refused, since an Admin already exists.
+Environment changes only take effect in a **new** deployment: Deployments →
+latest Production → ⋯ → Redeploy (without the build cache is fine), in each
+project. Then confirm with
+`curl -s https://<site>/login | grep -c "Demo Mode"` (expect `0` once demo mode is
+off).
+
+## 5. Turning off public demo Admin access
+
+1. In both Vercel projects, delete `DEMO_MODE` and every `DEMO_USER_*_EMAIL`
+   variable from Production. Check Preview too, since preview deployments are
+   behind Vercel Authentication but still real.
+2. Redeploy both projects, then confirm `/login` no longer shows "Demo Mode".
+3. Existing demo sessions keep working until their access token expires (the
+   Supabase JWT expiry, 1 hour by default). Refresh tokens keep them signed in
+   longer. To end them now, delete those users' rows in `auth.sessions`, which
+   is a deliberate write in the SQL editor:
+   `delete from auth.sessions where user_id in (select id from auth.users where email in ('<demo emails>'));`
+4. If the demo accounts themselves are no longer needed, deactivate their
+   assignments in Admin Setup → Users. That is reversible; deleting accounts is not.
+
+## 6. Smoke tests (both sites)
+
+Signed out:
+
+- [ ] `/workflow`, `/admin/setup`, `/account` and `/dev/extraction-test` redirect to `/login`.
+- [ ] `POST` to `/api/text`, `/api/voice`, `/api/handwritten`,
+  `/api/user-validation` and `/api/workflow/live-updates` returns 401.
+- [ ] `curl -sI https://<site>/login` shows CSP, HSTS, `X-Frame-Options`,
+  `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy`.
+- [ ] `POST /api/admin/bootstrap` answers "An Admin account already exists".
+
+Signed in (real accounts, or demo while it is still on):
+
+- [ ] Worker: the dashboard loads; text, voice and handwritten updates submit and
+  confirm; a live-update photo and voice note upload and appear in the feed.
+- [ ] Subcontractor: the review queue loads, and a comment or forward works.
+- [ ] Contractor: approve or reject, the dashboard, and the Excel export download.
+- [ ] Admin: setup pages load; a workbook import preview works (dry run; don't
+  commit unless intended).
+- [ ] Chat: a Team message and a direct message send and appear for the other
+  party in the same project only.
+- [ ] Browser console: no "Content Security Policy" errors on any page above.
+
+Rate limiting (after step 5):
+
+- [ ] Eleven wrong-password logins for one email within 10 minutes. The 11th says
+  "Too many requests…". This is safe: it only affects that email for 10 minutes.
+- [ ] The `rate_limit_counters` table count increases (the SQL editor shows it).
+
+Finally, re-run `security_review.sql` and compare it with the saved "before" output.
+
+## 7. Recovery
+
+| Problem | Action |
+|---|---|
+| A migration errors | Nothing was applied (single transaction). Fix the cause and run it again. |
+| App errors after 22 with "Something went wrong on the server" | Check `SUPABASE_SERVICE_ROLE_KEY` in that Vercel project and that the deployment is `7fbe06f` or later. Don't reopen the tables. |
+| Something outside the app needed anon access | Run `supabase/verification/emergency_reopen_core_tables.sql` (this **reopens the vulnerability**). Fix that consumer, then re-run migration 22. Both directions are tested. |
+| Login or uploads answer 503 after enabling rate limiting | `RATE_LIMIT_BACKEND` was set but the RPC is unreachable. Confirm migration 23 is applied (section C of `post_migration_checks.sql`). For a quick fix, delete `RATE_LIMIT_BACKEND` and redeploy (rate limiting goes off; login is never blocked by this). |
+| Data damaged (not expected from either migration) | Point-in-Time Recovery to just before step 1. |

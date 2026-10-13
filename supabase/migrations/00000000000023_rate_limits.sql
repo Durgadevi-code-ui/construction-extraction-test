@@ -1,10 +1,14 @@
 -- ============================================================
 -- Shared rate-limit counter for lib/rateLimit.ts.
 --
--- NOT YET APPLIED ANYWHERE — review, then apply to staging before
--- production. After applying, set RATE_LIMIT_BACKEND=supabase in the
--- deployment's environment to turn enforcement on (it stays off until
--- then, so applying this migration alone changes no behavior).
+-- After applying, set RATE_LIMIT_BACKEND=supabase in the deployment's
+-- environment to turn enforcement on (it stays off until then, so
+-- applying this migration alone changes no behavior). Never set that
+-- variable BEFORE this migration exists: with the function missing, the
+-- expensive routes answer 503 by design (fail closed).
+--
+-- One explicit transaction; idempotent (create if not exists / create or
+-- replace / repeatable grants), so it is safe to run again.
 --
 -- One row per (rule, hashed identifier). rate_limit_hit() increments it
 -- atomically (a single INSERT ... ON CONFLICT DO UPDATE, so concurrent
@@ -17,6 +21,8 @@
 -- table privileges revoked from anon/authenticated, and EXECUTE on the
 -- function granted to service_role only.
 -- ============================================================
+
+begin;
 
 create table if not exists public.rate_limit_counters (
   key text primary key,
@@ -62,3 +68,9 @@ $$;
 
 revoke all on function public.rate_limit_hit(text, integer) from public, anon, authenticated;
 grant execute on function public.rate_limit_hit(text, integer) to service_role;
+
+-- Make the new RPC visible to the Supabase REST API (PostgREST) right
+-- away; delivered when the transaction commits.
+notify pgrst, 'reload schema';
+
+commit;

@@ -14,9 +14,11 @@ import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
  * in-memory counter, and no new service or credential is needed.
  *
  * Configuration (RATE_LIMIT_BACKEND):
- *   - unset / "off": disabled — every request is allowed and a warning is
- *     logged once. This is the local-development default, and also the
- *     state until migration 00000000000023 has been applied.
+ *   - unset: "supabase" in a Vercel production deployment
+ *     (VERCEL_ENV=production — migration 00000000000023 is applied there),
+ *     otherwise off (local development, Preview, tests).
+ *   - "off": disabled — every request is allowed and a warning is logged
+ *     once. The explicit kill switch for any environment.
  *   - "supabase": enforced. If the counter itself can't be reached, a
  *     rule with `failClosed` (the expensive operations) answers 503
  *     instead of running unprotected; the others (login) are allowed,
@@ -92,9 +94,16 @@ export function setRateLimitStoreForTests(store: RateLimitStore | null | undefin
   warnedDisabled = false;
 }
 
+/** The configured backend name (see the configuration notes above). */
+export function rateLimitBackend(env: Record<string, string | undefined> = process.env): string {
+  const explicit = (env.RATE_LIMIT_BACKEND ?? "").trim().toLowerCase();
+  if (explicit) return explicit;
+  return env.VERCEL_ENV === "production" ? "supabase" : "off";
+}
+
 function activeStore(): RateLimitStore | null {
   if (storeOverride !== undefined) return storeOverride;
-  const backend = (process.env.RATE_LIMIT_BACKEND ?? "").trim().toLowerCase();
+  const backend = rateLimitBackend();
   if (backend === "supabase") return supabaseStore;
   if (backend && backend !== "off") {
     console.error(`Unknown RATE_LIMIT_BACKEND "${backend}" — rate limiting is disabled.`);
@@ -116,7 +125,7 @@ export async function checkRateLimit(
   if (!store) {
     if (!warnedDisabled) {
       warnedDisabled = true;
-      console.warn("Rate limiting is disabled (set RATE_LIMIT_BACKEND=supabase to enable).");
+      console.warn("Rate limiting is disabled (RATE_LIMIT_BACKEND=supabase enables it; it is on by default only in Vercel production).");
     }
     return { allowed: true };
   }

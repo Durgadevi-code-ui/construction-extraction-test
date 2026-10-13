@@ -410,3 +410,22 @@ test("extraction routes: no session -> 401 for text, voice and handwritten", asy
     assert.ok(!touched(supabase), name);
   }
 });
+
+test("rate limit config: on by default only in Vercel production; RATE_LIMIT_BACKEND overrides everywhere", () => {
+  const b = rateLimit.rateLimitBackend;
+  assert.equal(b({}), "off", "local development");
+  assert.equal(b({ VERCEL_ENV: "preview" }), "off", "preview");
+  assert.equal(b({ VERCEL_ENV: "production" }), "supabase", "production default");
+  assert.equal(b({ VERCEL_ENV: "production", RATE_LIMIT_BACKEND: "off" }), "off", "explicit kill switch");
+  assert.equal(b({ RATE_LIMIT_BACKEND: " Supabase " }), "supabase", "explicit opt-in elsewhere");
+});
+
+test("demo mode: never on in Vercel production unless explicitly allowed", () => {
+  const { demoModeEnabled } = require("../lib/demoAuth.ts");
+  assert.equal(demoModeEnabled({}), false);
+  assert.equal(demoModeEnabled({ DEMO_MODE: "true" }), true, "local development opt-in");
+  assert.equal(demoModeEnabled({ DEMO_MODE: "true", VERCEL_ENV: "preview" }), true, "preview (behind Vercel Authentication)");
+  assert.equal(demoModeEnabled({ DEMO_MODE: "true", VERCEL_ENV: "production" }), false, "public production");
+  assert.equal(demoModeEnabled({ DEMO_MODE: "TRUE", VERCEL_ENV: "development" }), false, "only the exact value 'true'");
+  assert.equal(demoModeEnabled({ DEMO_MODE: "true", VERCEL_ENV: "production", DEMO_MODE_ALLOW_PRODUCTION: "true" }), true, "explicit override");
+});
