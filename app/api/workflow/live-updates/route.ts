@@ -11,7 +11,7 @@ import {
   listLiveUpdatesForWorker,
   type LiveUpdateType,
 } from "@/lib/liveUpdates";
-import { detectImageKind, looksLikeAudio } from "@/lib/fileSignature";
+import { detectImageKind, looksLikeAudio, storageExtension } from "@/lib/fileSignature";
 import { MAX_CAPTION_LENGTH, tooLongError } from "@/lib/inputLimits";
 
 /**
@@ -161,7 +161,7 @@ export async function POST(request: NextRequest) {
     // validation continues to apply only to Live Update TEXT/VOICE
     // captions where already implemented, untouched by this change.
 
-    const ext = file.type.split("/")[1]?.split(";")[0] || "bin";
+    const ext = storageExtension(file.type);
     // Prefixed by the uploader's own user id — never another user's, and
     // never derived from anything the client sends — so files are at
     // least self-organized per worker within the bucket even though the

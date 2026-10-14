@@ -17,7 +17,7 @@ import { MAX_DESCRIPTION_LENGTH, tooLongError } from "@/lib/inputLimits";
 import { RATE_LIMITS, rateLimitResponse } from "@/lib/rateLimit";
 import { createReviewToken } from "@/lib/submissionReviewToken";
 import { resolveTaskForWorker } from "@/lib/workflow";
-import { looksLikeAudio } from "@/lib/fileSignature";
+import { looksLikeAudio, storageExtension } from "@/lib/fileSignature";
 
 export const runtime = "nodejs";
 
@@ -227,7 +227,7 @@ export async function POST(request: NextRequest) {
     // 5. Store audio file
     // ------------------------------------------------------------
 
-    const ext = file.type.split("/")[1]?.replace(";codecs=opus", "") || "bin";
+    const ext = storageExtension(file.type);
     const path = `${randomUUID()}.${ext}`;
 
     const { error: uploadError } = await supabase.storage

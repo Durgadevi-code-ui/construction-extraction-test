@@ -6,7 +6,9 @@ state:
 - **Done:** app commit `7fbe06f` is deployed to both Vercel production projects
   and confirmed working with the service-role key.
 - **Not done:** migrations 22 and 23. Rate limiting is off.
-- **Open, by decision:** `DEMO_MODE` is on in both projects.
+- **Demo login:** removed from the code (no demo UI, server action or
+  `DEMO_*` handling). Deployments built before the removal still contain it
+  and `DEMO_MODE` is still set in both projects — see section 5.
 - **Supabase project:** `adqerwabeihdbhldzgba`, used by both Vercel projects.
 
 Use the **working-tree** copies of the SQL files. They are newer than the
@@ -83,7 +85,7 @@ Production:
 | `RATE_LIMIT_BACKEND` | leave unset | Since the follow-up to `7fbe06f`, an unset value means `supabase` in Vercel production (migration 23 is applied). Set `off` only as an emergency kill switch. |
 | `SUPABASE_SERVICE_ROLE_KEY` | (existing) | Confirmed working. Must never have a `NEXT_PUBLIC_` prefix. |
 | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | (existing) | Leave unchanged |
-| `DEMO_MODE` | delete it | Code now ignores it in Vercel production unless `DEMO_MODE_ALLOW_PRODUCTION=true` is also set; deleting it removes the last trace |
+| `DEMO_MODE` | delete it | Demo login is removed from the code, which no longer reads it; deleting it removes the last trace |
 | `DEMO_USER_*_EMAIL` | delete them | Same time as `DEMO_MODE` |
 | `SUBMISSION_TOKEN_SECRET` | optional: random, at least 32 characters | Setting it voids pending confirmations (users resubmit) |
 | `RATE_LIMIT_TRUST_PROXY_HEADERS` | **do not set** | Vercel's own headers are already trusted |
@@ -96,16 +98,23 @@ off).
 
 ## 5. Turning off public demo Admin access
 
-1. In both Vercel projects, delete `DEMO_MODE` and every `DEMO_USER_*_EMAIL`
-   variable from Production. Check Preview too, since preview deployments are
-   behind Vercel Authentication but still real.
-2. Redeploy both projects, then confirm `/login` no longer shows "Demo Mode".
-3. Existing demo sessions keep working until their access token expires (the
+Demo login is removed from the code, so any deployment built from it has no
+demo path whatever the environment says. Deployments built **before** the
+removal still have it (Preview ones honor `DEMO_MODE`) and keep the
+environment they were built with, so changing variables does not fix them.
+
+1. Remove or protect every pre-removal deployment that is publicly
+   reachable, including any alias with a Deployment Protection exception
+   (e.g. a `-git-<branch>-` alias that answers without Vercel SSO).
+2. In both Vercel projects, delete `DEMO_MODE` and every `DEMO_USER_*_EMAIL`
+   variable from Production and Preview.
+3. Redeploy both projects, then confirm `/login` no longer shows "Demo Mode".
+4. Existing demo sessions keep working until their access token expires (the
    Supabase JWT expiry, 1 hour by default). Refresh tokens keep them signed in
    longer. To end them now, delete those users' rows in `auth.sessions`, which
    is a deliberate write in the SQL editor:
    `delete from auth.sessions where user_id in (select id from auth.users where email in ('<demo emails>'));`
-4. If the demo accounts themselves are no longer needed, deactivate their
+5. If the demo accounts themselves are no longer needed, deactivate their
    assignments in Admin Setup → Users. That is reversible; deleting accounts is not.
 
 ## 6. Smoke tests (both sites)

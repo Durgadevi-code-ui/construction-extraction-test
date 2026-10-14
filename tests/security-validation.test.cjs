@@ -7,9 +7,9 @@ const assert = require("node:assert/strict");
 const XLSX = require("xlsx");
 
 const { tooLongError, MAX_DESCRIPTION_LENGTH, MAX_COMMENT_LENGTH, MAX_CAPTION_LENGTH } = require("../lib/inputLimits.ts");
-const { detectImageKind, looksLikeAudio, looksLikeWorkbook, hasWorkbookExtension } = require("../lib/fileSignature.ts");
+const { detectImageKind, looksLikeAudio, looksLikeWorkbook, hasWorkbookExtension, storageExtension } = require("../lib/fileSignature.ts");
 const { safeNextPath } = require("../lib/safeRedirect.ts");
-const { publicErrorMessage } = require("../lib/apiErrors.ts");
+const { publicErrorMessage, jsonError } = require("../lib/apiErrors.ts");
 
 const bytes = (...parts) =>
   new Uint8Array(parts.flatMap((p) => (typeof p === "string" ? [...Buffer.from(p, "latin1")] : p)));
@@ -298,5 +298,57 @@ test("review tokens: bound to submission, user and expiry; tamper-evident", () =
   assert.equal(verifyReviewToken(`${Number(exp) + 3600}.${sig}`, "sub-1", "user-1", now), false, "extended expiry");
   for (const bad of [undefined, null, "", "abc", `${exp}.`, `${exp}.${sig}x`, { t }]) {
     assert.equal(verifyReviewToken(bad, "sub-1", "user-1", now), false, JSON.stringify(bad));
+  }
+});
+
+test("storage extension: real MIME subtypes are kept, anything else becomes \"bin\"", () => {
+  for (const [mime, ext] of [
+    ["audio/webm;codecs=opus", "webm"],
+    ["audio/ogg; codecs=opus", "ogg"],
+    ["audio/x-m4a", "x-m4a"],
+    ["audio/MP4", "mp4"],
+    ["video/webm", "webm"],
+    ["image/jpeg", "jpeg"],
+    ["audio/..", "bin"],
+    ["audio/a?b#c", "bin"],
+    ["audio/x%2f..%2fy", "bin"],
+    ["audio/", "bin"],
+    ["audio", "bin"],
+    ["audio/averyveryverylongsubtype", "bin"],
+  ]) {
+    assert.equal(storageExtension(mime), ext, mime);
+  }
+});
+
+test("jsonError: an authorization refusal is a 403 with the generic message, whatever status the route passed", async () => {
+  const original = console.warn;
+  console.warn = () => {};
+  try {
+    for (const [message, status] of [
+      ["User 11111111-1111-4111-8111-111111111111 is not authorized for this action (Admin required).", 500],
+      ["SUPERVISOR 11111111-1111-4111-8111-111111111111 is not authorized for this action (requires Admin or an active USER_MANAGEMENT delegation).", 500],
+      ["Role WORKER is not authorized for this action", 500],
+      ["FOREMAN 1234 is not authorized to configure tasks", 403],
+      // Ownership refusals: a worker outside their assignment/department,
+      // or a caller with no Active role — previously sent with raw ids.
+      ["Work item 22222222-2222-4222-8222-222222222222 is not assigned to worker 11111111-1111-4111-8111-111111111111", 403],
+      ["Work item 22222222-2222-4222-8222-222222222222 does not belong to department 33333333-3333-4333-8333-333333333333", 500],
+      ["No active project/department assignment found for user 11111111-1111-4111-8111-111111111111: no matching row", 500],
+    ]) {
+      const res = jsonError(message, status);
+      assert.equal(res.status, 403, message);
+      assert.deepEqual(await res.json(), { error: "You don't have permission to do this." }, message);
+    }
+    // Everything else keeps its status and the existing message handling.
+    const notFound = jsonError("Department not found.", 500);
+    assert.equal(notFound.status, 500);
+    assert.deepEqual(await notFound.json(), { error: "Department not found." });
+    const invalid = jsonError("projectId is required.", 400);
+    assert.equal(invalid.status, 400);
+    // A wrong task id for the right work item is a validation error, not a refusal.
+    const wrongTask = jsonError("Task t9 does not belong to work item W1", 403);
+    assert.deepEqual(await wrongTask.json(), { error: "Task t9 does not belong to work item W1" });
+  } finally {
+    console.warn = original;
   }
 });

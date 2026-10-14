@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { PERMISSION_MESSAGE } from "./apiClient";
 
 const GENERIC_SERVER_ERROR = "Something went wrong on the server. Please try again.";
 
@@ -35,7 +36,22 @@ export function publicErrorMessage(message: string, status: number): string {
   return safe;
 }
 
-/** `NextResponse.json({ error }, { status })` with publicErrorMessage applied. */
+/** An authorization refusal thrown by lib/: "<role> <user id> is not
+ * authorized …" (assertRole, assertAdminRole, assertCanReviewProgress, …),
+ * a worker outside their own assignment or department (lib/workflow.ts
+ * resolveWorkItemForWorker), or a caller with no Active role at all
+ * (lib/authContext.ts getUserContext). */
+const AUTHORIZATION_FAILURE =
+  /\bis not authorized\b|\bis not assigned to worker\b|\bdoes not belong to department\b|^No active project\/department assignment found\b/i;
+
+/** `NextResponse.json({ error }, { status })` with publicErrorMessage applied.
+ * An authorization refusal is always a 403 with the generic permission text
+ * the UI already shows for it (lib/apiClient.ts userFacingError) — never a
+ * 500, and never the caller's role and user id, which are logged here. */
 export function jsonError(message: string, status: number): NextResponse {
+  if (AUTHORIZATION_FAILURE.test(message)) {
+    console.warn("API 403 (detail withheld from client):", message);
+    return NextResponse.json({ error: PERMISSION_MESSAGE }, { status: 403 });
+  }
   return NextResponse.json({ error: publicErrorMessage(message, status) }, { status });
 }

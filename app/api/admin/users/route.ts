@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
-import { createUserWithRole, deactivateUserProjectRole, getUserProjectRoleScope } from "@/lib/admin";
+import {
+  createUserWithRole,
+  deactivateUserProjectRole,
+  getDepartmentProjectId,
+  getUserProjectRoleScope,
+} from "@/lib/admin";
 import { assertAdminOrDelegated } from "@/lib/delegation";
 import { isAdminUser } from "@/lib/authContext";
 import { getCurrentUser } from "@/lib/session";
@@ -74,6 +79,17 @@ export async function POST(request: NextRequest) {
         projectId,
         departmentId,
       });
+    }
+
+    // The department must belong to the project: role checks compare
+    // department ids, so a mismatched pair would grant review/assignment
+    // rights over another project's department — and a whole-project
+    // delegation check above does not look at departmentId at all.
+    if ((await getDepartmentProjectId(supabase, departmentId)) !== projectId) {
+      return NextResponse.json(
+        { error: "That department does not belong to the selected project." },
+        { status: 400 }
+      );
     }
 
     await createUserWithRole(supabase, {

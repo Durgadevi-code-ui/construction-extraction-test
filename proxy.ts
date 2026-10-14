@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { SESSION_COOKIE_OPTIONS } from "@/lib/sessionCookies";
 
 /**
  * Named `proxy.ts`, not `middleware.ts` — Next.js 16 deprecated and
@@ -35,6 +36,7 @@ export async function proxy(request: NextRequest) {
     required("NEXT_PUBLIC_SUPABASE_URL"),
     required("NEXT_PUBLIC_SUPABASE_ANON_KEY"),
     {
+      cookieOptions: SESSION_COOKIE_OPTIONS,
       cookies: {
         getAll() {
           return request.cookies.getAll();

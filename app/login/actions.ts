@@ -115,6 +115,18 @@ export async function requestPasswordReset(
     return { error: "Email is required." };
   }
 
+  // Reset-email flooding: capped per client IP and per target email, the
+  // same way as login above. Applies to every email alike, so it reveals
+  // nothing about which accounts exist.
+  const ip = clientIp(await headers());
+  for (const [rule, identifier] of [
+    [RATE_LIMITS.passwordResetPerIp, ip],
+    [RATE_LIMITS.passwordResetPerEmail, email.toLowerCase()],
+  ] as const) {
+    const limit = await checkRateLimit(rule, identifier);
+    if (!limit.allowed) return { error: rateLimitMessage(limit) };
+  }
+
   const supabase = await createSupabaseServerClient();
   const origin = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 

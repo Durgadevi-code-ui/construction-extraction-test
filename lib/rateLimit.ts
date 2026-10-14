@@ -64,6 +64,9 @@ export const RATE_LIMITS = {
   /** Password login attempts, per client IP and per email address. */
   loginPerIp: { name: "login-ip", limit: 30, windowSeconds: 10 * 60, failClosed: false },
   loginPerEmail: { name: "login-email", limit: 10, windowSeconds: 10 * 60, failClosed: false },
+  /** Password-reset emails, per client IP and per email address. */
+  passwordResetPerIp: { name: "reset-ip", limit: 20, windowSeconds: 60 * 60, failClosed: false },
+  passwordResetPerEmail: { name: "reset-email", limit: 5, windowSeconds: 60 * 60, failClosed: false },
 } as const satisfies Record<string, RateLimitRule>;
 
 /** Retry-After for a 503 when the counter is unavailable. */
