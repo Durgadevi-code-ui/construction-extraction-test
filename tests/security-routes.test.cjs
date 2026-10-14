@@ -420,12 +420,296 @@ test("rate limit config: on by default only in Vercel production; RATE_LIMIT_BAC
   assert.equal(b({ RATE_LIMIT_BACKEND: " Supabase " }), "supabase", "explicit opt-in elsewhere");
 });
 
-test("demo mode: never on in Vercel production unless explicitly allowed", () => {
-  const { demoModeEnabled } = require("../lib/demoAuth.ts");
-  assert.equal(demoModeEnabled({}), false);
-  assert.equal(demoModeEnabled({ DEMO_MODE: "true" }), true, "local development opt-in");
-  assert.equal(demoModeEnabled({ DEMO_MODE: "true", VERCEL_ENV: "preview" }), true, "preview (behind Vercel Authentication)");
-  assert.equal(demoModeEnabled({ DEMO_MODE: "true", VERCEL_ENV: "production" }), false, "public production");
-  assert.equal(demoModeEnabled({ DEMO_MODE: "TRUE", VERCEL_ENV: "development" }), false, "only the exact value 'true'");
-  assert.equal(demoModeEnabled({ DEMO_MODE: "true", VERCEL_ENV: "production", DEMO_MODE_ALLOW_PRODUCTION: "true" }), true, "explicit override");
+// ===================================================== /api/admin/users (POST)
+// A role assignment's department must belong to its project (finding M1):
+// a whole-project USER_MANAGEMENT delegation matches any departmentId, so
+// without this a delegate could pair their project with another project's
+// department.
+const adminUsers = require("../app/api/admin/users/route.ts");
+
+const P1 = "11111111-0000-4000-8000-000000000001";
+const P2 = "11111111-0000-4000-8000-000000000002";
+const D1_IN_P1 = "22222222-0000-4000-8000-000000000001";
+const D2_IN_P2 = "22222222-0000-4000-8000-000000000002";
+const DEPARTMENT_PROJECT = { [D1_IN_P1]: P1, [D2_IN_P2]: P2 };
+
+/** actor: "admin", "delegate" (SUPERVISOR with a whole-project
+ * USER_MANAGEMENT delegation on P1) or "contractor" (no delegation). */
+function usersDb(actor) {
+  return mockSupabase((table, calls) => {
+    const eq = (col) => calls.find((c) => c[0] === "eq" && c[1] === col)?.[2];
+    const has = (method) => calls.some((c) => c[0] === method);
+    if (table === "users") {
+      if (eq("user_role") === "ADMIN") return { data: actor === "admin" ? { user_id: USER_A.userId } : null, error: null };
+      if (has("insert")) return { data: { user_id: "new-user" }, error: null };
+      return { data: null, error: null }; // no existing account for the email
+    }
+    if (table === "user_project_roles") {
+      if (has("insert")) return { data: null, error: null };
+      if (has("maybeSingle")) return { data: null, error: null }; // no existing assignment
+      return {
+        data: [{ user_id: USER_A.userId, role: "SUPERVISOR", project_id: P1, department_id: D1_IN_P1, projects: { project_name: "P1" }, departments: { department_name: "D1" } }],
+        error: null,
+      };
+    }
+    if (table === "admin_delegations") {
+      if (actor !== "delegate") return { data: [], error: null };
+      const day = 24 * 60 * 60 * 1000;
+      return {
+        data: [{
+          delegation_id: "del-1",
+          status: "Active",
+          starts_at: new Date(Date.now() - day).toISOString(),
+          ends_at: new Date(Date.now() + day).toISOString(),
+          delegation_projects: [{ project_id: P1 }],
+          delegation_departments: [], // whole-project scope
+          delegation_permissions: [{ permission: "USER_MANAGEMENT" }],
+        }],
+        error: null,
+      };
+    }
+    if (table === "departments") {
+      const projectId = DEPARTMENT_PROJECT[eq("department_id")];
+      return projectId ? { data: { project_id: projectId }, error: null } : { data: null, error: { message: "0 rows" } };
+    }
+    return { data: null, error: null };
+  });
+}
+const writes = (db) => db.log.filter((q) => q.calls.some((c) => ["insert", "update", "upsert", "delete"].includes(c[0])));
+const roleInserts = (db) =>
+  db.log.filter((q) => q.table === "user_project_roles" && q.calls.some((c) => c[0] === "insert")).map((q) => q.calls.find((c) => c[0] === "insert")[1]);
+const createUser = (body) => adminUsers.POST(jsonRequest("/api/admin/users", { email: "new@x", role: "WORKER", ...body }));
+
+test("admin users: a department from another project is rejected (400) for a whole-project delegate, nothing written", async () => {
+  currentUser = USER_A;
+  supabase = usersDb("delegate");
+  const res = await createUser({ projectId: P1, departmentId: D2_IN_P2, role: "SUPERVISOR" });
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /does not belong to the selected project/);
+  assert.deepEqual(writes(supabase), []);
+});
+
+test("admin users: a mismatched project/department pair is rejected (400) for a real Admin too, nothing written", async () => {
+  currentUser = USER_A;
+  supabase = usersDb("admin");
+  const res = await createUser({ projectId: P1, departmentId: D2_IN_P2 });
+  assert.equal(res.status, 400);
+  assert.deepEqual(writes(supabase), []);
+});
+
+test("admin users: an unknown department is refused, nothing written", async () => {
+  currentUser = USER_A;
+  supabase = usersDb("admin");
+  const res = await createUser({ projectId: P1, departmentId: "33333333-0000-4000-8000-000000000000" });
+  assert.notEqual(res.status, 200);
+  assert.deepEqual(writes(supabase), []);
+});
+
+test("admin users: matching pairs still work for a real Admin and a whole-project delegate", async () => {
+  for (const [actor, projectId, departmentId] of [
+    ["admin", P1, D1_IN_P1],
+    ["admin", P2, D2_IN_P2],
+    ["delegate", P1, D1_IN_P1],
+  ]) {
+    currentUser = USER_A;
+    supabase = usersDb(actor);
+    const res = await createUser({ projectId, departmentId });
+    assert.equal(res.status, 200, `${actor} ${projectId}`);
+    assert.deepEqual(
+      roleInserts(supabase).map((r) => [r.project_id, r.department_id, r.role]),
+      [[projectId, departmentId, "WORKER"]],
+      actor
+    );
+  }
+});
+
+test("admin users: authorization is unchanged — no session 401, delegate creating an Admin 403, outside scope or undelegated refused", async () => {
+  currentUser = null;
+  supabase = usersDb("admin");
+  assert.equal((await createUser({ projectId: P1, departmentId: D1_IN_P1 })).status, 401);
+  assert.ok(!touched(supabase));
+
+  currentUser = USER_A;
+  supabase = usersDb("delegate");
+  assert.equal((await createUser({ projectId: P1, departmentId: D1_IN_P1, role: "ADMIN" })).status, 403);
+  assert.deepEqual(writes(supabase), []);
+
+  for (const [actor, projectId, departmentId] of [
+    ["delegate", P2, D2_IN_P2], // project outside the delegation
+    ["contractor", P1, D1_IN_P1], // no delegation at all
+  ]) {
+    supabase = usersDb(actor);
+    const res = await createUser({ projectId, departmentId });
+    assert.equal(res.status, 403, actor);
+    const { error } = await res.json();
+    assert.equal(error, "You don't have permission to do this.", actor);
+    assert.ok(!error.includes(USER_A.userId), "the caller's user id is not echoed");
+    assert.deepEqual(writes(supabase), [], actor);
+    // Refused by the authorization check, before the department lookup.
+    assert.ok(!supabase.log.some((q) => q.table === "departments"), actor);
+  }
+});
+
+// ===================================================== delegation window and scope
+// hasDelegatedPermission is evaluated on every call: revoked, expired or
+// not-yet-started grants, other projects, other departments and other
+// permissions must all be refused.
+const { hasDelegatedPermission } = require("../lib/delegation.ts");
+
+const HOUR = 60 * 60 * 1000;
+function delegationRow({ status = "Active", startsIn = -HOUR, endsIn = HOUR, projects = [P1], departments = [], permissions = ["USER_MANAGEMENT"] } = {}) {
+  return {
+    delegation_id: "del-x",
+    status,
+    starts_at: new Date(Date.now() + startsIn).toISOString(),
+    ends_at: new Date(Date.now() + endsIn).toISOString(),
+    delegation_projects: projects.map((project_id) => ({ project_id })),
+    delegation_departments: departments.map((department_id) => ({ department_id, departments: { project_id: DEPARTMENT_PROJECT[department_id] } })),
+    delegation_permissions: permissions.map((permission) => ({ permission })),
+  };
+}
+async function delegated(row, permission, scope) {
+  supabase = mockSupabase((table) => (table === "admin_delegations" ? { data: row ? [row] : [], error: null } : { data: null, error: null }));
+  return hasDelegatedPermission(supabase, USER_A.userId, permission, scope);
+}
+
+test("delegation: only an Active grant inside its time window counts", async () => {
+  const scope = { projectId: P1, departmentId: D1_IN_P1 };
+  assert.equal(await delegated(delegationRow(), "USER_MANAGEMENT", scope), true, "active");
+  assert.equal(await delegated(delegationRow({ endsIn: -1000 }), "USER_MANAGEMENT", scope), false, "expired");
+  assert.equal(await delegated(delegationRow({ startsIn: HOUR, endsIn: 2 * HOUR }), "USER_MANAGEMENT", scope), false, "not started yet");
+  assert.equal(await delegated(delegationRow({ status: "Revoked" }), "USER_MANAGEMENT", scope), false, "revoked");
+  assert.equal(await delegated(null, "USER_MANAGEMENT", scope), false, "no delegation");
+});
+
+test("delegation: other projects, departments and permissions are refused", async () => {
+  assert.equal(await delegated(delegationRow(), "USER_MANAGEMENT", { projectId: P2, departmentId: D2_IN_P2 }), false, "other project");
+  assert.equal(await delegated(delegationRow(), "WORK_ITEM_MANAGEMENT", { projectId: P1, departmentId: D1_IN_P1 }), false, "permission not granted");
+
+  const restricted = delegationRow({ departments: [D1_IN_P1], permissions: ["USER_MANAGEMENT", "PROJECT_MANAGEMENT"] });
+  const OTHER_DEPT_IN_P1 = "22222222-0000-4000-8000-000000000009";
+  assert.equal(await delegated(restricted, "USER_MANAGEMENT", { projectId: P1, departmentId: D1_IN_P1 }), true, "listed department");
+  assert.equal(await delegated(restricted, "USER_MANAGEMENT", { projectId: P1, departmentId: OTHER_DEPT_IN_P1 }), false, "unlisted department");
+  assert.equal(await delegated(restricted, "USER_MANAGEMENT", { projectId: P1 }), false, "department-restricted grant needs a department");
+  assert.equal(await delegated(restricted, "PROJECT_MANAGEMENT", { projectId: P1 }), true, "project-level permission");
+});
+
+// ===================================================== /api/admin/work-items dependencies
+// Prerequisite work items must belong to the same project, and a rejected
+// list must leave everything unchanged.
+const adminWorkItems = require("../app/api/admin/work-items/route.ts");
+const W1 = "33333333-0000-4000-8000-000000000001"; // P1
+const W2 = "33333333-0000-4000-8000-000000000002"; // P1
+const WQ = "33333333-0000-4000-8000-000000000003"; // P2
+// "new-item" is what the mocked insert returns; it is created in D1, i.e. P1.
+const WORK_ITEM_PROJECT = { [W1]: P1, [W2]: P1, [WQ]: P2, "new-item": P1 };
+
+function workItemsDb() {
+  return mockSupabase((table, calls) => {
+    const eq = (col) => calls.find((c) => c[0] === "eq" && c[1] === col)?.[2];
+    const inIds = calls.find((c) => c[0] === "in")?.[2];
+    const has = (method) => calls.some((c) => c[0] === method);
+    if (table === "users") return { data: eq("user_role") === "ADMIN" ? { user_id: USER_A.userId } : null, error: null };
+    if (table === "departments") return { data: { project_id: DEPARTMENT_PROJECT[eq("department_id")] }, error: null };
+    if (table === "work_items") {
+      if (has("insert")) return { data: { work_item_id: "new-item" }, error: null };
+      if (has("update")) return { data: null, error: null };
+      if (inIds) {
+        return { data: inIds.filter((id) => WORK_ITEM_PROJECT[id]).map((id) => ({ work_item_id: id, project_id: WORK_ITEM_PROJECT[id] })), error: null };
+      }
+      return { data: { project_id: WORK_ITEM_PROJECT[eq("work_item_id")], department_id: D1_IN_P1 }, error: null };
+    }
+    return { data: null, error: null }; // work_item_dependencies delete/insert
+  });
+}
+const patchWorkItem = (body) =>
+  adminWorkItems.PATCH(new NextRequest("http://localhost/api/admin/work-items", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  }));
+
+test("work items: a prerequisite from another project (or a non-existent one) is refused and nothing is written", async () => {
+  currentUser = USER_A;
+  for (const deps of [[WQ], [W2, WQ], ["33333333-0000-4000-8000-00000000dead"]]) {
+    supabase = workItemsDb();
+    const res = await patchWorkItem({ workItemId: W1, plannedQuantity: 5, dependsOnWorkItemIds: deps });
+    assert.notEqual(res.status, 200, JSON.stringify(deps));
+    assert.match((await res.json()).error, /same project/);
+    assert.deepEqual(writes(supabase), [], JSON.stringify(deps));
+  }
+
+  supabase = workItemsDb();
+  const created = await adminWorkItems.POST(jsonRequest("/api/admin/work-items", {
+    departmentId: D1_IN_P1, lineItemNo: "900", descriptionOfWork: "Test", dependsOnWorkItemIds: [WQ],
+  }));
+  assert.notEqual(created.status, 200);
+  assert.deepEqual(writes(supabase), [], "no work item is created");
+});
+
+test("work items: same-project prerequisites are saved, and edits without dependencies are unchanged", async () => {
+  currentUser = USER_A;
+  supabase = workItemsDb();
+  const res = await patchWorkItem({ workItemId: W1, plannedQuantity: 5, dependsOnWorkItemIds: [W2] });
+  assert.equal(res.status, 200);
+  const inserted = supabase.log.filter((q) => q.table === "work_item_dependencies" && q.calls.some((c) => c[0] === "insert"));
+  assert.deepEqual(inserted[0].calls.find((c) => c[0] === "insert")[1], [{ work_item_id: W1, depends_on_work_item_id: W2 }]);
+  assert.ok(supabase.log.some((q) => q.table === "work_items" && q.calls.some((c) => c[0] === "update")), "values updated");
+
+  supabase = workItemsDb();
+  assert.equal((await patchWorkItem({ workItemId: W1, plannedQuantity: 7 })).status, 200);
+  assert.ok(!supabase.log.some((q) => q.table === "work_item_dependencies"), "dependencies untouched when not sent");
+
+  supabase = workItemsDb();
+  const created = await adminWorkItems.POST(jsonRequest("/api/admin/work-items", {
+    departmentId: D1_IN_P1, lineItemNo: "901", descriptionOfWork: "Test", dependsOnWorkItemIds: [W1],
+  }));
+  assert.equal(created.status, 200);
+});
+
+// ===================================================== password reset requests
+// Capped per email and per client IP before Supabase is asked to send
+// anything; the normal answer never reveals whether an account exists.
+const resetCalls = [];
+stubModule("lib/supabaseServer.ts", {
+  createSupabaseServerClient: async () => ({
+    auth: { resetPasswordForEmail: async (email) => (resetCalls.push(email), { data: {}, error: null }) },
+  }),
+});
+{
+  const file = require.resolve("next/headers");
+  const m = new Module(file);
+  m.filename = file;
+  m.loaded = true;
+  m.exports = { headers: async () => new Headers(), cookies: async () => ({ getAll: () => [], set() {} }) };
+  require.cache[file] = m;
+}
+const { requestPasswordReset } = require("../app/login/actions.ts");
+
+test("password reset: the sixth request for one email within the hour is refused before any email is sent", async () => {
+  let now = Date.UTC(2026, 0, 1);
+  rateLimit.setRateLimitStoreForTests(memoryStore(() => now));
+  resetCalls.length = 0;
+  try {
+    const form = (email) => {
+      const f = new FormData();
+      f.set("email", email);
+      return f;
+    };
+    for (let i = 1; i <= 5; i++) {
+      const r = await requestPasswordReset(undefined, form("someone@example.com"));
+      assert.match(r.message, /If an account exists/, `request ${i}`);
+    }
+    const sixth = await requestPasswordReset(undefined, form("someone@example.com"));
+    assert.match(sixth.error, /Too many requests/);
+    assert.equal(resetCalls.length, 5, "no email for the refused request");
+
+    const other = await requestPasswordReset(undefined, form("other@example.com"));
+    assert.match(other.message, /If an account exists/, "another email is unaffected");
+
+    now += 61 * 60 * 1000;
+    assert.match((await requestPasswordReset(undefined, form("someone@example.com"))).message, /If an account exists/, "window resets");
+  } finally {
+    rateLimit.setRateLimitStoreForTests(undefined);
+  }
 });

@@ -1,7 +1,5 @@
 import LoginForm from "@/components/auth/LoginForm";
-import DemoLoginPanel from "@/components/auth/DemoLoginPanel";
 import LoginBlueprintVisual from "@/components/auth/LoginBlueprintVisual";
-import { getAvailableDemoRoles } from "@/lib/demoAuth";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +30,6 @@ export default async function LoginPage({
 }) {
   const { next, error } = await searchParams;
   const errorMessage = error ? ERROR_MESSAGES[error] : undefined;
-  const demoRoles = getAvailableDemoRoles();
 
   return (
     <main className="flex-1 min-h-0 overflow-hidden flex flex-col lg:flex-row">
@@ -86,7 +83,6 @@ export default async function LoginPage({
             </p>
           )}
 
-          <DemoLoginPanel roles={demoRoles} />
           <LoginForm next={next} />
         </div>
       </div>

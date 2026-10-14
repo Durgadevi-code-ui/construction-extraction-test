@@ -740,6 +740,10 @@ export async function createWorkItem(
     );
   }
 
+  if (params.dependsOnWorkItemIds && params.dependsOnWorkItemIds.length > 0) {
+    await assertWorkItemsInProject(department.project_id as string, params.dependsOnWorkItemIds);
+  }
+
   const { data: created, error } = await supabase
     .from("work_items")
     .insert({
@@ -795,16 +799,18 @@ export async function updateWorkItemValues(
   if ("retainagePercent" in params) update.retainage_percent = params.retainagePercent;
   if ("csiLineCode" in params) update.csi_line_code = params.csiLineCode;
 
+  // Dependencies first: they are validated (same project) before anything
+  // is written, so a rejected list leaves the work item unchanged.
+  if (params.dependsOnWorkItemIds !== undefined) {
+    await setWorkItemDependencies(supabase, workItemId, params.dependsOnWorkItemIds);
+  }
+
   const { error } = await supabase
     .from("work_items")
     .update(update)
     .eq("work_item_id", workItemId);
 
   if (error) throw new Error(`Failed to update work item: ${error.message}`);
-
-  if (params.dependsOnWorkItemIds !== undefined) {
-    await setWorkItemDependencies(supabase, workItemId, params.dependsOnWorkItemIds);
-  }
 }
 
 export type WorkItemDependency = {
@@ -834,6 +840,26 @@ export async function listWorkItemDependencies(
 }
 
 /**
+ * Prerequisites must be existing work items of the same project: the ids
+ * come from the request, and a delegated caller is authorized only for
+ * the work item's own project (the Admin UI offers only same-department
+ * items anyway). Throws otherwise, before the caller writes anything.
+ */
+async function assertWorkItemsInProject(projectId: string, workItemIds: string[]): Promise<void> {
+  const ids = [...new Set(workItemIds)];
+  if (ids.length === 0) return;
+  const { data, error } = await getSupabaseServiceRoleClient()
+    .from("work_items")
+    .select("work_item_id, project_id")
+    .in("work_item_id", ids);
+  if (error) throw new Error(`Failed to verify work item dependencies: ${error.message}`);
+  const projectOf = new Map((data ?? []).map((r) => [r.work_item_id as string, r.project_id as string]));
+  if (ids.some((id) => projectOf.get(id) !== projectId)) {
+    throw new Error("Prerequisite work items must exist in the same project.");
+  }
+}
+
+/**
  * Replaces the full set of prerequisite edges for one work item with
  * exactly `dependsOnWorkItemIds` (delete-then-insert, not a diff — the
  * caller always sends the whole desired state, same as every other
@@ -848,6 +874,18 @@ export async function setWorkItemDependencies(
 ): Promise<void> {
   const distinctIds = [...new Set(dependsOnWorkItemIds)].filter((id) => id !== workItemId);
   const serviceSupabase = getSupabaseServiceRoleClient();
+
+  // Checked before anything is replaced (see assertWorkItemsInProject).
+  if (distinctIds.length > 0) {
+    const { data: own, error: ownError } = await serviceSupabase
+      .from("work_items")
+      .select("project_id")
+      .eq("work_item_id", workItemId)
+      .maybeSingle();
+    if (ownError) throw new Error(`Failed to verify work item dependencies: ${ownError.message}`);
+    if (!own) throw new Error(`Work item not found: ${workItemId}`);
+    await assertWorkItemsInProject(own.project_id as string, distinctIds);
+  }
 
   const { error: deleteError } = await serviceSupabase
     .from("work_item_dependencies")

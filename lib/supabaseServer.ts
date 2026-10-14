@@ -1,6 +1,7 @@
 import "server-only";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { SESSION_COOKIE_OPTIONS } from "./sessionCookies";
 
 /**
  * Auth-aware Supabase client for Server Components, Server Actions, and
@@ -27,6 +28,7 @@ export async function createSupabaseServerClient() {
     required("NEXT_PUBLIC_SUPABASE_URL"),
     required("NEXT_PUBLIC_SUPABASE_ANON_KEY"),
     {
+      cookieOptions: SESSION_COOKIE_OPTIONS,
       cookies: {
         getAll() {
           return cookieStore.getAll();

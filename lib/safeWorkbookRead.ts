@@ -1,21 +1,24 @@
 import * as XLSX from "xlsx";
 
 /**
- * XLSX.read with a guard against the known SheetJS prototype-pollution
- * advisory (GHSA-4r6h-8v6p-xvw6, fixed only in SheetJS >= 0.19.3, which
- * is not published to the npm registry — npm's newest is 0.18.5, the
- * version installed here). A crafted workbook could add or overwrite
- * properties on Object.prototype / Array.prototype while being parsed;
- * in a long-lived server that would leak into every later request. This
- * snapshots both prototypes, parses, and if the parse changed either one,
- * restores them and throws — both callers already treat a throw as an
- * unreadable file (lib/excelImport.ts -> 400 "Could not read this file";
+ * XLSX.read with a guard against prototype pollution while parsing.
+ *
+ * SheetJS is installed from the official SheetJS CDN (0.20.3, see
+ * package.json), not the npm registry, whose newest `xlsx` is the
+ * outdated 0.18.5. 0.20.3 fixes both known advisories: prototype
+ * pollution (GHSA-4r6h-8v6p-xvw6, fixed in 0.19.3) and ReDoS
+ * (GHSA-5pgg-2g8v-p4x9, fixed in 0.20.2). This guard is kept as defense
+ * in depth: a crafted workbook that added or overwrote properties on
+ * Object.prototype / Array.prototype would, in a long-lived server, leak
+ * into every later request. This snapshots both prototypes, parses, and
+ * if the parse changed either one, restores them and throws — both
+ * callers already treat a throw as an unreadable file
+ * (lib/excelImport.ts -> 400 "Could not read this file";
  * lib/excelExport.ts -> falls back to the generated workbook). A normal
  * workbook never touches either prototype, so parsing is unchanged.
  *
- * Does NOT fix the separate ReDoS advisory (GHSA-5pgg-2g8v-p4x9) — no
- * npm release does. Exposure is bounded instead: the 10MB upload cap,
- * the decompressed-size check below (a small .xlsx can't expand into
+ * Parser exposure is also bounded by the 10MB upload cap, the
+ * decompressed-size check below (a small .xlsx can't expand into
  * gigabytes of XML for the parser), per-user rate limits on import and
  * export (lib/rateLimit.ts), and only Admins / PROJECT_MANAGEMENT
  * delegates being able to upload a workbook at all.

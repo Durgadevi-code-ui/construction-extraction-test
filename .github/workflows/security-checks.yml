@@ -1,0 +1,62 @@
+# Runs on every pull request to main (and on pushes to main): lint, type
+# check, the security test suite, a production-dependency audit and a
+# production build. Make it a required status check on main (Settings ->
+# Branches -> branch protection rule, or Rules -> Rulesets) so a pull
+# request cannot be merged while it is failing.
+#
+# Needs no repository secrets: the tests stub Supabase, and the build uses
+# placeholder values (nothing is fetched from Supabase at build time).
+name: Security checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: http://supabase.test.invalid
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: ci-placeholder-service-role-key
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # --ignore-scripts: no dependency install hooks run in CI.
+      - name: Install dependencies (lockfile only)
+        run: npm ci --ignore-scripts
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: |
+          npx next typegen
+          npm run typecheck
+
+      - name: Security tests
+        run: npm test
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Production build
+        run: npm run build

@@ -65,6 +65,15 @@ export function looksLikeAudio(bytes: Bytes): boolean {
   return false;
 }
 
+/** File extension for a stored upload, from its (client-declared) MIME
+ * subtype: "audio/webm;codecs=opus" -> "webm", "audio/x-m4a" -> "x-m4a".
+ * Anything that isn't a plain short token becomes "bin", so the declared
+ * type can never put odd characters into a storage object name. */
+export function storageExtension(mimeType: string): string {
+  const subtype = (mimeType.split("/")[1] ?? "").split(";")[0].trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9-]{0,15}$/.test(subtype) ? subtype : "bin";
+}
+
 const WORKBOOK_EXTENSIONS = [".xlsx", ".xls", ".csv"];
 
 /** Whether `fileName` has one of the extensions the import picker offers
