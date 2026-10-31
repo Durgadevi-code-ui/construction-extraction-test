@@ -1198,6 +1198,10 @@ function UsersTab({
               {!u.isLinked && (isRealAdmin || u.role !== "ADMIN") && (
                 <LinkLoginButton adminUserId={adminUserId} targetUserId={u.userId} email={u.email} />
               )}
+              {/* Same boundary, server-side in app/api/admin/reset-password. */}
+              {u.isLinked && u.userId !== adminUserId && (isRealAdmin || u.role !== "ADMIN") && (
+                <ResetPasswordButton targetUserId={u.userId} email={u.email} />
+              )}
             </div>
             {u.projectRoles.length === 0 ? (
               <p className="text-foreground-muted mt-1">No active project/department role assignment yet.</p>
@@ -1336,6 +1340,78 @@ function LinkLoginButton({
       />
       <Button type="submit" size="sm" disabled={submitting}>
         {submitting ? "Creating…" : "Create"}
+      </Button>
+      <Button type="button" variant="secondary" size="sm" onClick={() => setOpen(false)} disabled={submitting}>
+        Cancel
+      </Button>
+      {error && <span className="text-xs text-error">{error}</span>}
+    </form>
+  );
+}
+
+/**
+ * Sets a new password for a user who already has a login
+ * (app/api/admin/reset-password → setPasswordVerified): the change is proven
+ * by a real sign-in and all of that user's sessions are ended. The new
+ * password is shown once, only after the server confirms it.
+ */
+function ResetPasswordButton({ targetUserId, email }: { targetUserId: string; email: string }) {
+  const { submit, submitting, error } = useSubmit("/api/admin/reset-password");
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirmed, setConfirmed] = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!window.confirm(`Set a new password for ${email}? Their current password and sessions stop working.`)) return;
+    const result = await submit({ targetUserId, password });
+    if (result) {
+      setConfirmed(password);
+      setOpen(false);
+      setPassword("");
+    }
+  }
+
+  if (confirmed) {
+    return (
+      <div className="text-xs bg-success-soft border border-success-border rounded-lg p-2 max-w-xs">
+        <p className="text-success font-medium">New password set and verified for {email}.</p>
+        <p className="text-foreground-secondary mt-1">
+          Temporary password (shown once — share it securely):{" "}
+          <span className="font-mono select-all">{confirmed}</span>
+        </p>
+      </div>
+    );
+  }
+
+  if (!open) {
+    return (
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => {
+          setPassword(generateTempPassword());
+          setOpen(true);
+        }}
+        className="shrink-0"
+      >
+        Reset Password
+      </Button>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="flex items-center gap-1.5 shrink-0">
+      <Input
+        type="text"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        minLength={8}
+        required
+        className="w-32 py-1.5 text-xs font-mono"
+      />
+      <Button type="submit" size="sm" disabled={submitting}>
+        {submitting ? "Setting…" : "Set"}
       </Button>
       <Button type="button" variant="secondary" size="sm" onClick={() => setOpen(false)} disabled={submitting}>
         Cancel

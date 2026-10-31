@@ -65,7 +65,8 @@ function mockSupabase(respond = () => ({ data: null, error: null })) {
 }
 
 let supabase = mockSupabase();
-stubModule("lib/supabaseAdmin.ts", { getSupabaseServiceRoleClient: () => supabase });
+let passwordCheckClient = () => ({ auth: { signInWithPassword: async () => ({ data: { user: null }, error: { code: "invalid_credentials", status: 400 } }), signOut: async () => ({ error: null }) } });
+stubModule("lib/supabaseAdmin.ts", { getSupabaseServiceRoleClient: () => supabase, createPasswordCheckClient: () => passwordCheckClient() });
 
 const { NextRequest } = require("next/server");
 const rateLimit = require("../lib/rateLimit.ts");
@@ -823,4 +824,115 @@ test("admin users: an EXISTING user only gains the role — no password needed, 
   assert.deepEqual(await res.json(), { ok: true, userCreated: false, loginCreated: false });
   assert.equal(supabase.authState.authUsers.length, 0);
   assert.ok(!supabase.log.some((q) => q.table === "users" && q.calls.some((c) => c[0] === "insert")), "no second app user");
+});
+
+// ===================================================== Admin Setup → Reset Password
+// app/api/admin/reset-password: the supported way to give an existing login
+// a known password again (instead of editing it in the Supabase dashboard).
+const resetPasswordRoute = require("../app/api/admin/reset-password/route.ts");
+
+/** actor: "admin" | "delegate" | "contractor"; target overrides the target user row. */
+function resetDb(actor, target = {}) {
+  const row = { user_id: "target-user", user_mail: "worker@example.com", department_id: D1_IN_P1, user_role: "WORKER", status: "Active", auth_user_id: "auth-target", ...target };
+  const state = { password: "Old-Password-1", updates: [], signOuts: [] };
+  const db = mockSupabase((table, calls) => {
+    const eq = (col) => calls.find((c) => c[0] === "eq" && c[1] === col)?.[2];
+    const has = (m) => calls.some((c) => c[0] === m);
+    if (table === "users") {
+      if (eq("user_role") === "ADMIN") return { data: actor === "admin" && eq("user_id") === USER_A.userId ? { user_id: USER_A.userId } : null, error: null };
+      if (eq("user_id") === row.user_id) return { data: row, error: null }; // getUserLinkContext
+      if (eq("user_mail") === row.user_mail && !has("maybeSingle")) return { data: [row], error: null }; // setPasswordVerified
+      return { data: null, error: null };
+    }
+    if (table === "admin_delegations") {
+      if (actor !== "delegate") return { data: [], error: null };
+      const day = 24 * 60 * 60 * 1000;
+      return {
+        data: [{
+          delegation_id: "del-1", status: "Active",
+          starts_at: new Date(Date.now() - day).toISOString(), ends_at: new Date(Date.now() + day).toISOString(),
+          delegation_projects: [{ project_id: P1 }], delegation_departments: [], delegation_permissions: [{ permission: "USER_MANAGEMENT" }],
+        }],
+        error: null,
+      };
+    }
+    if (table === "departments") return { data: { project_id: DEPARTMENT_PROJECT[eq("department_id")] }, error: null };
+    if (table === "user_project_roles") {
+      // The acting Contractor's own assignment (delegations require a Contractor role).
+      return { data: [{ user_id: USER_A.userId, role: "SUPERVISOR", project_id: P1, department_id: D1_IN_P1, projects: { project_name: "P1" }, departments: { department_name: "D1" } }], error: null };
+    }
+    return { data: null, error: null };
+  });
+  db.resetState = state;
+  db.auth = {
+    admin: {
+      getUserById: async (id) => ({ data: { user: id === row.auth_user_id ? { id, email: row.user_mail, email_confirmed_at: "2026-01-01T00:00:00Z" } : null }, error: null }),
+      updateUserById: async (id, { password }) => (state.updates.push(id), (state.password = password), { data: {}, error: null }),
+    },
+  };
+  passwordCheckClient = () => ({
+    auth: {
+      signInWithPassword: async ({ email, password }) =>
+        email === row.user_mail && password === state.password
+          ? { data: { user: { id: row.auth_user_id } }, error: null }
+          : { data: { user: null }, error: { name: "AuthApiError", code: "invalid_credentials", status: 400, message: "Invalid login credentials" } },
+      signOut: async ({ scope }) => (state.signOuts.push(scope), { error: null }),
+    },
+  });
+  return db;
+}
+const resetPassword = (body) => resetPasswordRoute.POST(jsonRequest("/api/admin/reset-password", { targetUserId: "target-user", password: "New-Password-1", ...body }));
+
+test("reset password: a real Admin sets a new password; it is proven by a sign-in and all sessions are revoked", async () => {
+  currentUser = USER_A;
+  supabase = resetDb("admin");
+  const res = await resetPassword({});
+  assert.equal(res.status, 200, JSON.stringify(await res.clone().json()));
+  assert.deepEqual(supabase.resetState.updates, ["auth-target"], "only the target's login was changed");
+  assert.equal(supabase.resetState.password, "New-Password-1");
+  assert.deepEqual(supabase.resetState.signOuts, ["global"], "every session of that user ended");
+  assert.ok(!JSON.stringify(await res.json()).includes("New-Password-1"), "the password is never returned");
+});
+
+test("reset password: a delegated Contractor may reset a Worker in scope, never an Admin", async () => {
+  currentUser = USER_A;
+  supabase = resetDb("delegate");
+  assert.equal((await resetPassword({})).status, 200);
+
+  supabase = resetDb("delegate", { user_role: "ADMIN" });
+  assert.equal((await resetPassword({})).status, 403);
+  assert.deepEqual(supabase.resetState.updates, []);
+});
+
+test("reset password: no session, no delegation, own account, weak password or no login yet → refused, nothing changed", async () => {
+  currentUser = null;
+  supabase = resetDb("admin");
+  assert.equal((await resetPassword({})).status, 401);
+
+  currentUser = USER_A;
+  supabase = resetDb("contractor");
+  assert.equal((await resetPassword({})).status, 403);
+  assert.deepEqual(supabase.resetState.updates, []);
+
+  supabase = resetDb("admin");
+  assert.equal((await resetPassword({ targetUserId: USER_A.userId })).status, 400, "own account → use the account page");
+  for (const password of ["short", "", " Leading-space-1"]) assert.equal((await resetPassword({ password })).status, 400, password);
+  assert.deepEqual(supabase.resetState.updates, []);
+
+  supabase = resetDb("admin", { auth_user_id: null });
+  const res = await resetPassword({});
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /Link Login/);
+  assert.deepEqual(supabase.resetState.updates, []);
+});
+
+test("reset password: Supabase accepts but the proof sign-in fails → reported as NOT confirmed (500), never as success", async () => {
+  currentUser = USER_A;
+  supabase = resetDb("admin");
+  const proof = passwordCheckClient;
+  passwordCheckClient = () => ({ auth: { signInWithPassword: async () => ({ data: { user: null }, error: { name: "AuthApiError", status: 429, code: "over_request_rate_limit", message: "x" } }), signOut: async () => ({ error: null }) } });
+  const res = await resetPassword({});
+  passwordCheckClient = proof;
+  assert.equal(res.status, 500);
+  assert.match((await res.json()).error, /not confirmed.*old password no longer works/);
 });

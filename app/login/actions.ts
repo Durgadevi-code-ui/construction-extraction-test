@@ -69,7 +69,14 @@ export async function login(
   const { data, error } = signInResult;
 
   if (error) {
-    return { error: signInErrorMessage(error) };
+    const ref = logRef();
+    const kind = classifySignInError(error);
+    // Wrong password vs. wrong email vs. no login: answered from the
+    // server-side records, logged only — the browser gets the same message
+    // either way, so this reveals nothing about which accounts exist.
+    const account = kind === "invalid_credentials" ? await describeAccount(email) : undefined;
+    logLogin(ref, "sign-in", "rejected", { email, kind, status: error.status, code: error.code, account });
+    return { error: signInErrorMessage(kind, ref) };
   }
 
   // A Supabase Auth account with no linked public.users row (see
@@ -88,20 +95,65 @@ export async function login(
   // never "not linked" (which used to be shown, and the user signed out).
   if (profileError) {
     const ref = logRef();
-    console.error("Profile lookup after sign-in failed", { ref, code: profileError.code });
+    logLogin(ref, "profile", "lookup-failed", { email, code: profileError.code });
     await supabase.auth.signOut({ scope: "local" });
     return { error: `The sign-in service is temporarily unavailable. Please try again shortly. (ref ${ref})` };
   }
 
   if (!profile) {
+    const ref = logRef();
+    logLogin(ref, "profile", "login-not-linked", { email });
     await supabase.auth.signOut();
     return {
-      error:
-        "This login isn't linked to an application account yet. Contact your Administrator to get access.",
+      error: `This login isn't linked to an application account yet. Contact your Administrator to get access. (ref ${ref})`,
     };
   }
 
+  logLogin(logRef(), "session", "signed-in", { email, user: String(profile.user_id).slice(0, 8) });
   redirect(redirectTo);
+}
+
+/**
+ * Why Supabase answered "invalid credentials", from the app's own records
+ * (service-role, server-side only). Supabase deliberately gives the same
+ * answer for a wrong password and an unknown email; this tells them apart
+ * for the operator. Never throws — diagnostics must not break login.
+ */
+async function describeAccount(email: string): Promise<string> {
+  try {
+    const admin = getSupabaseServiceRoleClient();
+    const { data: profile, error } = await admin.from("users").select("auth_user_id").eq("user_mail", email).maybeSingle();
+    if (error) return "lookup-failed";
+    if (!profile) return "no-app-user-with-this-email";
+    if (!profile.auth_user_id) return "app-user-has-no-login";
+    const { data: auth } = await admin.auth.admin.getUserById(profile.auth_user_id);
+    if (!auth?.user) return "linked-login-missing";
+    if (normalizeEmail(auth.user.email) !== email) return "login-email-differs";
+    if (!auth.user.email_confirmed_at) return "login-email-not-confirmed";
+    if (auth.user.banned_until && new Date(auth.user.banned_until) > new Date()) return "login-banned";
+    return "login-exists-password-rejected";
+  } catch {
+    return "lookup-failed";
+  }
+}
+
+/** Masks an email for logs: "fo***n@abcconstruction.com". */
+function maskEmail(email: string): string {
+  const [user = "", domain = ""] = email.split("@");
+  return `${user.slice(0, 2)}***${user.length > 3 ? user.slice(-1) : ""}@${domain}`;
+}
+
+/**
+ * One structured line per login attempt, e.g.
+ *   [auth] {"ref":"3f2a9c1d","stage":"sign-in","outcome":"rejected","email":"fo***n@…","kind":"invalid_credentials","account":"login-exists-password-rejected"}
+ * The ref is also shown to the user. Never logs a password, token, cookie
+ * or key; the email is masked.
+ */
+function logLogin(ref: string, stage: string, outcome: string, details: { email: string } & Record<string, unknown>): void {
+  const { email, ...rest } = details;
+  const line = JSON.stringify({ ref, stage, outcome, email: maskEmail(email), ...rest });
+  if (outcome === "signed-in") console.info(`[auth] ${line}`);
+  else console.warn(`[auth] ${line}`);
 }
 
 /**
@@ -114,21 +166,16 @@ export async function login(
  * The log line carries Supabase's error code/status only — never the
  * email or password.
  */
-function signInErrorMessage(error: { message: string; status?: number; code?: string; name?: string }): string {
-  const kind = classifySignInError(error);
-  if (kind === "invalid_credentials") return "Invalid email or password.";
-  if (kind === "email_not_confirmed") return "Please confirm your email address before signing in.";
-
-  // `ref` appears in the message and the server log, so a reported failure
-  // can be found in the Vercel logs without logging who it was.
-  const ref = logRef();
-  console.error("Supabase sign-in failed", { ref, kind, name: error.name, status: error.status, code: error.code });
-
+function signInErrorMessage(kind: ReturnType<typeof classifySignInError>, ref: string): string {
+  // Every message carries `ref`, which is also in the server log line, so a
+  // reported failure can be looked up (Vercel logs / the dev terminal).
+  if (kind === "invalid_credentials") return `Invalid email or password. (ref ${ref})`;
+  if (kind === "email_not_confirmed") return `Please confirm your email address before signing in. (ref ${ref})`;
   if (kind === "rate_limited") return `Too many sign-in attempts. Please wait a few minutes and try again. (ref ${ref})`;
   if (kind === "unavailable") return `The sign-in service is temporarily unavailable. Please try again shortly. (ref ${ref})`;
   // Supabase rejected the app's own API key, not the user.
   if (kind === "app_key_rejected") return `Sign-in is not available right now. Please contact your Administrator. (ref ${ref})`;
-  return "Invalid email or password.";
+  return `Invalid email or password. (ref ${ref})`;
 }
 
 /** Short random id tying a user-visible failure to its server log line. */

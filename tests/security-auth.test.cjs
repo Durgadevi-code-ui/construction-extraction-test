@@ -80,10 +80,14 @@ test("sessions: only a password sign-in or a Supabase-emailed link can create on
     "lib/authAccounts.ts": ["signInWithPassword"],
   });
   assert.ok(!sourceFiles().some((rel) => /["']magiclink["']/.test(read(rel))), "no magic-link sign-in");
-  // The password-setting operation is for the operator script only, never
-  // reachable from a page, route or component.
-  const appCallers = sourceFiles().filter((rel) => rel !== "lib/authAccounts.ts" && /setPasswordVerified/.test(read(rel)));
-  assert.deepEqual(appCallers, []);
+  // The password-setting operation was for the operator script only; it is
+  // now reachable from no page or component, only the one route below.
+  // Reachable from exactly one app route: Admin Setup → Reset Password,
+  // which is Admin/delegation-authorized (tested in security-routes).
+  // An import or a call, not a mention in a comment.
+  const usesIt = (src) => /import[^;]*\bsetPasswordVerified\b|\bsetPasswordVerified\s*\(/.test(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, ""));
+  const appCallers = sourceFiles().filter((rel) => rel !== "lib/authAccounts.ts" && usesIt(read(rel)));
+  assert.deepEqual(appCallers, ["app/api/admin/reset-password/route.ts"]);
 });
 
 // ===================================================== ordinary login still enforced
@@ -165,13 +169,13 @@ test("login: a demo identity without a password is refused before Supabase is as
 test("login: a wrong password is refused with the generic message and no session", async () => {
   reset();
   const r = await login(undefined, form({ email: "demo-admin@example.com", password: "guess" }));
-  assert.equal(r.error, "Invalid email or password.");
+  assert.match(r.error, /^Invalid email or password\. \(ref [0-9a-f]{8}\)$/);
   assert.deepEqual(signInCalls, [{ email: "demo-admin@example.com", password: "guess" }]);
 });
 
 test("login: only Supabase's invalid_credentials answer reads as a wrong password", async () => {
   const cases = [
-    [{ name: "AuthApiError", status: 400, code: "invalid_credentials", message: "Invalid login credentials" }, /^Invalid email or password\.$/],
+    [{ name: "AuthApiError", status: 400, code: "invalid_credentials", message: "Invalid login credentials" }, /^Invalid email or password\. \(ref [0-9a-f]{8}\)$/],
     [{ name: "AuthApiError", status: 400, code: "email_not_confirmed", message: "Email not confirmed" }, /confirm your email/],
     [{ name: "AuthApiError", status: 429, code: "over_request_rate_limit", message: "Request rate limit reached" }, /Too many sign-in attempts/],
     [{ name: "AuthRetryableFetchError", status: 0, message: "fetch failed" }, /temporarily unavailable/],
@@ -179,8 +183,8 @@ test("login: only Supabase's invalid_credentials answer reads as a wrong passwor
     [{ name: "AuthApiError", status: 401, message: "Invalid API key" }, /not available right now/],
   ];
   const logged = [];
-  const originalError = console.error;
-  console.error = (...args) => logged.push(JSON.stringify(args));
+  const originalWarn = console.warn;
+  console.warn = (...args) => logged.push(JSON.stringify(args));
   try {
     for (const [error, expected] of cases) {
       reset();
@@ -189,7 +193,7 @@ test("login: only Supabase's invalid_credentials answer reads as a wrong passwor
       assert.match(r.error, expected, error.code ?? error.name);
     }
   } finally {
-    console.error = originalError;
+    console.warn = originalWarn;
   }
   assert.ok(logged.length > 0, "non-credential failures are logged server-side");
   assert.ok(logged.every((line) => !line.includes("someone@example.com") && !line.includes("secret-pw-123")), "logs never carry the email or password");
@@ -271,13 +275,13 @@ test("login: a database error after a CORRECT password is 'temporarily unavailab
   linkedProfile = { user_id: "user-1" };
   profileLookupError = { code: "57014", message: "canceling statement due to statement timeout" };
   const logged = [];
-  const originalError = console.error;
-  console.error = (...args) => logged.push(JSON.stringify(args));
+  const originalWarn = console.warn;
+  console.warn = (...args) => logged.push(JSON.stringify(args));
   let r;
   try {
     r = await login(undefined, form({ email: "someone@example.com", password: "right-pass-1" }));
   } finally {
-    console.error = originalError;
+    console.warn = originalWarn;
   }
   assert.match(r.error, /temporarily unavailable.*\(ref [0-9a-f]{8}\)/);
   assert.doesNotMatch(r.error, /isn't linked|Invalid email or password/);
@@ -289,8 +293,8 @@ test("login: a database error after a CORRECT password is 'temporarily unavailab
 
 test("login: non-credential failures carry a reference id that matches the server log", async () => {
   const logged = [];
-  const originalError = console.error;
-  console.error = (...args) => logged.push(JSON.stringify(args));
+  const originalWarn = console.warn;
+  console.warn = (...args) => logged.push(JSON.stringify(args));
   try {
     for (const error of [
       { name: "AuthRetryableFetchError", status: 0, message: "fetch failed" },
@@ -306,9 +310,9 @@ test("login: non-credential failures carry a reference id that matches the serve
     }
     reset();
     signInResult = { data: { user: null, session: null }, error: { name: "AuthApiError", status: 400, code: "invalid_credentials", message: "Invalid login credentials" } };
-    assert.equal((await login(undefined, form({ email: "someone@example.com", password: "pw-123456" }))).error, "Invalid email or password.", "wrong password stays exactly the generic message (no ref, nothing to enumerate)");
+    assert.match((await login(undefined, form({ email: "someone@example.com", password: "pw-123456" }))).error, /^Invalid email or password\. \(ref [0-9a-f]{8}\)$/, "the same message for every wrong email/password, plus a reference");
   } finally {
-    console.error = originalError;
+    console.warn = originalWarn;
   }
 });
 
@@ -331,4 +335,97 @@ test("roles: a user with several assignments always gets the same one (oldest fi
     ["order", "user_project_role_id", { ascending: true }],
   ]);
   assert.equal(ctx.role, "FOREMAN", "first row of the ordered result");
+});
+
+// ===================================================== login diagnostics
+
+function captureWarn(fn) {
+  const lines = [];
+  const original = console.warn;
+  console.warn = (...args) => lines.push(args.join(" "));
+  return Promise.resolve(fn()).then(
+    (r) => ((console.warn = original), { r, lines }),
+    (e) => ((console.warn = original), Promise.reject(e))
+  );
+}
+
+test("diagnostics: a rejected sign-in logs ref + stage + Supabase kind + account state; the browser sees only the generic message", async () => {
+  reset();
+  signInResult = { data: { user: null, session: null }, error: { name: "AuthApiError", status: 400, code: "invalid_credentials", message: "Invalid login credentials" } };
+  const { r, lines } = await captureWarn(() => login(undefined, form({ email: "Someone@Example.com", password: "secret-pw-123" })));
+  const ref = r.error.match(/\(ref ([0-9a-f]{8})\)$/)[1];
+  assert.equal(lines.length, 1);
+  const entry = JSON.parse(lines[0].replace(/^\[auth\] /, ""));
+  assert.equal(entry.ref, ref, "the log line matches the reference shown to the user");
+  assert.equal(entry.stage, "sign-in");
+  assert.equal(entry.outcome, "rejected");
+  assert.equal(entry.kind, "invalid_credentials");
+  assert.equal(entry.email, "so***e@example.com", "email masked");
+  assert.ok(typeof entry.account === "string" && entry.account.length > 0, "account state recorded");
+  assert.ok(!lines[0].includes("secret-pw-123") && !lines[0].includes("someone@example.com"), "no password, no full email");
+  assert.ok(!/account|exists|no-app-user|password-rejected/i.test(r.error.replace(/\(ref [0-9a-f]{8}\)$/, "")), "nothing account-specific reaches the browser");
+});
+
+test("diagnostics: the account state distinguishes unknown email, missing login and a rejected password", async () => {
+  const admin = (profile, authUser) => ({
+    from: () => {
+      const q = { select: () => q, eq: () => q, maybeSingle: async () => ({ data: profile, error: null }) };
+      return q;
+    },
+    auth: { admin: { getUserById: async () => ({ data: { user: authUser }, error: null }) } },
+  });
+  const cases = [
+    [admin(null, null), "no-app-user-with-this-email"],
+    [admin({ auth_user_id: null }, null), "app-user-has-no-login"],
+    [admin({ auth_user_id: "a1" }, null), "linked-login-missing"],
+    [admin({ auth_user_id: "a1" }, { email: "other@example.com", email_confirmed_at: "x" }), "login-email-differs"],
+    [admin({ auth_user_id: "a1" }, { email: "someone@example.com", email_confirmed_at: null }), "login-email-not-confirmed"],
+    [admin({ auth_user_id: "a1" }, { email: "someone@example.com", email_confirmed_at: "x" }), "login-exists-password-rejected"],
+  ];
+  const adminModule = require.cache[require.resolve(path.join(ROOT, "lib/supabaseAdmin.ts"))].exports;
+  const original = adminModule.getSupabaseServiceRoleClient;
+  try {
+    for (const [client, expected] of cases) {
+      adminModule.getSupabaseServiceRoleClient = () => client;
+      reset();
+      signInResult = { data: { user: null, session: null }, error: { name: "AuthApiError", status: 400, code: "invalid_credentials", message: "Invalid login credentials" } };
+      const { r, lines } = await captureWarn(() => login(undefined, form({ email: "someone@example.com", password: "pw-123456" })));
+      assert.equal(JSON.parse(lines[0].replace(/^\[auth\] /, "")).account, expected);
+      assert.match(r.error, /^Invalid email or password\. \(ref [0-9a-f]{8}\)$/, `${expected}: same message for the browser`);
+    }
+  } finally {
+    adminModule.getSupabaseServiceRoleClient = original;
+  }
+});
+
+test("diagnostics: a failing account lookup never breaks the login answer", async () => {
+  const adminModule = require.cache[require.resolve(path.join(ROOT, "lib/supabaseAdmin.ts"))].exports;
+  const original = adminModule.getSupabaseServiceRoleClient;
+  adminModule.getSupabaseServiceRoleClient = () => { throw new Error("db down"); };
+  try {
+    reset();
+    signInResult = { data: { user: null, session: null }, error: { name: "AuthApiError", status: 400, code: "invalid_credentials", message: "Invalid login credentials" } };
+    const { r, lines } = await captureWarn(() => login(undefined, form({ email: "someone@example.com", password: "pw-123456" })));
+    assert.match(r.error, /^Invalid email or password\./);
+    assert.equal(JSON.parse(lines[0].replace(/^\[auth\] /, "")).account, "lookup-failed");
+  } finally {
+    adminModule.getSupabaseServiceRoleClient = original;
+  }
+});
+
+test("diagnostics: a successful sign-in logs the 'signed-in' stage with no secrets", async () => {
+  reset();
+  signInResult = { data: { user: { id: "auth-1" } }, error: null };
+  linkedProfile = { user_id: "user-1234567890" };
+  const lines = [];
+  const original = console.info;
+  console.info = (...args) => lines.push(args.join(" "));
+  try {
+    await assert.rejects(login(undefined, form({ email: "someone@example.com", password: "right-pass-1" })), { to: "/workflow" });
+  } finally {
+    console.info = original;
+  }
+  const entry = JSON.parse(lines[0].replace(/^\[auth\] /, ""));
+  assert.deepEqual([entry.stage, entry.outcome, entry.user], ["session", "signed-in", "user-123"]);
+  assert.ok(!lines[0].includes("right-pass-1") && !lines[0].includes("someone@example.com"));
 });

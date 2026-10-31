@@ -227,14 +227,31 @@ async function main() {
   console.log("\n== Password, normalization, role change, missing role");
   const worker = accounts.find((a) => a.role === "WORKER");
   const wrong = await formLogin(worker.email, `${worker.password}x`);
-  check(!wrong.signedIn && wrong.error === "Invalid email or password.", "WORKER", "wrong password rejected with \"Invalid email or password.\" and no session", wrong.error ?? `HTTP ${wrong.status}`);
+  check(!wrong.signedIn && /^Invalid email or password\. \(ref [0-9a-f]{8}\)$/.test(wrong.error ?? ""), "WORKER", "wrong password rejected with \"Invalid email or password. (ref …)\" and no session", wrong.error ?? `HTTP ${wrong.status}`);
   const upper = await formLogin(`  ${worker.email.toUpperCase()}  `, worker.password);
   check(upper.signedIn, "WORKER", "email typed in UPPERCASE with spaces signs in (normalization)");
   const roleChange = await postJson("/api/admin/users", adminSession.jar, { ...scope, email: worker.email, role: "FOREMAN" });
   let roleBody = {};
   try { roleBody = JSON.parse(roleChange.text); } catch { /* reported below */ }
   check(roleChange.status === 200 && roleBody.userCreated === false && roleBody.loginCreated === false, "WORKER", "adding a role to an existing user creates no new user or login", `HTTP ${roleChange.status}`);
-  check((await formLogin(worker.email, worker.password)).signedIn, "WORKER", "same password still works after the role change");
+  const beforeReset = await formLogin(worker.email, worker.password);
+  check(beforeReset.signedIn, "WORKER", "same password still works after the role change");
+
+  // Admin Setup → Reset Password (the supported recovery for a login whose
+  // password no longer matches what the person was given).
+  const newPassword2 = newPassword();
+  const reset = await postJson("/api/admin/reset-password", adminSession.jar, { targetUserId: worker.userId, password: newPassword2 });
+  check(reset.status === 200, "WORKER", "Admin resets the password through POST /api/admin/reset-password (verified by Supabase sign-in)", `HTTP ${reset.status} ${reset.status === 200 ? "" : reset.text.slice(0, 120)}`);
+  check(!(await formLogin(worker.email, worker.password)).signedIn, "WORKER", "the old password no longer works");
+  check((await formLogin(worker.email, newPassword2)).signedIn, "WORKER", "the new password signs in");
+  const stale = await get("/workflow", beforeReset.jar);
+  check(stale.status >= 300 && stale.status < 400 && stale.location === "/login", "WORKER", "sessions opened before the reset are ended", `${stale.status} ${stale.location ?? ""}`);
+  worker.password = newPassword2;
+  const selfReset = await postJson("/api/admin/reset-password", adminSession.jar, { targetUserId: (await svc.from("users").select("user_id").eq("user_mail", adminAccount.email).single()).data.user_id, password: newPassword() });
+  check(selfReset.status === 400, "ADMIN", "an Admin cannot reset their own password here (use the account page)", `HTTP ${selfReset.status}`);
+  const workerSession = await formLogin(worker.email, worker.password);
+  const workerTriesReset = await postJson("/api/admin/reset-password", workerSession.jar, { targetUserId: accounts.find((a) => a.role === "FOREMAN").userId, password: newPassword() });
+  check(workerTriesReset.status === 403, "WORKER", "a Worker cannot reset anyone's password", `HTTP ${workerTriesReset.status}`);
 
   // A user whose only assignment is removed: signs in, but gets no dashboard or role API.
   const norole = { role: "WORKER", email: emailFor("no-role"), password: newPassword() };

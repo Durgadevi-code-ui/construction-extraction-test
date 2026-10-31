@@ -48,6 +48,18 @@ export function getSupabaseServiceRoleClient() {
   );
 }
 
+/**
+ * A fresh public-key client with no session storage — the same kind of
+ * client the login page signs in with. Used only to PROVE a password an
+ * Admin just set (lib/authAccounts.ts setPasswordVerified signs in with it,
+ * then revokes that session). Never exposed to the browser.
+ */
+export function createPasswordCheckClient() {
+  return createClient(required("NEXT_PUBLIC_SUPABASE_URL"), required("NEXT_PUBLIC_SUPABASE_ANON_KEY"), {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
+
 function required(name: string): string {
   const value = process.env[name];
   if (!value) {
