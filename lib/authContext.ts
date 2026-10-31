@@ -46,7 +46,14 @@ export async function getUserContext(
       "user_id, role, project_id, department_id, projects(project_name), departments(department_name)"
     )
     .eq("user_id", userId)
-    .eq("status", "Active");
+    .eq("status", "Active")
+    // Deterministic "first row" for users holding several assignments:
+    // without an order Postgres may return them in any order, so the same
+    // user could land on a different role's dashboard from one visit to
+    // the next. Oldest assignment first matches the order rows were
+    // observed in (2026-10-31), so today's routing is unchanged.
+    .order("created_at", { ascending: true })
+    .order("user_project_role_id", { ascending: true });
 
   if (error) {
     throw new Error(`Failed to look up project/department assignment for user ${userId}: ${error.message}`);

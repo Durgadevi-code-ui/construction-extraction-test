@@ -435,14 +435,35 @@ const DEPARTMENT_PROJECT = { [D1_IN_P1]: P1, [D2_IN_P2]: P2 };
 
 /** actor: "admin", "delegate" (SUPERVISOR with a whole-project
  * USER_MANAGEMENT delegation on P1) or "contractor" (no delegation). */
-function usersDb(actor) {
-  return mockSupabase((table, calls) => {
+// existingEmail: that email already has an app user. authFails: Supabase
+// refuses to create the login (to test the rollback).
+function usersDb(actor, { existingEmail = null, authFails = false } = {}) {
+  // Just enough state for createUserWithLogin -> provisionLogin to run for real.
+  const state = { inserted: null, authUserId: null, authUsers: [] };
+  const db = mockSupabase((table, calls) => {
     const eq = (col) => calls.find((c) => c[0] === "eq" && c[1] === col)?.[2];
     const has = (method) => calls.some((c) => c[0] === method);
     if (table === "users") {
       if (eq("user_role") === "ADMIN") return { data: actor === "admin" ? { user_id: USER_A.userId } : null, error: null };
-      if (has("insert")) return { data: { user_id: "new-user" }, error: null };
-      return { data: null, error: null }; // no existing account for the email
+      if (has("insert")) {
+        state.inserted = calls.find((c) => c[0] === "insert")[1];
+        return { data: { user_id: "new-user" }, error: null };
+      }
+      if (has("update")) {
+        state.authUserId = calls.find((c) => c[0] === "update")[1].auth_user_id;
+        return { data: [{ user_id: "new-user" }], error: null };
+      }
+      if (has("delete")) return { data: null, error: null };
+      if (eq("user_mail") !== undefined) {
+        return { data: eq("user_mail") === existingEmail ? { user_id: "existing-user" } : null, error: null };
+      }
+      if (eq("user_id") === "new-user" && state.inserted) {
+        return {
+          data: { user_id: "new-user", user_mail: state.inserted.user_mail, user_role: state.inserted.user_role, status: "Active", auth_user_id: state.authUserId },
+          error: null,
+        };
+      }
+      return { data: null, error: null };
     }
     if (table === "user_project_roles") {
       if (has("insert")) return { data: null, error: null };
@@ -474,11 +495,26 @@ function usersDb(actor) {
     }
     return { data: null, error: null };
   });
+  db.authState = state;
+  db.auth = {
+    admin: {
+      listUsers: async () => ({ data: { users: state.authUsers }, error: null }),
+      createUser: async ({ email }) => {
+        if (authFails) return { data: { user: null }, error: { message: "simulated Supabase refusal" } };
+        const user = { id: "auth-new", email, email_confirmed_at: "2026-10-31T00:00:00Z" };
+        state.authUsers.push(user);
+        return { data: { user }, error: null };
+      },
+      getUserById: async (id) => ({ data: { user: state.authUsers.find((u) => u.id === id) ?? null }, error: null }),
+      deleteUser: async (id) => ((state.authUsers = state.authUsers.filter((u) => u.id !== id)), { error: null }),
+    },
+  };
+  return db;
 }
 const writes = (db) => db.log.filter((q) => q.calls.some((c) => ["insert", "update", "upsert", "delete"].includes(c[0])));
 const roleInserts = (db) =>
   db.log.filter((q) => q.table === "user_project_roles" && q.calls.some((c) => c[0] === "insert")).map((q) => q.calls.find((c) => c[0] === "insert")[1]);
-const createUser = (body) => adminUsers.POST(jsonRequest("/api/admin/users", { email: "new@x", role: "WORKER", ...body }));
+const createUser = (body) => adminUsers.POST(jsonRequest("/api/admin/users", { email: "new@example.com", role: "WORKER", password: "Route-Test-Pass-1", ...body }));
 
 test("admin users: a department from another project is rejected (400) for a whole-project delegate, nothing written", async () => {
   currentUser = USER_A;
@@ -520,6 +556,32 @@ test("admin users: matching pairs still work for a real Admin and a whole-projec
       [[projectId, departmentId, "WORKER"]],
       actor
     );
+  }
+});
+
+test("admin users: malformed emails are refused (400) before anything is written; emails are stored lowercase", async () => {
+  for (const email of ["new@x", "not-an-email", "a b@example.com", "@example.com"]) {
+    currentUser = USER_A;
+    supabase = usersDb("admin");
+    const res = await createUser({ projectId: P1, departmentId: D1_IN_P1, email });
+    assert.equal(res.status, 400, email);
+    assert.deepEqual(writes(supabase), [], email);
+  }
+  currentUser = USER_A;
+  supabase = usersDb("admin");
+  assert.equal((await createUser({ projectId: P1, departmentId: D1_IN_P1, email: "  New.Worker@Example.COM " })).status, 200);
+  const userInsert = supabase.log.find((q) => q.table === "users" && q.calls.some((c) => c[0] === "insert"));
+  assert.equal(userInsert.calls.find((c) => c[0] === "insert")[1].user_mail, "new.worker@example.com");
+  const lookup = supabase.log.find((q) => q.table === "users" && q.calls.some((c) => c[0] === "eq" && c[1] === "user_mail"));
+  assert.equal(lookup.calls.find((c) => c[0] === "eq" && c[1] === "user_mail")[2], "new.worker@example.com", "duplicate check uses the normalized email");
+});
+
+test("admin users: only approved roles are accepted", async () => {
+  for (const role of ["SUPERADMIN", "admin", "", "MANAGER"]) {
+    currentUser = USER_A;
+    supabase = usersDb("admin");
+    assert.equal((await createUser({ projectId: P1, departmentId: D1_IN_P1, role })).status, 400, role);
+    assert.deepEqual(writes(supabase), [], role);
   }
 });
 
@@ -712,4 +774,53 @@ test("password reset: the sixth request for one email within the hour is refused
   } finally {
     rateLimit.setRateLimitStoreForTests(undefined);
   }
+});
+
+test("admin users: an address on an unusual domain (e.g. the confirmed @gamil.com) is accepted as typed", async () => {
+  currentUser = USER_A;
+  supabase = usersDb("admin");
+  assert.equal((await createUser({ projectId: P1, departmentId: D1_IN_P1, email: "plumber.foreman@gamil.com" })).status, 200);
+});
+
+test("admin users: a NEW user is created together with its login (one step), linked to that user", async () => {
+  currentUser = USER_A;
+  supabase = usersDb("admin");
+  const res = await createUser({ projectId: P1, departmentId: D1_IN_P1 });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, userCreated: true, loginCreated: true });
+  assert.equal(supabase.authState.authUsers.length, 1, "exactly one login");
+  assert.equal(supabase.authState.authUserId, "auth-new", "linked to the new app user");
+});
+
+test("admin users: a new user without a valid password is refused (400) and NOTHING is written", async () => {
+  for (const password of [undefined, "", "short", " Leading-space-1"]) {
+    currentUser = USER_A;
+    supabase = usersDb("admin");
+    const res = await createUser({ projectId: P1, departmentId: D1_IN_P1, password });
+    assert.equal(res.status, 400, String(password));
+    assert.match((await res.json()).error, /needs a login password/);
+    assert.deepEqual(writes(supabase), [], String(password));
+    assert.equal(supabase.authState.authUsers.length, 0);
+  }
+});
+
+test("admin users: if the login cannot be created, the new user and its role are removed again", async () => {
+  currentUser = USER_A;
+  supabase = usersDb("admin", { authFails: true });
+  const res = await createUser({ projectId: P1, departmentId: D1_IN_P1 });
+  assert.equal(res.status, 500);
+  assert.match((await res.json()).error, /new user was not saved/);
+  const deletes = supabase.log.filter((q) => q.calls.some((c) => c[0] === "delete")).map((q) => q.table);
+  assert.deepEqual(deletes.sort(), ["user_project_roles", "users"]);
+  assert.equal(supabase.authState.authUsers.length, 0, "no orphaned login");
+});
+
+test("admin users: an EXISTING user only gains the role — no password needed, no login created or changed", async () => {
+  currentUser = USER_A;
+  supabase = usersDb("admin", { existingEmail: "new@example.com" });
+  const res = await createUser({ projectId: P1, departmentId: D1_IN_P1, password: undefined });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, userCreated: false, loginCreated: false });
+  assert.equal(supabase.authState.authUsers.length, 0);
+  assert.ok(!supabase.log.some((q) => q.table === "users" && q.calls.some((c) => c[0] === "insert")), "no second app user");
 });

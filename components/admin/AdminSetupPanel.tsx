@@ -305,7 +305,9 @@ function useSubmit(path: string, method: "POST" | "PATCH" | "DELETE" = "POST") {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function submit(body: Record<string, unknown>) {
+  /** The response body on success (truthy — callers can keep `if (ok)`),
+   * false on failure. */
+  async function submit(body: Record<string, unknown>): Promise<Record<string, unknown> | false> {
     setSubmitting(true);
     setError(null);
     try {
@@ -317,7 +319,7 @@ function useSubmit(path: string, method: "POST" | "PATCH" | "DELETE" = "POST") {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Request failed.");
       router.refresh();
-      return true;
+      return data && typeof data === "object" ? data : {};
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed.");
       return false;
@@ -1019,6 +1021,27 @@ function WorkItemRow({
  * departments start with none; this is how an admin fills that gap
  * without fabricating accounts outside this UI.
  */
+export type CreateUserNotice =
+  | { kind: "created"; email: string; password: string }
+  | { kind: "role-added"; email: string }
+  | { kind: "saved"; email: string };
+
+/**
+ * What the New User form tells the Admin, decided only by the server's
+ * answer (app/api/admin/users → { userCreated, loginCreated }). The
+ * temporary password is shown only when the server confirms it created a
+ * brand-new user AND its login with the password this form sent — never for
+ * a role added to an existing account (e.g. one outside a delegated
+ * Contractor's visible scope), where no password was set.
+ */
+export function createUserNotice(response: Record<string, unknown>, email: string, sentPassword: string | null): CreateUserNotice {
+  if (response.userCreated === true && response.loginCreated === true && sentPassword) {
+    return { kind: "created", email, password: sentPassword };
+  }
+  if (response.userCreated === false) return { kind: "role-added", email };
+  return { kind: "saved", email };
+}
+
 function UsersTab({
   adminUserId,
   isRealAdmin,
@@ -1039,13 +1062,26 @@ function UsersTab({
   const [departmentId, setDepartmentId] = useState(departments[0]?.departmentId ?? "");
   const roleOptions = isRealAdmin ? ROLE_OPTIONS : DELEGATED_ROLE_OPTIONS;
   const [role, setRole] = useState(roleOptions[0]);
+  // A new user gets its login in the same step (app/api/admin/users →
+  // createUserWithLogin), so no user is ever left unable to sign in. An
+  // email that already exists only gains the role assignment.
+  // Empty = generate one on submit (generating during render would differ
+  // between the server render and the browser).
+  const [password, setPassword] = useState("");
+  const [notice, setNotice] = useState<CreateUserNotice | null>(null);
+  // Only a hint: a delegated Contractor sees only users in their scope, so
+  // an email can exist without appearing here. What happened is decided by
+  // the server's answer (createUserNotice), never by this list.
+  const isExistingUser = users.some((u) => u.email.trim().toLowerCase() === email.trim().toLowerCase());
 
   const department = departments.find((d) => d.departmentId === departmentId);
   const projectId = department?.projectId ?? projects[0]?.projectId ?? "";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const ok = await submit({
+    setNotice(null);
+    const loginPassword = isExistingUser ? null : password || generateTempPassword();
+    const result = await submit({
       actorUserId: adminUserId,
       email,
       firstName,
@@ -1053,11 +1089,14 @@ function UsersTab({
       departmentId,
       projectId,
       role,
+      ...(loginPassword ? { password: loginPassword } : {}),
     });
-    if (ok) {
+    if (result) {
+      setNotice(createUserNotice(result, email.trim().toLowerCase(), loginPassword));
       setEmail("");
       setFirstName("");
       setLastName("");
+      setPassword("");
     }
   }
 
@@ -1099,7 +1138,36 @@ function UsersTab({
           onChange={setRole}
           options={roleOptions.map((r) => ({ value: r, label: humanizeRole(r) }))}
         />
-        <SubmitButton submitting={submitting} label="Create User" />
+        {isExistingUser ? (
+          <p className="text-xs text-foreground-secondary">
+            This email already has an account — this adds the role assignment only. Its login and password are not changed.
+          </p>
+        ) : (
+          <Field
+            label="Login password (leave blank to generate one; at least 8 characters — not used if the email already has an account)"
+            value={password}
+            onChange={setPassword}
+          />
+        )}
+        <SubmitButton submitting={submitting} label={isExistingUser ? "Add Role Assignment" : "Create User"} />
+        {notice?.kind === "created" && (
+          <div className="text-xs bg-success-soft border border-success-border rounded-lg p-2">
+            <p className="text-success font-medium">User and login created for {notice.email}.</p>
+            <p className="text-foreground-secondary mt-1">
+              Temporary password (shown once — share it securely):{" "}
+              <span className="font-mono select-all">{notice.password}</span>
+            </p>
+          </div>
+        )}
+        {notice?.kind === "role-added" && (
+          <div className="text-xs bg-success-soft border border-success-border rounded-lg p-2">
+            <p className="text-success font-medium">Role assignment added to the existing account {notice.email}.</p>
+            <p className="text-foreground-secondary mt-1">Its login and password were not changed.</p>
+          </div>
+        )}
+        {notice?.kind === "saved" && (
+          <p className="text-xs text-success">Saved for {notice.email}.</p>
+        )}
         {error && (
             <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
           )}

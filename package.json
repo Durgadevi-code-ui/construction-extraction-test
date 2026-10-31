@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --require ./tests/register-ts.cjs --test \"tests/*.test.cjs\""
+    "test": "node --require ./tests/register-ts.cjs --test \"tests/*.test.cjs\"",
+    "verify:auth": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-auth-accounts.mjs",
+    "accounts": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/manage-auth-accounts.mjs",
+    "test:auth-e2e": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --require ./tests/register-ts.cjs scripts/e2e-auth-roles.cjs"
   },
   "dependencies": {
     "@google/genai": "^2.16.0",

@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getCurrentUser } from "./session";
 import { getUserContext } from "./authContext";
 import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
+import { extractionTestWorkerEmail } from "./authAccounts";
 
 /**
  * Resolves extraction submissions to the Construction Automation schema
@@ -18,9 +19,7 @@ import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
 const DEFAULT_PROJECT_CODE =
   process.env.CONSTRUCTION_PROJECT_CODE?.trim() || "PRJ001";
 
-const TEST_WORKER_EMAIL =
-  process.env.CONSTRUCTION_TEST_WORKER_EMAIL?.trim() ||
-  "extraction-test-worker@abc-construction.internal";
+const TEST_WORKER_EMAIL = extractionTestWorkerEmail(process.env);
 
 export type ConstructionContext = {
   projectId: string;
