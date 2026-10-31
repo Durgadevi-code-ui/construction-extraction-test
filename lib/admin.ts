@@ -1,6 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
+import { passwordProblem, provisionLogin } from "./authAccounts";
 
 /**
  * Admin Setup data access — reuses the existing Construction Automation
@@ -1109,6 +1110,11 @@ export async function listUsers(supabase: SupabaseClient): Promise<UserAccount[]
  * doesn't create a duplicate account — it just adds/reuses the role
  * assignment. No new tables: both tables already exist and are already
  * used this way for the 5 seeded users.
+ *
+ * Returns the user id and whether this call created the user, so a caller
+ * that also creates the login (createUserWithLogin) can undo a brand-new
+ * user if that fails. A brand-new user whose role can't be assigned is
+ * removed again rather than left without any assignment.
  */
 export async function createUserWithRole(
   supabase: SupabaseClient,
@@ -1120,7 +1126,7 @@ export async function createUserWithRole(
     projectId: string;
     role: string;
   }
-): Promise<void> {
+): Promise<{ userId: string; userCreated: boolean }> {
   const { data: existing, error: findError } = await supabase
     .from("users")
     .select("user_id")
@@ -1130,6 +1136,7 @@ export async function createUserWithRole(
   if (findError) throw new Error(`Failed to look up user: ${findError.message}`);
 
   let userId: string;
+  const userCreated = !existing;
   if (existing) {
     userId = existing.user_id;
   } else {
@@ -1162,10 +1169,11 @@ export async function createUserWithRole(
     .maybeSingle();
 
   if (roleFindError) {
+    if (userCreated) await removeNewUser(supabase, userId);
     throw new Error(`Failed to look up existing role assignment: ${roleFindError.message}`);
   }
   if (existingRole) {
-    if (existingRole.status === "Active") return; // already assigned — nothing to do
+    if (existingRole.status === "Active") return { userId, userCreated }; // already assigned — nothing to do
 
     // Previously removed (see deactivateUserProjectRole): reactivate that
     // SAME row rather than silently ignoring the request or inserting a
@@ -1178,7 +1186,7 @@ export async function createUserWithRole(
     if (reactivateError) {
       throw new Error(`Failed to reactivate role assignment: ${reactivateError.message}`);
     }
-    return;
+    return { userId, userCreated };
   }
 
   const { error: roleInsertError } = await supabase.from("user_project_roles").insert({
@@ -1190,9 +1198,69 @@ export async function createUserWithRole(
   });
 
   if (roleInsertError) {
+    if (userCreated) await removeNewUser(supabase, userId);
     throw new Error(`Failed to assign role: ${roleInsertError.message}`);
   }
+  return { userId, userCreated };
 }
+
+/**
+ * Undoes a user created moments ago in the same request: its role rows,
+ * then the users row — only while it still has no login, so this can never
+ * remove an account someone can sign in to. Best effort; a failure here is
+ * reported by the caller's own error.
+ */
+async function removeNewUser(supabase: SupabaseClient, userId: string): Promise<boolean> {
+  const { data: row, error: readError } = await supabase.from("users").select("auth_user_id").eq("user_id", userId).maybeSingle();
+  if (readError || !row || row.auth_user_id) return false; // linked to a login: leave everything as is
+  const { error: rolesError } = await supabase.from("user_project_roles").delete().eq("user_id", userId);
+  const { error: userError } = await supabase.from("users").delete().eq("user_id", userId).is("auth_user_id", null);
+  return !rolesError && !userError;
+}
+
+/**
+ * Admin Setup → Users → New User: the app user, its role assignment AND its
+ * login, as one operation. Before this, the login was a separate optional
+ * "Link Login" step, so users could be created that could never sign in
+ * (3 existing Worker records). For an email that already exists this only
+ * adds the role assignment (no password needed or changed). For a new
+ * email the password is required; if the login cannot be created and
+ * verified, the new user and its role are removed again, so nothing
+ * half-created is left behind.
+ */
+export async function createUserWithLogin(
+  supabase: SupabaseClient,
+  authAdminClient: SupabaseClient,
+  params: Parameters<typeof createUserWithRole>[1] & { password?: string | null }
+): Promise<{ userId: string; userCreated: boolean; loginCreated: boolean }> {
+  const { data: existing, error: findError } = await supabase
+    .from("users")
+    .select("user_id")
+    .eq("user_mail", params.email)
+    .maybeSingle();
+  if (findError) throw new Error(`Failed to look up user: ${findError.message}`);
+  if (!existing) {
+    const problem = passwordProblem(params.password, params.email);
+    if (problem) throw new AccountInputError(`A new user needs a login password: ${problem}.`);
+  }
+
+  const { userId, userCreated } = await createUserWithRole(supabase, params);
+  if (!userCreated) return { userId, userCreated, loginCreated: false };
+
+  const result = await provisionLogin(authAdminClient, { userId, password: params.password as string });
+  if (result.status !== "created") {
+    const removed = await removeNewUser(supabase, userId);
+    throw new Error(
+      removed
+        ? `The login could not be created (${result.detail}), so the new user was not saved. Nothing was changed.`
+        : `The login could not be created (${result.detail}) and removing the new user also failed — delete ${params.email} in Admin Setup.`
+    );
+  }
+  return { userId, userCreated, loginCreated: true };
+}
+
+/** Invalid input from the caller (400), as opposed to a failure (500). */
+export class AccountInputError extends Error {}
 
 /**
  * Deactivates one project/department/role assignment — corrects an
@@ -1262,29 +1330,15 @@ export async function linkUserToAuthAccount(
     throw new Error("This account is already linked to a login.");
   }
 
-  const { data: created, error: createError } = await authAdminClient.auth.admin.createUser({
-    email: target.email,
-    password: params.password,
-    email_confirm: true,
-  });
-
-  if (createError || !created?.user) {
-    throw new Error(`Failed to create login: ${createError?.message ?? "unknown error"}`);
+  // Validates email/role/password, refuses an existing unlinked login for
+  // the email, removes the new login again if the link can't be written,
+  // and reads the link back before reporting success (lib/authAccounts.ts).
+  const result = await provisionLogin(authAdminClient, { userId: params.targetUserId, password: params.password });
+  if (result.status === "unchanged") {
+    throw new Error("This account is already linked to a login.");
   }
-
-  const { error: updateError } = await supabase
-    .from("users")
-    .update({ auth_user_id: created.user.id })
-    .eq("user_id", params.targetUserId);
-
-  if (updateError) {
-    // The Auth account was created but the link failed — surface this
-    // clearly rather than silently leaving an orphaned Auth account;
-    // an Admin can link it manually (Supabase dashboard) or retry.
-    throw new Error(
-      `Login created but couldn't be linked to the user record: ${updateError.message}. ` +
-        `The Auth account (${target.email}) may need manual linking.`
-    );
+  if (result.status !== "created") {
+    throw new Error(`Failed to create login: ${result.detail}`);
   }
 }
 

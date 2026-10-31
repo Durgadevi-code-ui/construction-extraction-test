@@ -6,3 +6,9 @@
 .DS_Store
 npm-debug.log*
 tsconfig.tsbuildinfo
+
+# Account credentials files for scripts/verify-auth-accounts.mjs and
+# scripts/manage-auth-accounts.mjs belong OUTSIDE the repository (the
+# scripts refuse them here); this only guards against an accidental commit.
+*credentials*.json
+auth-check*.json

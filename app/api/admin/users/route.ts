@@ -2,18 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import {
-  createUserWithRole,
+  AccountInputError,
+  createUserWithLogin,
   deactivateUserProjectRole,
   getDepartmentProjectId,
   getUserProjectRoleScope,
 } from "@/lib/admin";
+import { getSupabaseServiceRoleClient } from "@/lib/supabaseAdmin";
 import { assertAdminOrDelegated } from "@/lib/delegation";
 import { isAdminUser } from "@/lib/authContext";
 import { getCurrentUser } from "@/lib/session";
+import { APPROVED_ROLES, emailProblem, normalizeEmail } from "@/lib/authAccounts";
 
 export const runtime = "nodejs";
 
-const VALID_ROLES = ["WORKER", "FOREMAN", "SUPERVISOR", "ADMIN"];
+const VALID_ROLES: readonly string[] = APPROVED_ROLES;
 
 /**
  * User management can now be delegated (USER_MANAGEMENT — see
@@ -49,6 +52,14 @@ export async function POST(request: NextRequest) {
 
     if (typeof email !== "string" || !email.trim()) {
       return NextResponse.json({ error: "email is required." }, { status: 400 });
+    }
+    // Lowercased like Supabase Auth stores it, so the same person can't
+    // become two app users, and a malformed address is refused before a
+    // login is ever created for it.
+    const normalizedEmail = normalizeEmail(email);
+    const emailError = emailProblem(normalizedEmail);
+    if (emailError) {
+      return NextResponse.json({ error: `${emailError}.` }, { status: 400 });
     }
     if (typeof departmentId !== "string" || !departmentId) {
       return NextResponse.json({ error: "departmentId is required." }, { status: 400 });
@@ -92,17 +103,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    await createUserWithRole(supabase, {
-      email: email.trim(),
+    // A new user is created together with its login (the password is
+    // required, checked, and never logged or returned); an existing user
+    // only gains the role assignment. See lib/admin.ts createUserWithLogin.
+    const result = await createUserWithLogin(supabase, getSupabaseServiceRoleClient(), {
+      email: normalizedEmail,
       firstName: typeof body?.firstName === "string" ? body.firstName.trim() || null : null,
       lastName: typeof body?.lastName === "string" ? body.lastName.trim() || null : null,
       departmentId,
       projectId,
       role,
+      password: typeof body?.password === "string" ? body.password : null,
     });
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, userCreated: result.userCreated, loginCreated: result.loginCreated });
   } catch (err) {
+    if (err instanceof AccountInputError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
     console.error("Failed to create user:", err);
     const message = err instanceof Error ? err.message : "Failed to create user.";
     return jsonError(message, 500);
