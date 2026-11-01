@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { formatQuantity } from "@/lib/format";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
+import WorkbookExtractionViewer from "./WorkbookExtractionViewer";
 
 type ParsedRow = {
   sourceRow: number;
@@ -25,8 +26,67 @@ type ParsedRow = {
 
 type ParseIssue = { sourceRow: number; sourceSheet: string; message: string };
 
+/** Completeness report (lib/excelImport.ts ExtractionReport, the fields shown here). */
+type Extraction = {
+  complete: boolean;
+  sheetsDiscovered: number;
+  sheetsRead: number;
+  populatedRows: number;
+  rowsMapped: number;
+  rowsNotMapped: number;
+  problems: string[];
+  sheets: {
+    name: string;
+    visibility: string;
+    status: string;
+    mapping: string;
+    populatedRows: number;
+    rowsMapped: number;
+    unmappedRows: { row: number; kind: string; reason: string; text: string }[];
+  }[];
+};
+
+const ROW_KIND_LABELS: Record<string, string> = {
+  info: "Info",
+  header: "Header",
+  division: "Division",
+  heading: "Heading",
+  total: "Total",
+  "repeated-header": "Header",
+  note: "Note",
+  unmapped: "Not mapped",
+};
+
+const SHEET_MAPPING_LABELS: Record<string, string> = {
+  mapped: "work items read",
+  "no-work-items": "table found, no work items",
+  "not-a-work-item-table": "no work-item table — kept, not mapped",
+  skipped: "nothing to map",
+  error: "mapping failed",
+};
+
+const UNMAPPED_ROWS_SHOWN = 500;
+
+/** Layer 1 summary (lib/workbookStructure.ts extractionSummary): every
+ * sheet's own tables and column headers — no cell contents. */
+type WorkbookSummary = {
+  totals: { sheets: number; tables: number; rows: number; cells: number; formulaCells: number };
+  sheets: {
+    name: string;
+    visibility: string;
+    status: string;
+    populatedRows: number;
+    populatedCells: number;
+    rowsByRole: Record<string, number>;
+    tables: { index: number; headerRow: number; rows: string; columns: string[]; dataRows: number; totalRows: number }[];
+  }[];
+};
+
 type PreviewResponse = {
   preview: true;
+  workbook?: WorkbookSummary;
+  /** Set when no sheet has a work-item table (the workbook can still be stored). */
+  notice?: string;
   sheetsScanned: string[];
   /** How each sheet's columns were understood (lib/excelImport.ts). */
   columnMappings?: { sheet: string; headerRow: number; columns: { header: string; field: string }[] }[];
@@ -34,15 +94,21 @@ type PreviewResponse = {
   workItemCount: number;
   rows: ParsedRow[];
   issues: ParseIssue[];
+  extraction?: Extraction;
 };
 
 type CommitResponse = {
   preview: false;
+  importId?: string;
+  extractionStored?: boolean;
+  workbook?: WorkbookSummary;
+  lineItemsAdjusted?: { sheet: string; row: number; from: string; to: string }[];
   departmentsActivated: number;
   departmentsCreated: number;
   workItemsCreated: number;
   workItemsUpdated: number;
   issues: ParseIssue[];
+  extraction?: Extraction;
 };
 
 /**
@@ -63,8 +129,11 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [result, setResult] = useState<CommitResponse | null>(null);
+  /** Browsing the stored extraction of earlier imports (no file picked). */
+  const [browsing, setBrowsing] = useState(false);
 
   function reset() {
+    setBrowsing(false);
     setFile(null);
     setPreview(null);
     setResult(null);
@@ -124,6 +193,9 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
 
   const hasAdditionalFields =
     preview?.rows.some((r) => r.additionalFields && Object.keys(r.additionalFields).length > 0) ?? false;
+  const extraction = preview?.extraction;
+  const unmappedRows =
+    extraction?.sheets.flatMap((s) => s.unmappedRows.map((row) => ({ ...row, sheet: s.name }))) ?? [];
 
   return (
     // order-last + w-full: inside the project's Excel actions row the
@@ -156,11 +228,21 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
             }}
             className="block w-full text-xs text-foreground-secondary file:mr-3 file:rounded-lg file:border file:border-line file:bg-white file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-foreground-secondary hover:file:bg-surface-hover file:transition-colors file:duration-150"
           />
+          {!preview && (
+            <button
+              onClick={() => setBrowsing((b) => !b)}
+              className="text-xs text-foreground hover:underline transition-colors duration-150"
+            >
+              {browsing ? "Hide imported workbook data" : "View imported workbook data (every sheet, row and cell stored)"}
+            </button>
+          )}
+          {browsing && !preview && <WorkbookExtractionViewer projectId={projectId} />}
           <p className="text-xs text-foreground-secondary">
-            Reads every sheet and works out which columns hold the department, item number,
-            description, quantity, unit and amount from their headings and contents (names and order
-            don&apos;t need to match). Other columns are kept with each work item. Nothing is saved
-            until you confirm below.
+            Reads every sheet, every table and every populated cell with the sheet&apos;s own column
+            headers, and stores all of it with the original file. Where a table has work-item columns
+            (department, item number, description, quantity, unit, amount — names and order don&apos;t
+            need to match), those rows also become work items; their other columns are kept with each
+            item. Nothing is saved until you confirm below.
           </p>
 
           {!preview ? (
@@ -191,11 +273,111 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
               {preview.columnMappings && preview.columnMappings.length > 0 && (
                 <div className="text-xs text-foreground-secondary space-y-0.5">
                   {preview.columnMappings.map((m) => (
-                    <p key={m.sheet}>
+                    <p key={`${m.sheet}-${m.headerRow}`}>
                       <span className="font-medium text-foreground">{m.sheet}</span> (header row {m.headerRow}):{" "}
                       {m.columns.map((c) => `${c.header} → ${c.field}`).join(" · ")}
                     </p>
                   ))}
+                </div>
+              )}
+
+              {preview.notice && (
+                <p className="text-xs text-warning bg-warning-soft border border-warning-border rounded-lg p-2.5">{preview.notice}</p>
+              )}
+
+              {preview.workbook && (
+                <div className="text-xs text-foreground-secondary space-y-1 bg-white border border-line rounded-lg p-2.5">
+                  <p className="font-medium text-foreground">
+                    Complete extraction — {preview.workbook.totals.sheets} sheet(s), {preview.workbook.totals.tables} table(s),{" "}
+                    {preview.workbook.totals.rows} row(s), {preview.workbook.totals.cells} cell(s); every populated cell is
+                    kept with its sheet, row and column header and stored with the import.
+                  </p>
+                  {preview.workbook.sheets.map((s) => (
+                    <div key={s.name}>
+                      <p>
+                        <span className="font-medium text-foreground">{s.name}</span>
+                        {s.visibility !== "visible" ? ` (${s.visibility})` : ""}: {s.populatedRows} row(s), {s.populatedCells} cell(s)
+                        {Object.keys(s.rowsByRole).length > 0 &&
+                          ` — ${Object.entries(s.rowsByRole)
+                            .map(([role, n]) => `${n} ${role}`)
+                            .join(", ")}`}
+                      </p>
+                      {s.tables.map((t) => (
+                        <p key={t.index} className="pl-3">
+                          Table {t.index} (rows {t.rows}, {t.dataRows} data row(s)): {t.columns.join(" · ")}
+                        </p>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {extraction && (
+                <div className="text-xs text-foreground-secondary space-y-1.5">
+                  <p>
+                    Read {extraction.sheetsRead} of {extraction.sheetsDiscovered} sheet(s) ·{" "}
+                    {extraction.populatedRows} populated rows · {extraction.rowsMapped} work items ·{" "}
+                    {extraction.rowsNotMapped} other rows kept but not imported as work items
+                  </p>
+                  {!extraction.complete && (
+                    <div className="bg-error-soft border border-error-border rounded-lg px-2.5 py-1.5 text-error space-y-0.5">
+                      <p className="font-medium">Extraction incomplete — part of this workbook could not be read.</p>
+                      <ul className="list-disc list-inside">
+                        {extraction.problems.map((p, i) => (
+                          <li key={i}>{p}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <details>
+                    <summary className="cursor-pointer text-foreground hover:underline">
+                      Sheets and rows not imported as work items ({extraction.rowsNotMapped})
+                    </summary>
+                    <div className="mt-1.5 space-y-1.5">
+                      <ul className="space-y-0.5">
+                        {extraction.sheets.map((s) => (
+                          <li key={s.name}>
+                            <span className="font-medium text-foreground">{s.name}</span>
+                            {s.visibility !== "visible" && " (hidden)"}: {s.populatedRows} rows, {s.rowsMapped} work items —{" "}
+                            {s.status === "ok" ? (SHEET_MAPPING_LABELS[s.mapping] ?? s.mapping) : s.status}
+                          </li>
+                        ))}
+                      </ul>
+                      {unmappedRows.length > 0 && (
+                        <div className="max-h-48 overflow-x-auto overflow-y-auto border border-line rounded-lg bg-white">
+                          <table className="w-full min-w-[560px] text-xs">
+                            <thead className="bg-surface-soft sticky top-0">
+                              <tr>
+                                <th className="text-left px-2.5 py-1.5 font-medium text-foreground-secondary">Sheet</th>
+                                <th className="text-right px-2.5 py-1.5 font-medium text-foreground-secondary">Row</th>
+                                <th className="text-left px-2.5 py-1.5 font-medium text-foreground-secondary">Read as</th>
+                                <th className="text-left px-2.5 py-1.5 font-medium text-foreground-secondary">Content</th>
+                                <th className="text-left px-2.5 py-1.5 font-medium text-foreground-secondary">Why not a work item</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {unmappedRows.slice(0, UNMAPPED_ROWS_SHOWN).map((r) => (
+                                <tr key={`${r.sheet}:${r.row}`} className="border-t border-line">
+                                  <td className="px-2.5 py-1.5 text-foreground-secondary">{r.sheet}</td>
+                                  <td className="px-2.5 py-1.5 text-right tabular-nums text-foreground-secondary">{r.row}</td>
+                                  <td className="px-2.5 py-1.5 text-foreground-secondary">{ROW_KIND_LABELS[r.kind] ?? r.kind}</td>
+                                  <td className="px-2.5 py-1.5 text-foreground truncate max-w-[220px]" title={r.text}>
+                                    {r.text}
+                                  </td>
+                                  <td className="px-2.5 py-1.5 text-foreground-secondary">{r.reason}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                      {unmappedRows.length > UNMAPPED_ROWS_SHOWN && (
+                        <p className="text-foreground-muted">
+                          Showing first {UNMAPPED_ROWS_SHOWN} of {unmappedRows.length} rows.
+                        </p>
+                      )}
+                    </div>
+                  </details>
                 </div>
               )}
 
@@ -270,7 +452,7 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
               {preview.issues.length > 0 && (
                 <div className="bg-warning-soft border border-warning-border rounded-lg p-2.5 text-xs text-warning space-y-1">
                   <p className="font-medium flex items-center gap-1.5">
-                    <Badge variant="warning">{preview.issues.length} row(s) skipped</Badge>
+                    <Badge variant="warning">{preview.issues.length} issue(s)</Badge>
                   </p>
                   <ul className="list-disc list-inside space-y-0.5">
                     {preview.issues.slice(0, 10).map((issue, i) => (
@@ -284,7 +466,11 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
 
               <div className="flex gap-2">
                 <Button size="sm" onClick={handleConfirm} disabled={busy}>
-                  {busy ? "Importing…" : `Confirm Import (${preview.workItemCount} work items)`}
+                  {busy
+                    ? "Importing…"
+                    : preview.workItemCount > 0
+                      ? `Confirm Import (${preview.workItemCount} work items)`
+                      : "Store workbook (no work items)"}
                 </Button>
                 <Button variant="secondary" size="sm" onClick={reset}>
                   Cancel
@@ -296,18 +482,61 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
       )}
 
       {result && (
-        <div className="bg-success-soft border border-success-border rounded-lg p-3 text-xs text-success space-y-1.5">
-          <p className="font-medium">Import complete.</p>
+        <div className="space-y-3">
+        <div
+          className={`rounded-lg p-3 text-xs space-y-1.5 border ${
+            result.extractionStored && result.extraction?.complete !== false
+              ? "bg-success-soft border-success-border text-success"
+              : "bg-warning-soft border-warning-border text-warning"
+          }`}
+        >
+          <p className="font-medium">
+            {result.extraction && !result.extraction.complete
+              ? "Import finished, but the workbook was not read completely:"
+              : "Import complete."}
+          </p>
+          {result.extraction && !result.extraction.complete && (
+            <ul className="list-disc list-inside text-error">
+              {result.extraction.problems.map((p, i) => (
+                <li key={i}>{p}</li>
+              ))}
+            </ul>
+          )}
           <p>
             Departments activated: {result.departmentsActivated} ({result.departmentsCreated} new)
           </p>
           <p>
             Work items created: {result.workItemsCreated}, updated: {result.workItemsUpdated}
           </p>
-          {result.issues.length > 0 && <p>{result.issues.length} row(s) were skipped — see above rules.</p>}
-          <button onClick={reset} className="text-xs text-success underline hover:opacity-80 transition-opacity duration-150">
+          {result.extractionStored && result.workbook && (
+            <p>
+              Workbook and complete extraction stored ({result.workbook.totals.sheets} sheet(s), {result.workbook.totals.cells}{" "}
+              cell(s)).
+            </p>
+          )}
+          {result.lineItemsAdjusted && result.lineItemsAdjusted.length > 0 && (
+            <div>
+              <p>Kept as separate work items under a derived item number (the file&apos;s number is kept with each):</p>
+              <ul className="list-disc list-inside">
+                {result.lineItemsAdjusted.map((a) => (
+                  <li key={`${a.sheet}-${a.row}`}>
+                    {a.sheet} row {a.row}: {a.from} → {a.to}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {result.issues.length > 0 && <p>{result.issues.length} issue(s) were reported while reading the file.</p>}
+          <button onClick={reset} className="text-xs underline hover:opacity-80 transition-opacity duration-150">
             Import another file
           </button>
+        </div>
+        {result.importId && (
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-foreground">Extracted workbook data, as stored</p>
+            <WorkbookExtractionViewer projectId={projectId} importId={result.importId} />
+          </div>
+        )}
         </div>
       )}
 

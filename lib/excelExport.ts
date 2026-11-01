@@ -417,8 +417,8 @@ export function refillOriginalWorkbook(
   latestColumns: LatestColumn[] = LATEST_COLUMNS
 ): XLSX.WorkBook {
   const wb = readWorkbookGuarded(bytes, { type: "array", cellFormula: true, cellNF: true, cellStyles: true });
-  // The importer's own row positions (sheet + 1-based row within the
-  // sheet's used range) — so every row here is the row it imported.
+  // The importer's own row positions (sheet + 1-based sheet row) — so
+  // every row here is the row it imported.
   const parsedByPosition = new Map(
     parseProjectWorkbook(bytes).rows.map((r) => [`${r.sourceSheet}\u0000${r.sourceRow}`, r])
   );
@@ -518,7 +518,7 @@ export function refillOriginalWorkbook(
         }
         continue;
       }
-      const parsed = parsedByPosition.get(`${sheetName}\u0000${r + 1}`);
+      const parsed = parsedByPosition.get(`${sheetName}\u0000${range.s.r + r + 1}`);
       const workItem = parsed ? matchWorkItem(parsed, items) : null;
       if (!workItem) {
         // A repeated header row / note line, or a row whose work item no

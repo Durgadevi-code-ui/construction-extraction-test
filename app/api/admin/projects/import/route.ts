@@ -6,8 +6,10 @@ import { RATE_LIMITS, rateLimitResponse } from "@/lib/rateLimit";
 import { assertAdminOrDelegated } from "@/lib/delegation";
 import { parseProjectWorkbook, distinctDepartments } from "@/lib/excelImport";
 import { upsertWorkItemFromImport } from "@/lib/admin";
-import { saveProjectImportFile } from "@/lib/projectDocuments";
+import { saveProjectImport } from "@/lib/projectDocuments";
+import { extractionSummary } from "@/lib/workbookStructure";
 import { hasWorkbookExtension, looksLikeWorkbook } from "@/lib/fileSignature";
+import { WorkbookTooLargeError } from "@/lib/workbookLimits";
 
 export const runtime = "nodejs";
 
@@ -78,29 +80,43 @@ export async function POST(request: NextRequest) {
     }
     let parsed;
     try {
-      parsed = parseProjectWorkbook(fileBytes);
-    } catch {
+      parsed = parseProjectWorkbook(fileBytes, file.name);
+    } catch (err) {
+      // Over the cell limit (all sheets combined): refused as a whole, for
+      // preview and commit alike, before anything is stored.
+      if (err instanceof WorkbookTooLargeError) {
+        return NextResponse.json(
+          { error: err.message, cellCount: err.cellCount, cellLimit: err.cellLimit },
+          { status: 413 }
+        );
+      }
       return NextResponse.json(
         { error: "Could not read this file. Upload a valid .xlsx/.xls/.csv workbook." },
         { status: 400 }
       );
     }
 
-    if (parsed.rows.length === 0) {
-      return NextResponse.json(
-        {
-          // Say what was actually read, not just which headings were
-          // expected — columns are interpreted from headings AND content.
-          error: [
-            `The workbook was read (${parsed.diagnostics.length} sheet${parsed.diagnostics.length === 1 ? "" : "s"}), but no reliable work-item structure could be inferred — no sheet had a table with a work description column and rows of work items under it.`,
+    // Per-sheet / per-row completeness report. The raw cell-level
+    // extraction (parsed.raw) is not sent: it can be as large as the
+    // workbook itself, and the uploaded file is kept as the source of
+    // record on commit.
+    const { extraction } = parsed;
+    // Layer 1 summary (sheets, tables, their own column headers, row
+    // roles, cell totals) — the complete extraction itself is stored on
+    // commit and served by ./extraction/route.ts.
+    const workbook = extractionSummary(parsed.complete);
+
+    // A workbook with no work-item table is still fully extracted and can
+    // still be imported (stored) — it just creates no work items. Say what
+    // was read, not just which headings were expected.
+    const noWorkItemsNote =
+      parsed.rows.length === 0
+        ? [
+            `The workbook was read (${extraction.sheetsDiscovered} sheet${extraction.sheetsDiscovered === 1 ? "" : "s"}) and all of its data is extracted, but no sheet has a work-item table (a work description column with rows of work items under it), so importing it stores the workbook and its data without creating work items.`,
             ...parsed.diagnostics,
-          ].join(" "),
-          diagnostics: parsed.diagnostics,
-          issues: parsed.issues,
-        },
-        { status: 422 }
-      );
-    }
+            ...extraction.problems,
+          ].join(" ")
+        : null;
 
     const departments = distinctDepartments(parsed.rows);
 
@@ -113,8 +129,28 @@ export async function POST(request: NextRequest) {
         workItemCount: parsed.rows.length,
         rows: parsed.rows,
         issues: parsed.issues,
+        diagnostics: parsed.diagnostics,
+        extraction,
+        workbook,
+        ...(noWorkItemsNote ? { notice: noWorkItemsNote } : {}),
       });
     }
+
+    // The source of record first: the original file and the complete
+    // extraction. If either cannot be stored, nothing is written at all.
+    let stored;
+    try {
+      stored = await saveProjectImport(projectId, { name: file.name, bytes: fileBytes, contentType: file.type }, parsed.complete, actorUserId, parsed.columnMappings);
+    } catch (err) {
+      console.error("Import refused — source of record not stored:", err instanceof Error ? err.message : err);
+      return NextResponse.json(
+        { error: "The workbook could not be stored, so nothing was imported. Please try again." },
+        { status: 503 }
+      );
+    }
+    const tableOf = new Map(
+      parsed.complete.sheets.flatMap((s) => s.rows.map((r) => [`${s.name}\u0000${r.row}`, r.table ?? null] as const))
+    );
 
     // Department resolution happens inside upsertWorkItemFromImport now,
     // lazily and per-row (see its doc comment) — not pre-resolved here —
@@ -126,41 +162,68 @@ export async function POST(request: NextRequest) {
     let departmentsCreated = 0;
     let workItemsCreated = 0;
     let workItemsUpdated = 0;
-    for (const row of parsed.rows) {
-      const result = await upsertWorkItemFromImport(supabase, {
-        projectId,
-        departmentName: row.department,
-        lineItemNo: row.workItemNo,
-        description: row.description,
-        plannedQuantity: row.plannedQuantity,
-        unitOfMeasure: row.unitOfMeasure,
-        scheduledValue: row.scheduledValue,
-        csiLineCode: row.csiLineCode,
-        additionalFields: row.additionalFields,
-      });
-      if (result.wasCreated) workItemsCreated++;
-      else workItemsUpdated++;
-      if (result.departmentWasCreated) departmentsCreated++;
+    // Work items written by this import: each source row gets its own, so
+    // rows are never merged (see upsertWorkItemFromImport).
+    const claimed = new Set<string>();
+    const lineItemsAdjusted: { sheet: string; row: number; from: string; to: string }[] = [];
+    let written = 0;
+    try {
+      for (const row of parsed.rows) {
+        const result = await upsertWorkItemFromImport(supabase, {
+          projectId,
+          departmentName: row.department,
+          lineItemNo: row.workItemNo,
+          description: row.description,
+          plannedQuantity: row.plannedQuantity,
+          unitOfMeasure: row.unitOfMeasure,
+          scheduledValue: row.scheduledValue,
+          csiLineCode: row.csiLineCode,
+          additionalFields: row.additionalFields,
+          source: {
+            importId: stored.importId,
+            sheet: row.sourceSheet,
+            row: row.sourceRow,
+            table: tableOf.get(`${row.sourceSheet}\u0000${row.sourceRow}`) ?? null,
+            lineItemNo: row.workItemNo,
+          },
+          claimed,
+        });
+        written++;
+        if (result.wasCreated) workItemsCreated++;
+        else workItemsUpdated++;
+        if (result.departmentWasCreated) departmentsCreated++;
+        if (result.lineItemAdjusted) {
+          lineItemsAdjusted.push({ sheet: row.sourceSheet, row: row.sourceRow, from: row.workItemNo ?? "", to: result.lineItemAdjusted });
+        }
+      }
+    } catch (err) {
+      // The workbook and its complete extraction are already stored; say
+      // exactly how far the work-item mapping got.
+      console.error("Import stopped part-way:", err instanceof Error ? err.message : err);
+      return NextResponse.json(
+        {
+          error: `The workbook and its complete extraction were stored (import ${stored.importId}), but only ${written} of ${parsed.rows.length} work items were saved before an error. Re-import the same file to finish — saved items are updated, not duplicated.`,
+          importId: stored.importId,
+          workItemsWritten: written,
+          workItemsTotal: parsed.rows.length,
+        },
+        { status: 500 }
+      );
     }
-
-    // Keep the original workbook under this project's documents
-    // (projects/<projectId>/imports/) so "Download updated Excel" can
-    // return the same file structure with the latest data filled in.
-    // Best-effort: the import above is already committed either way.
-    const storedOriginal = await saveProjectImportFile(projectId, {
-      name: file.name,
-      bytes: fileBytes,
-      contentType: file.type,
-    });
 
     return NextResponse.json({
       preview: false,
+      importId: stored.importId,
       departmentsActivated: departments.length,
       departmentsCreated,
       workItemsCreated,
       workItemsUpdated,
-      originalStored: storedOriginal !== null,
+      lineItemsAdjusted,
+      originalStored: true,
+      extractionStored: true,
       issues: parsed.issues,
+      extraction,
+      workbook,
     });
   } catch (err) {
     console.error("Failed to import project file:", err);

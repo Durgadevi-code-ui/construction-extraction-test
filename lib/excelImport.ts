@@ -1,7 +1,20 @@
 import "server-only";
+import { createHash } from "node:crypto";
 import * as XLSX from "xlsx";
+import { buildWorkbookExtraction, type WorkbookExtraction } from "./workbookStructure";
 import { EXPORT_LATEST_HEADERS } from "./excelExportColumns";
-import { readWorkbookGuarded } from "./safeWorkbookRead";
+import { assertWithinCellLimit } from "./workbookLimits";
+import {
+  extractRawWorkbook,
+  isDateFormat,
+  readWorkbookForExtraction,
+  rowPreview,
+  serialToIsoDate,
+  sheetGrid,
+  type RawSheet,
+  type RawSheetStatus,
+  type RawWorkbook,
+} from "./workbookExtract";
 
 /**
  * Reusable project-file ingestion layer (see AGENTS.md master prompt
@@ -20,7 +33,8 @@ import { readWorkbookGuarded } from "./safeWorkbookRead";
  */
 
 export type ParsedWorkItemRow = {
-  /** 1-based row number in its source sheet, for error messages. */
+  /** 1-based row number in its source sheet (the real Excel row, also
+   * when the sheet's used range doesn't start at row 1). */
   sourceRow: number;
   sourceSheet: string;
   department: string;
@@ -60,10 +74,79 @@ export type ParseResult = {
   sheetsScanned: string[];
   /** How each work-item sheet's columns were understood — shown in the
    * import preview so the operator can see what was read as what. */
-  columnMappings: { sheet: string; headerRow: number; columns: { header: string; field: string }[] }[];
+  columnMappings: {
+    sheet: string;
+    headerRow: number;
+    /** `col` is the 0-based sheet column (as in the Layer 1 extraction). */
+    columns: { col: number; header: string; field: string }[];
+  }[];
   /** Plain-language notes on sheets that couldn't be read as a work-item
    * table — used to explain an import that found nothing. */
   diagnostics: string[];
+  /** Completeness report: every worksheet and every populated row, and
+   * what became of it (see ExtractionReport). */
+  extraction: ExtractionReport;
+  /** The complete raw extraction the mapping above was made from. Not
+   * sent to the browser (it can be large); the uploaded file itself is
+   * what's kept as the source of record. */
+  raw: RawWorkbook;
+  /** Layer 1: the complete, dynamic extraction (every populated cell of
+   * every sheet, with each sheet's own tables and headers) — stored with
+   * the import and available to AI analysis/reporting. */
+  complete: WorkbookExtraction;
+};
+
+/** What a populated source row was read as. Only "work-item" rows become
+ * construction records; every other row is still in the raw extraction. */
+export type RowKind =
+  | "info"
+  | "header"
+  | "division"
+  | "heading"
+  | "work-item"
+  | "total"
+  | "repeated-header"
+  | "note"
+  | "unmapped"
+  /** A row of a second table on the sheet that has no work-item columns. */
+  | "other-table";
+
+export type SheetExtractionReport = {
+  name: string;
+  index: number;
+  visibility: RawSheet["visibility"];
+  /** How the raw read went (see RawSheetStatus). */
+  status: RawSheetStatus;
+  /** How work-item mapping went for this sheet. */
+  mapping: "mapped" | "no-work-items" | "not-a-work-item-table" | "skipped" | "error";
+  message?: string;
+  usedRange: string | null;
+  mergedRanges: number;
+  populatedRows: number;
+  populatedCells: number;
+  blankRowsWithin: number;
+  formulaCells: number;
+  formulasWithoutCachedValue: number;
+  headerRow: number | null;
+  rowsMapped: number;
+  rowsByKind: Partial<Record<RowKind, number>>;
+  /** Every populated row that did not become a work item, with why. */
+  unmappedRows: { row: number; kind: RowKind; reason: string; text: string }[];
+};
+
+export type ExtractionReport = {
+  /** False when any worksheet failed or was only partly read. */
+  complete: boolean;
+  sheetsDiscovered: number;
+  sheetsRead: number;
+  sheetsWithWorkItems: number;
+  populatedRows: number;
+  populatedCells: number;
+  rowsMapped: number;
+  rowsNotMapped: number;
+  /** Sheet-level failures / warnings (no cell contents). */
+  problems: string[];
+  sheets: SheetExtractionReport[];
 };
 
 /** Display names for the fields a column can be read as. */
@@ -187,8 +270,12 @@ type ColumnProfile = {
   textFrac: number;
   /** Short identifiers with a digit: 053, 101, A-101, 1.2, CO-01a. */
   codeFrac: number;
-  /** CSI-style section numbers: 03310, 26 05 19, 03 30 00. */
+  /** CSI-style section numbers written as text: "03310", "26 05 19",
+   * "03 30 00". Text only — a plain number like 25000 is far more often
+   * an amount than a section number. */
   csiFrac: number;
+  /** Values that are either a short code or a CSI section number. */
+  csiCodeFrac: number;
   /** Measurement-unit words: EA, LF, SF, CY, LS, HR, … */
   unitFrac: number;
   /** "DIVISION 03 — CONCRETE"-style values. */
@@ -211,19 +298,23 @@ function profileColumn(values: unknown[]): ColumnProfile {
   const present = values.filter((v) => v !== null && v !== undefined && String(v).trim() !== "");
   const n = present.length;
   if (n === 0) {
-    return { n: 0, numFrac: 0, textFrac: 0, codeFrac: 0, csiFrac: 0, unitFrac: 0, divisionFrac: 0, avgLen: 0, distinctRatio: 0, medianNumber: 0 };
+    return { n: 0, numFrac: 0, textFrac: 0, codeFrac: 0, csiFrac: 0, csiCodeFrac: 0, unitFrac: 0, divisionFrac: 0, avgLen: 0, distinctRatio: 0, medianNumber: 0 };
   }
   const texts = present.map((v) => String(v).trim());
-  const numbers = present.map((v) => toNumberOrNull(v).value).filter((v): v is number => v !== null);
+  // Signed: a negative amount (a credit line) is still a number — it must
+  // not make an amount column look like text.
+  const numbers = present.map((v) => parseNumber(v)).filter((v): v is number => v !== null);
   const isCode = (v: unknown, t: string) =>
     typeof v === "number" ? Number.isInteger(v) && v >= 0 && v < 1e6 : /^[A-Za-z]{0,4}[-.\s]?\d[\w.\-/]{0,11}$/.test(t);
+  const isCsi = (v: unknown, t: string) => typeof v === "string" && /^\d{2}\s?\d{2}\s?\d{1,2}(\.\d+)?$/.test(t);
   const sorted = [...numbers].sort((a, b) => a - b);
   return {
     n,
     numFrac: numbers.length / n,
     textFrac: texts.filter((t) => /[A-Za-z]/.test(t)).length / n,
     codeFrac: present.filter((v, i) => isCode(v, texts[i])).length / n,
-    csiFrac: texts.filter((t) => /^\d{2}\s?\d{2}\s?\d{1,2}(\.\d+)?$/.test(t)).length / n,
+    csiFrac: present.filter((v, i) => isCsi(v, texts[i])).length / n,
+    csiCodeFrac: present.filter((v, i) => isCode(v, texts[i]) || isCsi(v, texts[i])).length / n,
     unitFrac: texts.filter((t) => UNIT_WORDS.has(t.toLowerCase().replace(/\./g, ""))).length / n,
     divisionFrac: texts.filter((t) => /^division\b/i.test(t)).length / n,
     avgLen: texts.reduce((s, t) => s + t.length, 0) / n,
@@ -294,7 +385,7 @@ function dataCompatible(field: NormalizedField, p: ColumnProfile): boolean {
     case "workItemNo":
       return p.codeFrac >= 0.6 && p.avgLen <= 20;
     case "csiLineCode":
-      return p.codeFrac >= 0.6;
+      return p.csiCodeFrac >= 0.6;
     case "plannedQuantity":
     case "scheduledValue":
       return p.numFrac >= 0.6;
@@ -343,6 +434,8 @@ type ColumnInterpretation = {
   score: number;
   /** Fields whose column had heading support (not data alone). */
   headingBacked: number;
+  /** Which fields those were. */
+  headingFields: Set<NormalizedField>;
   /** Fields matched by an exact alias (the original rule). */
   exactAliases: number;
 };
@@ -365,7 +458,14 @@ function interpretColumns(headerRow: unknown[], sampleRows: unknown[][]): Column
       const data = profile.n === 0 ? 0 : dataScore(field, profile, col);
       if (heading >= 0.4) {
         if (heading + data >= 0.7) candidates.push({ col, field, total: heading + data, heading });
-      } else if (data >= (DATA_ONLY_THRESHOLD[field] ?? Infinity)) {
+      } else if (
+        data >= (DATA_ONLY_THRESHOLD[field] ?? Infinity) &&
+        // Repeated short labels under a heading of their own ("Inspector",
+        // "Crew", "Status") are that column's data, kept under its own
+        // header — never re-read as the department. Content alone decides
+        // only for an unlabeled column or "DIVISION …" values.
+        (field !== "department" || !headerText || profile.divisionFrac >= 0.5)
+      ) {
         candidates.push({ col, field, total: data, heading: 0 });
       }
     }
@@ -379,6 +479,7 @@ function interpretColumns(headerRow: unknown[], sampleRows: unknown[][]): Column
   );
   const columnField = new Map<number, NormalizedField>();
   const taken = new Set<NormalizedField>();
+  const headingFields = new Set<NormalizedField>();
   let score = 0;
   let headingBacked = 0;
   let exactAliases = 0;
@@ -387,10 +488,13 @@ function interpretColumns(headerRow: unknown[], sampleRows: unknown[][]): Column
     columnField.set(c.col, c.field);
     taken.add(c.field);
     score += c.total;
-    if (c.heading > 0) headingBacked++;
+    if (c.heading > 0) {
+      headingBacked++;
+      headingFields.add(c.field);
+    }
     if (FIELD_ALIASES[c.field].includes(normalizeHeader(headerRow[c.col]))) exactAliases++;
   }
-  return { columnField, score, headingBacked, exactAliases };
+  return { columnField, score, headingBacked, headingFields, exactAliases };
 }
 
 function isRowBlank(row: unknown[]): boolean {
@@ -438,44 +542,105 @@ function isSingleCellRow(row: unknown[]): boolean {
   return row.filter((cell) => toStringOrNull(cell) !== null).length === 1;
 }
 
-function findHeaderRow(
-  grid: unknown[][]
-): { index: number; columnField: Map<number, NormalizedField> } | null {
-  let best: { index: number; columnField: Map<number, NormalizedField> } | null = null;
-  let bestScore = 0;
+// Multi-row headers. AIA G703 and similar forms put a merged group
+// heading in the header row ("WORK COMPLETED" over two columns) with the
+// real column names in the row below ("FROM PREVIOUS APPLICATION", "THIS
+// PERIOD"), often followed by a column-letter row ("A", "B", "C", …,
+// "G/C"). Those rows are part of the header, not data: they must not be
+// imported as a work item or profiled as column data.
+const HEADER_BAND_MAX_ROWS = 3;
 
-  for (let i = 0; i < Math.min(grid.length, HEADER_SEARCH_ROW_LIMIT); i++) {
-    const row = grid[i];
-    if (isRowBlank(row)) continue;
-    const cells = row.filter((cell) => toStringOrNull(cell) !== null);
-    const textCells = cells.filter((cell) => typeof cell === "string" && /[A-Za-z]/.test(cell));
-    if (textCells.length / cells.length < 0.6) continue;
+/** A column-letter row: two or more short labels like A, B, AA, G/C, (C-G), D+E. */
+function isColumnLetterRow(row: unknown[]): boolean {
+  const cells = row.map((cell) => toStringOrNull(cell)).filter((cell): cell is string => cell !== null);
+  return (
+    cells.length >= 2 &&
+    row.every((cell) => cell === null || cell === undefined || typeof cell === "string") &&
+    cells.every((t) => /^\(?[A-Z]{1,2}(\s*[-+/÷×*]\s*[A-Z]{1,2})*\)?$/.test(t))
+  );
+}
 
-    const sample: unknown[][] = [];
-    for (let r = i + 1; r < grid.length && sample.length < HEADER_SAMPLE_ROWS; r++) {
-      const candidate = grid[r];
-      if (isRowBlank(candidate) || isSingleCellRow(candidate) || isTotalRow(candidate)) continue;
-      sample.push(candidate);
-    }
+/** A sub-header row directly under the header row: text only, with at
+ * least one label under a header cell that is blank (the continuation of
+ * a merged group heading), and nothing under an item-number or
+ * description heading (a data row always has one of those). */
+function isSubHeaderRow(row: unknown[], headerRow: unknown[]): boolean {
+  const filled = row.map((cell, c) => ({ cell, c })).filter(({ cell }) => toStringOrNull(cell) !== null);
+  if (filled.length === 0) return false;
+  if (!filled.every(({ cell }) => typeof cell === "string" && /[A-Za-z]/.test(cell))) return false;
+  if (/^division\b/i.test(String(filled[0].cell).trim()) || isTotalRowMarker(String(filled[0].cell))) return false;
+  if (!filled.some(({ c }) => toStringOrNull(headerRow[c]) === null)) return false;
+  return !filled.some(({ c }) => headingScore("description", headerRow[c]) >= 1 || headingScore("workItemNo", headerRow[c]) >= 1);
+}
 
-    const interpretation = interpretColumns(row, sample);
-    const fields = new Set(interpretation.columnField.values());
-    const hasCore =
-      fields.has("description") ||
-      (fields.has("department") && (fields.has("workItemNo") || fields.has("csiLineCode")));
-    if (!hasCore) continue;
-    const exactCore = [...interpretation.columnField].some(
-      ([col, field]) =>
-        (field === "description" || field === "department") && FIELD_ALIASES[field].includes(normalizeHeader(row[col]))
-    );
-    if (interpretation.headingBacked < 2 && !exactCore) continue;
+/** How many rows directly under the header row belong to the header. */
+function headerBandLength(grid: unknown[][], headerIndex: number): number {
+  let n = 0;
+  while (n < HEADER_BAND_MAX_ROWS) {
+    const row = grid[headerIndex + 1 + n];
+    if (!row || !(isColumnLetterRow(row) || isSubHeaderRow(row, grid[headerIndex]))) break;
+    n++;
+  }
+  return n;
+}
 
-    if (interpretation.score > bestScore) {
-      bestScore = interpretation.score;
-      best = { index: i, columnField: interpretation.columnField };
-    }
+type HeaderMatch = { index: number; columnField: Map<number, NormalizedField>; score: number };
+
+/**
+ * Whether grid row `i` is a work-item table header, judged against the
+ * rows below it up to `sampleEnd` (the next table's start — a second table
+ * on the sheet must never be profiled as this table's data).
+ */
+function evaluateHeader(grid: unknown[][], i: number, sampleEnd = grid.length): HeaderMatch | null {
+  const row = grid[i];
+  if (!row || isRowBlank(row)) return null;
+  const cells = row.filter((cell) => toStringOrNull(cell) !== null);
+  const textCells = cells.filter((cell) => typeof cell === "string" && /[A-Za-z]/.test(cell));
+  if (textCells.length / cells.length < 0.6) return null;
+
+  const sample: unknown[][] = [];
+  for (let r = i + 1 + headerBandLength(grid, i); r < sampleEnd && sample.length < HEADER_SAMPLE_ROWS; r++) {
+    const candidate = grid[r];
+    if (isRowBlank(candidate) || isSingleCellRow(candidate) || isTotalRow(candidate) || isColumnLetterRow(candidate)) continue;
+    sample.push(candidate);
   }
 
+  const interpretation = interpretColumns(row, sample);
+  const fields = new Set(interpretation.columnField.values());
+  // Without a description column, a table only counts as work items when
+  // its item-number/CSI column is NAMED as one: a numeric column guessed
+  // from its contents alone (e.g. "Rate/hr" next to "Trade") would turn a
+  // rate or price list into fake work items with invented descriptions.
+  const namedIdentifier = interpretation.headingFields.has("workItemNo") || interpretation.headingFields.has("csiLineCode");
+  const hasCore = fields.has("description") || (fields.has("department") && namedIdentifier);
+  if (!hasCore) return null;
+  const exactCore = [...interpretation.columnField].some(
+    ([col, field]) =>
+      (field === "description" || field === "department") && FIELD_ALIASES[field].includes(normalizeHeader(row[col]))
+  );
+  if (interpretation.headingBacked < 2 && !exactCore) return null;
+  return { index: i, columnField: interpretation.columnField, score: interpretation.score };
+}
+
+/**
+ * The best work-item header among the first HEADER_SEARCH_ROW_LIMIT rows
+ * and any extra candidate rows (Layer 1 table starts, wherever they are).
+ * Each candidate's column sample stops at the next table start.
+ */
+function findHeaderRow(
+  grid: unknown[][],
+  candidates: number[] = [],
+  tableStarts: number[] = []
+): HeaderMatch | null {
+  const rowsToTry = new Set<number>(candidates);
+  for (let i = 0; i < Math.min(grid.length, HEADER_SEARCH_ROW_LIMIT); i++) rowsToTry.add(i);
+  const nextStart = (i: number) => tableStarts.filter((s) => s > i).sort((a, b) => a - b)[0] ?? grid.length;
+
+  let best: HeaderMatch | null = null;
+  for (const i of [...rowsToTry].sort((a, b) => a - b)) {
+    const match = evaluateHeader(grid, i, nextStart(i));
+    if (match && match.score > (best?.score ?? 0)) best = match;
+  }
   return best;
 }
 
@@ -490,11 +655,37 @@ function findHeaderRow(
  * dropped so the caller can raise a visible issue instead of silently
  * losing it. */
 function toNumberOrNull(value: unknown): { value: number | null; wasNegative: boolean } {
-  if (value === undefined || value === null || value === "") return { value: null, wasNegative: false };
-  const n = typeof value === "number" ? value : Number(String(value).replace(/[,$\s]/g, ""));
-  if (!Number.isFinite(n)) return { value: null, wasNegative: false };
+  const n = parseNumber(value);
+  if (n === null) return { value: null, wasNegative: false };
   if (n < 0) return { value: null, wasNegative: true };
   return { value: n, wasNegative: false };
+}
+
+/** A cell as a number (signed), or null when it isn't one. Never rounds. */
+function parseNumber(value: unknown): number | null {
+  if (value === undefined || value === null || value === "" || typeof value === "boolean") return null;
+  if (value instanceof Date) return null;
+  const n = typeof value === "number" ? value : Number(String(value).replace(/[,$\s]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Number formats that only pad/shape an identifier ("000" → 053,
+ * "0.00" → 1.10, "00 00 00" → 03 30 00) — for those, the text Excel shows
+ * IS the identifier, and String(value) would silently change it. */
+const IDENTIFIER_FORMAT = /^[0#?.\s\-/]+$/;
+
+/** Item numbers / CSI codes as the file shows them. */
+function identifierText(cell: XLSX.CellObject | undefined, gridValue: unknown): string | null {
+  if (
+    cell?.t === "n" &&
+    typeof cell.z === "string" &&
+    IDENTIFIER_FORMAT.test(cell.z) &&
+    typeof cell.w === "string" &&
+    cell.w.trim() !== ""
+  ) {
+    return cell.w.trim();
+  }
+  return toStringOrNull(gridValue);
 }
 
 function toStringOrNull(value: unknown): string | null {
@@ -547,21 +738,93 @@ export { EXPORT_LATEST_HEADERS };
 const EXPORT_LATEST_HEADER_SET = new Set<string>(Object.values(EXPORT_LATEST_HEADERS));
 
 function collectAdditionalFields(
-  headerRow: unknown[],
+  columnKeys: (string | null)[],
   columnField: Map<number, NormalizedField>,
-  row: unknown[]
+  row: unknown[],
+  cellAt: (col: number) => XLSX.CellObject | undefined
 ): Record<string, string | number> | null {
   let fields: Record<string, string | number> | null = null;
-  headerRow.forEach((headerCell, colIndex) => {
-    if (columnField.has(colIndex)) return;
-    const headerText = toStringOrNull(headerCell);
-    if (!headerText || EXPORT_LATEST_HEADER_SET.has(headerText)) return;
-    const cell = row[colIndex];
-    if (cell === undefined || cell === null || String(cell).trim() === "") return;
+  columnKeys.forEach((key, colIndex) => {
+    if (key === null || columnField.has(colIndex)) return;
+    const value = additionalValue(cellAt(colIndex), row[colIndex]);
+    if (value === null) return;
     fields ??= {};
-    fields[headerText] = typeof cell === "number" ? cell : String(cell).trim();
+    fields[key] = value;
   });
   return fields;
+}
+
+/** A cell's value as kept in additional fields: numbers unchanged, text
+ * trimmed, date-formatted numbers as ISO dates (a bare serial number
+ * would change their meaning), error cells as their error text, and a
+ * formula with no saved result as its formula text. */
+function additionalValue(cell: XLSX.CellObject | undefined, gridValue: unknown): string | number | null {
+  if (cell?.f && (cell.v === undefined || cell.t === "z")) return `=${cell.f}`;
+  if (cell?.t === "e") return cell.w ?? "#ERROR";
+  if (gridValue === undefined || gridValue === null || String(gridValue).trim() === "") return null;
+  if (typeof gridValue === "number") {
+    return isDateFormat(cell?.z) ? (serialToIsoDate(gridValue) ?? gridValue) : gridValue;
+  }
+  return String(gridValue).trim();
+}
+
+/**
+ * The name each column's data is kept under in additional fields — the
+ * file's own header text, as before, so re-imports keep the same keys.
+ * Where the header row alone doesn't name a column, the header band and
+ * merged ranges do:
+ *   - a merged group heading with sub-headings below → "WORK COMPLETED /
+ *     THIS PERIOD" (previously the second column was dropped);
+ *   - a blank header cell with a sub-heading → the sub-heading;
+ *   - a merged group with no sub-heading → "GROUP (F)";
+ *   - nothing at all → "Column F" (data is never dropped for lack of a
+ *     heading).
+ * A heading used by an earlier column gets its column letter appended
+ * instead of overwriting that column's value. Null = not source data
+ * (the download's own "Latest …" columns).
+ */
+function columnHeaderKeys(
+  grid: unknown[][],
+  headerIndex: number,
+  bandLength: number,
+  merges: XLSX.Range[],
+  colOffset: number
+): (string | null)[] {
+  const header = grid[headerIndex] ?? [];
+  const width = grid.reduce((w, row) => Math.max(w, row.length), header.length);
+  const bandRows = grid.slice(headerIndex + 1, headerIndex + 1 + bandLength).filter((row) => !isColumnLetterRow(row));
+  const used = new Set<string>();
+  const keys: (string | null)[] = [];
+  for (let c = 0; c < width; c++) {
+    const own = toStringOrNull(header[c]);
+    if (own && EXPORT_LATEST_HEADER_SET.has(own)) {
+      keys.push(null);
+      continue;
+    }
+    const letter = XLSX.utils.encode_col(colOffset + c);
+    const group = merges.find(
+      (m) => m.s.r <= headerIndex && headerIndex <= m.e.r && m.s.c <= c && c <= m.e.c && m.e.c > m.s.c
+    );
+    const groupText = group ? toStringOrNull(grid[group.s.r]?.[group.s.c]) : null;
+    const subs = bandRows.map((row) => toStringOrNull(row[c])).filter((t): t is string => t !== null);
+    let key: string;
+    if (groupText && subs.length > 0) key = [groupText, ...subs].join(" / ");
+    else if (own) key = own;
+    else if (subs.length > 0) key = subs.join(" / ");
+    else if (groupText) key = `${groupText} (${letter})`;
+    else key = `Column ${letter}`;
+    if (used.has(key)) key = `${key} (${letter})`;
+    used.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
+/** Same rule as lib/admin.ts normalizeLineItemNo ("1" and "001" are one
+ * item) — the key commit matches existing work items by. */
+function lineItemKey(raw: string): string {
+  const trimmed = raw.trim();
+  return /^\d+$/.test(trimmed) ? String(parseInt(trimmed, 10)) : trimmed.toLowerCase();
 }
 
 /** Excel serial date or a plain string — normalized to an ISO date
@@ -582,252 +845,525 @@ function toDateStringOrNull(value: unknown): string | null {
 }
 
 /**
- * Parses every sheet of an uploaded workbook into normalized work-item
- * rows. Never throws for bad *data* (a row missing a required field
- * becomes an issue, not a thrown error). In practice SheetJS's `read()`
- * is also extremely lenient about bad *files* — verified live: plain
- * text, random binary bytes, and a zero-byte buffer all parse without
- * throwing, they just yield zero sheets/rows rather than an exception.
- * The real safety net for "this wasn't a usable project file" is
- * therefore the caller checking `rows.length === 0` (see
- * app/api/admin/projects/import/route.ts), not a try/catch around this
- * call — that try/catch is kept only as defense-in-depth for whatever
- * SheetJS input shape (if any) genuinely does throw.
+ * Parses every sheet of an uploaded workbook. Two stages:
+ *   1. Raw extraction (lib/workbookExtract.ts): every worksheet and every
+ *      populated cell, exactly as stored, independent of any mapping.
+ *   2. Mapping: on each sheet that holds a work-item table, eligible rows
+ *      become ParsedWorkItemRow; every other populated row is classified
+ *      (header, division, total, note, …) with a reason, so nothing the
+ *      file holds disappears without being reported (see `extraction`).
+ * Each sheet is mapped independently — its own header row and column
+ * layout — and a failure on one sheet is reported against that sheet
+ * without hiding the others.
+ *
+ * Never throws for bad *data* (a row missing a required field becomes an
+ * issue). SheetJS's `read()` is extremely lenient about bad *files* —
+ * plain text, random bytes and a zero-byte buffer all parse to zero
+ * sheets/rows — so the caller's `rows.length === 0` check (see
+ * app/api/admin/projects/import/route.ts) is the real "not a usable
+ * project file" signal; a throw (e.g. the safe-read guard) is still
+ * treated as an unreadable file by the caller. The one deliberate throw
+ * is WorkbookTooLargeError (lib/workbookLimits.ts): more populated cells
+ * than the import limit, across all sheets combined.
  */
-export function parseProjectWorkbook(buffer: ArrayBuffer): ParseResult {
-  const workbook = readWorkbookGuarded(buffer, { type: "array", cellDates: false });
+export function parseProjectWorkbook(buffer: ArrayBuffer, fileName = "workbook"): ParseResult {
+  const workbook = readWorkbookForExtraction(buffer);
+  const raw = extractRawWorkbook(workbook);
+  // Too many cells (all sheets together): refuse before any further work.
+  assertWithinCellLimit(raw.sheets);
+  // Layer 1 first: every populated cell of every sheet, with its sheet's
+  // own structure (throws if any cell would be lost or duplicated).
+  const complete = buildWorkbookExtraction(raw, {
+    fileName,
+    bytes: buffer.byteLength,
+    sha256: createHash("sha256").update(new Uint8Array(buffer)).digest("hex"),
+  });
+  const tableStartsBySheet = new Map(complete.sheets.map((s) => [s.name, s.tables.map((t) => t.firstRow)]));
 
   const rows: ParsedWorkItemRow[] = [];
   const issues: ParseIssue[] = [];
   const sheetsScanned: string[] = [];
   const columnMappings: ParseResult["columnMappings"] = [];
   const diagnostics: string[] = [];
+  const problems: string[] = [];
+  const sheetReports: SheetExtractionReport[] = [];
 
-  for (const sheetName of workbook.SheetNames) {
-    const sheet = workbook.Sheets[sheetName];
-    const grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
-      header: 1,
-      raw: true,
-      defval: null,
+  for (const rawSheet of raw.sheets) {
+    const sheetName = rawSheet.name;
+    const outcome = new Map<number, { kind: RowKind; reason: string }>();
+    let mapping: SheetExtractionReport["mapping"] = "skipped";
+    let message = rawSheet.message;
+    let headerRow: number | null = null;
+
+    if (rawSheet.status === "error" || rawSheet.status === "incomplete") {
+      problems.push(`Sheet "${sheetName}": ${rawSheet.message}`);
+    }
+    if (rawSheet.status === "ok" || rawSheet.status === "incomplete") {
+      try {
+        const mapped = mapSheet(workbook.Sheets[sheetName], sheetName, tableStartsBySheet.get(sheetName) ?? []);
+        mapped.outcome.forEach((v, k) => outcome.set(k, v));
+        rows.push(...mapped.rows);
+        issues.push(...mapped.issues);
+        diagnostics.push(...mapped.diagnostics);
+        headerRow = mapped.headerRow;
+        if (mapped.columnMappings.length > 0) {
+          sheetsScanned.push(sheetName);
+          columnMappings.push(...mapped.columnMappings);
+          mapping = mapped.rows.length > 0 ? "mapped" : "no-work-items";
+        } else {
+          mapping = "not-a-work-item-table";
+        }
+        if (mapped.diagnostics.length > 0 && rawSheet.status === "ok") message = mapped.diagnostics.join(" ");
+      } catch (err) {
+        outcome.clear();
+        mapping = "error";
+        message = `Work-item mapping failed on this sheet: ${err instanceof Error ? err.message : "unknown error"}.`;
+        problems.push(`Sheet "${sheetName}": ${message}`);
+      }
+    }
+
+    const rowsByKind: SheetExtractionReport["rowsByKind"] = {};
+    const unmappedRows: SheetExtractionReport["unmappedRows"] = [];
+    for (const rawRow of rawSheet.rows) {
+      const o = outcome.get(rawRow.row) ?? {
+        kind: "unmapped" as const,
+        reason:
+          mapping === "error"
+            ? "Not mapped — work-item mapping failed on this sheet."
+            : "Only error values or formulas without a saved result — nothing to map.",
+      };
+      rowsByKind[o.kind] = (rowsByKind[o.kind] ?? 0) + 1;
+      if (o.kind !== "work-item") unmappedRows.push({ row: rawRow.row, kind: o.kind, reason: o.reason, text: rowPreview(rawRow) });
+    }
+    sheetReports.push({
+      name: sheetName,
+      index: rawSheet.index,
+      visibility: rawSheet.visibility,
+      status: rawSheet.status,
+      mapping,
+      ...(message ? { message } : {}),
+      usedRange: rawSheet.usedRange,
+      mergedRanges: rawSheet.merges.length,
+      populatedRows: rawSheet.populatedRows,
+      populatedCells: rawSheet.populatedCells,
+      blankRowsWithin: rawSheet.blankRowsWithin,
+      formulaCells: rawSheet.formulaCells,
+      formulasWithoutCachedValue: rawSheet.formulasWithoutCachedValue,
+      headerRow,
+      rowsMapped: rowsByKind["work-item"] ?? 0,
+      rowsByKind,
+      unmappedRows,
     });
-    if (grid.length === 0) continue;
+  }
 
-    // Header row = the best-matching row within the first
-    // HEADER_SEARCH_ROW_LIMIT rows, not necessarily the first non-blank
-    // one (real exports, e.g. AIA G703, have project/application-info
-    // rows above the actual table header). A sheet with no row that
-    // resolves any department/description column at all is treated as
-    // "not a work-item sheet" (e.g. a cover page or notes tab) and
-    // silently skipped, rather than flooding issues with "missing
-    // department" for every row of an unrelated sheet.
-    const headerMatch = findHeaderRow(grid);
-    if (!headerMatch) {
-      diagnostics.push(
-        `Sheet "${sheetName}": no row could be read as a work-item table header (a row naming the columns, with a work description column underneath).`
-      );
+  // Commit matches existing work items by item number project-wide
+  // (lib/admin.ts upsertWorkItemFromImport), so the same item number on
+  // two sheets — or under two departments — updates ONE work item with
+  // the later row's values. Same-sheet, same-department repeats are
+  // already reported per sheet; every other case is reported here.
+  const firstByItem = new Map<string, ParsedWorkItemRow>();
+  for (const row of rows) {
+    if (!row.workItemNo) continue;
+    const key = lineItemKey(row.workItemNo);
+    const first = firstByItem.get(key);
+    if (!first) {
+      firstByItem.set(key, row);
       continue;
     }
-    const { index: headerRowIndex, columnField } = headerMatch;
-    const headerCells = grid[headerRowIndex];
-    const mappedFields = new Set(columnField.values());
-    const hasDepartmentColumn = mappedFields.has("department");
-    // A table that has item numbers/quantities/values: a line there with
-    // ONLY description text (a note, a legend) is not a work item.
-    const identifyingFields: NormalizedField[] = ["workItemNo", "csiLineCode", "plannedQuantity", "unitOfMeasure", "scheduledValue"];
-    const tableHasIdentifiers = identifyingFields.some((f) => mappedFields.has(f));
-    columnMappings.push({
-      sheet: sheetName,
-      headerRow: headerRowIndex + 1,
-      columns: [...columnField]
-        .sort(([a], [b]) => a - b)
-        .map(([col, field]) => ({ header: String(headerCells[col] ?? "").replace(/\s+/g, " ").trim(), field: FIELD_LABELS[field] })),
-    });
-    let unassignedCount = 0;
-    const rowsBefore = rows.length;
-
-    sheetsScanned.push(sheetName);
-    // (department, workItemNo) pairs already seen ON THIS SHEET — the
-    // upsert key upsertWorkItemFromImport commits with. Surfaced as a
-    // visible issue rather than silently letting the later row's
-    // values overwrite the earlier one's with no record of it having
-    // happened (both rows are still imported; upsert intentionally
-    // collapses them to one work item, same as a genuine re-upload
-    // would — this is only about the operator being told).
-    const seenKeys = new Set<string>();
-    // Current AIA G703 "DIVISION NN — Name" section, applied to rows
-    // below it as their department when the sheet has no explicit
-    // Department column (see extractDivisionHeader above).
-    let currentDivision: string | null = null;
-
-    for (let r = headerRowIndex + 1; r < grid.length; r++) {
-      const row = grid[r];
-      if (isRowBlank(row)) continue;
-
-      const divisionHeader = extractDivisionHeader(row);
-      if (divisionHeader) {
-        currentDivision = divisionHeader;
-        continue;
-      }
-      // Any other single-cell line (a title, legend, note or GRAND TOTAL
-      // label) is not a work item. In a sheet with no department column,
-      // a short ALL-CAPS line is a category heading for the rows below
-      // (e.g. "ELECTRICAL WORK"), the same way a DIVISION row is.
-      if (isSingleCellRow(row)) {
-        const text = row.map((cell) => toStringOrNull(cell)).find((cell) => cell !== null) ?? "";
-        if (
-          !hasDepartmentColumn &&
-          text.length <= 60 &&
-          /[A-Z]/.test(text) &&
-          text === text.toUpperCase() &&
-          !isTotalRowMarker(text)
-        ) {
-          currentDivision = text.trim();
-        }
-        continue;
-      }
-      // A repeated header row (multi-page sheets): two or more cells equal
-      // their own column's heading.
-      if (
-        row.filter((cell, c) => toStringOrNull(cell) !== null && normalizeHeader(cell) === normalizeHeader(headerCells[c]))
-          .length >= 2
-      ) {
-        continue;
-      }
-
-      const sourceRow = r + 1;
-      const get = (field: NormalizedField): unknown => {
-        for (const [colIndex, mappedField] of columnField) {
-          if (mappedField === field) return row[colIndex];
-        }
-        return undefined;
-      };
-
-      // A department cell may itself read "DIVISION 03 — CONCRETE": keep
-      // just the name, exactly as a DIVISION heading row does.
-      const departmentCell = toStringOrNull(get("department"));
-      const departmentFromCell = departmentCell
-        ? (departmentCell.match(/^division\s*[\w.]*\s*[-–—:]\s*(.+)$/i)?.[1].trim() ?? departmentCell)
-        : null;
-      let department = departmentFromCell ?? currentDivision;
-      const rawDescription = toStringOrNull(get("description"));
-      const workItemNo = toStringOrNull(get("workItemNo"));
-      const csiLineCode = toStringOrNull(get("csiLineCode"));
-
-      // Multi-page continuation sheets repeat the column header row on
-      // every page, and typically carry a subtotal/grand-total row per
-      // division or at the sheet's end. Neither is a real work item, so
-      // both are silently skipped rather than imported as bogus rows.
-      // Checked against whichever of description/item-no/CSI-code the
-      // marker text actually landed in — a sheet with no Department
-      // column (e.g. G703) puts "SUBTOTAL"/"GRAND TOTAL" under ITEM NO.,
-      // not Description, and it must be caught there too, BEFORE
-      // synthesizeDescription below would otherwise turn it into a fake
-      // "Item SUBTOTAL" work item.
-      if (rawDescription && FIELD_ALIASES.description.includes(normalizeHeader(rawDescription))) {
-        continue;
-      }
-      if (isTotalRowMarker(rawDescription) || isTotalRowMarker(workItemNo) || isTotalRowMarker(csiLineCode)) {
-        continue;
-      }
-
-      if (tableHasIdentifiers && identifyingFields.every((f) => toStringOrNull(get(f)) === null)) {
-        if (rawDescription) {
-          issues.push({
-            sourceRow,
-            sourceSheet: sheetName,
-            message: "No item number, CSI code, quantity, unit or value — read as a note, not a work item (skipped).",
-          });
-        }
-        continue;
-      }
-
-      if (!department) {
-        department = UNASSIGNED_DEPARTMENT;
-        unassignedCount++;
-      }
-
-      // A row genuinely missing "Description of Work" isn't necessarily
-      // a bad row — G703 structure means the item number or CSI code
-      // often still uniquely identifies it (see synthesizeDescription).
-      // Only a row with NEITHER a description NOR anything to infer one
-      // from is truly unusable and skipped.
-      const description = rawDescription ?? synthesizeDescription(workItemNo, csiLineCode);
-      if (!description) {
-        issues.push({ sourceRow, sourceSheet: sheetName, message: "Missing work item description — row skipped." });
-        continue;
-      }
-      const descriptionInferred = !rawDescription;
-      if (descriptionInferred) {
-        issues.push({
-          sourceRow,
-          sourceSheet: sheetName,
-          message: `No description column value — used "${description}" from the item/CSI code instead.`,
-        });
-      }
-
-      const plannedQuantity = toNumberOrNull(get("plannedQuantity"));
-      const scheduledValue = toNumberOrNull(get("scheduledValue"));
-
-      if (plannedQuantity.wasNegative) {
-        issues.push({
-          sourceRow,
-          sourceSheet: sheetName,
-          message: "Planned quantity was negative — ignored, row still imported without it.",
-        });
-      }
-      if (scheduledValue.wasNegative) {
-        issues.push({
-          sourceRow,
-          sourceSheet: sheetName,
-          message: "Scheduled value was negative — ignored, row still imported without it.",
-        });
-      }
-
-      const dedupeKey = `${department.trim().toLowerCase()}::${(workItemNo ?? description).trim().toLowerCase()}`;
-      if (seenKeys.has(dedupeKey)) {
-        issues.push({
-          sourceRow,
-          sourceSheet: sheetName,
-          message: `Duplicate of an earlier row in this sheet (same department${
-            workItemNo ? " and item #" : " and description"
-          }) — this row's values will overwrite the earlier one's on import.`,
-        });
-      }
-      seenKeys.add(dedupeKey);
-
-      rows.push({
-        sourceRow,
-        sourceSheet: sheetName,
-        department,
-        workItemNo,
-        description,
-        descriptionInferred,
-        plannedQuantity: plannedQuantity.value,
-        unitOfMeasure: toStringOrNull(get("unitOfMeasure")),
-        scheduledValue: scheduledValue.value,
-        csiLineCode,
-        startDate: toDateStringOrNull(get("startDate")),
-        endDate: toDateStringOrNull(get("endDate")),
-        additionalFields: collectAdditionalFields(grid[headerRowIndex], columnField, row),
-      });
-    }
-
-    if (unassignedCount > 0) {
+    const sameSheetSameDept =
+      first.sourceSheet === row.sourceSheet &&
+      first.department.trim().toLowerCase() === row.department.trim().toLowerCase();
+    if (!sameSheetSameDept) {
       issues.push({
-        sourceRow: headerRowIndex + 1,
-        sourceSheet: sheetName,
-        message: `${unassignedCount} row(s) have no department column or DIVISION/category heading — they will be placed under "${UNASSIGNED_DEPARTMENT}" (existing work items keep their own department).`,
+        sourceRow: row.sourceRow,
+        sourceSheet: row.sourceSheet,
+        message: `Item # ${row.workItemNo} also appears on sheet "${first.sourceSheet}" row ${first.sourceRow} — on import both rows update the same work item (this row's values are applied last).`,
       });
-    }
-    if (rows.length === rowsBefore) {
-      const read = columnMappings[columnMappings.length - 1].columns.map((c) => `${c.header} → ${c.field}`).join(", ");
-      diagnostics.push(
-        `Sheet "${sheetName}": header row ${headerRowIndex + 1} was read (${read}), but no row below it had a work description or item number.`
-      );
     }
   }
 
-  return { rows, issues, sheetsScanned, columnMappings, diagnostics };
+  const populatedRows = sheetReports.reduce((n, s) => n + s.populatedRows, 0);
+  const extraction: ExtractionReport = {
+    complete: problems.length === 0,
+    sheetsDiscovered: raw.sheets.length,
+    sheetsRead: raw.sheets.filter((s) => s.status !== "error").length,
+    sheetsWithWorkItems: sheetReports.filter((s) => s.rowsMapped > 0).length,
+    populatedRows,
+    populatedCells: sheetReports.reduce((n, s) => n + s.populatedCells, 0),
+    rowsMapped: rows.length,
+    rowsNotMapped: populatedRows - rows.length,
+    problems,
+    sheets: sheetReports,
+  };
+
+  return { rows, issues, sheetsScanned, columnMappings, diagnostics, extraction, raw, complete };
+}
+
+/**
+ * Work-item mapping of one worksheet (Layer 2). Row numbers are real sheet
+ * rows. `tableStartRows` are the sheet rows where Layer 1
+ * (lib/workbookStructure.ts) found a table header: each table is mapped
+ * on ITS OWN header, so a second table on the sheet is never read through
+ * the first table's columns, and a table without work-item columns
+ * contributes no work items (its rows stay in Layer 1).
+ */
+function mapSheet(
+  sheet: XLSX.WorkSheet,
+  sheetName: string,
+  tableStartRows: number[] = []
+): {
+  rows: ParsedWorkItemRow[];
+  issues: ParseIssue[];
+  diagnostics: string[];
+  columnMappings: ParseResult["columnMappings"];
+  headerRow: number | null;
+  outcome: Map<number, { kind: RowKind; reason: string }>;
+} {
+  const rows: ParsedWorkItemRow[] = [];
+  const issues: ParseIssue[] = [];
+  const diagnostics: string[] = [];
+  const outcome = new Map<number, { kind: RowKind; reason: string }>();
+  const { grid, rowOffset, colOffset } = sheetGrid(sheet);
+  const sheetRow = (r: number) => rowOffset + r + 1;
+  const classify = (r: number, kind: RowKind, reason: string) => outcome.set(sheetRow(r), { kind, reason });
+  const tableStarts = tableStartRows.map((n) => n - rowOffset - 1).filter((i) => i >= 0 && i < grid.length);
+  const nextTableStart = (i: number) => tableStarts.filter((s) => s > i).sort((a, b) => a - b)[0] ?? grid.length;
+
+  // Header row = the best-matching row within the first
+  // HEADER_SEARCH_ROW_LIMIT rows or at any Layer 1 table start, not
+  // necessarily the first non-blank one (real exports, e.g. AIA G703,
+  // have project/application-info rows above the actual table header).
+  // A sheet with no row that resolves any department/description column
+  // at all is treated as "not a work-item sheet" (e.g. a cover page or
+  // notes tab): its rows stay in the complete extraction and are reported
+  // as not mapped.
+  const headerMatch = findHeaderRow(grid, tableStarts, tableStarts);
+  if (!headerMatch) {
+    diagnostics.push(
+      `Sheet "${sheetName}": no row could be read as a work-item table header (a row naming the columns, with a work description column underneath).`
+    );
+    grid.forEach((row, r) => {
+      if (!isRowBlank(row)) {
+        classify(r, "info", "This sheet has no work-item table (e.g. a cover page, AIA G702 summary or notes) — kept in the complete extraction, not mapped.");
+      }
+    });
+    return { rows, issues, diagnostics, columnMappings: [], headerRow: null, outcome };
+  }
+  const merges = (sheet["!merges"] ?? []).map((m) => ({
+    s: { r: m.s.r - rowOffset, c: m.s.c - colOffset },
+    e: { r: m.e.r - rowOffset, c: m.e.c - colOffset },
+  }));
+  // A table that has item numbers/quantities/values: a line there with
+  // ONLY description text (a note, a legend) is not a work item.
+  const identifyingFields: NormalizedField[] = ["workItemNo", "csiLineCode", "plannedQuantity", "unitOfMeasure", "scheduledValue"];
+
+  // The mapping in force — replaced at each work-item table on the sheet.
+  let headerRowIndex = 0;
+  let headerRowNumber = 0;
+  let headerCells: unknown[] = [];
+  let bandLength = 0;
+  let columnKeys: (string | null)[] = [];
+  let columnField = new Map<number, NormalizedField>();
+  let fieldCol = new Map<NormalizedField, number>();
+  let mappedFields = new Set<NormalizedField>();
+  let hasDepartmentColumn = false;
+  let tableHasIdentifiers = false;
+  let columnMapping: ParseResult["columnMappings"][number] = { sheet: sheetName, headerRow: 0, columns: [] };
+  const columnMappings: ParseResult["columnMappings"] = [];
+  const applyHeader = (match: HeaderMatch) => {
+    headerRowIndex = match.index;
+    columnField = match.columnField;
+    headerRowNumber = sheetRow(headerRowIndex);
+    headerCells = grid[headerRowIndex];
+    bandLength = headerBandLength(grid, headerRowIndex);
+    columnKeys = columnHeaderKeys(grid, headerRowIndex, bandLength, merges, colOffset);
+    fieldCol = new Map<NormalizedField, number>([...columnField].map(([col, field]) => [field, col]));
+    mappedFields = new Set(columnField.values());
+    hasDepartmentColumn = mappedFields.has("department");
+    tableHasIdentifiers = identifyingFields.some((f) => mappedFields.has(f));
+    columnMapping = {
+      sheet: sheetName,
+      headerRow: headerRowNumber,
+      columns: [...columnField]
+        .sort(([a], [b]) => a - b)
+        .map(([col, field]) => ({ col: col + colOffset, header: String(headerCells[col] ?? "").replace(/\s+/g, " ").trim(), field: FIELD_LABELS[field] })),
+    };
+    columnMappings.push(columnMapping);
+    classify(headerRowIndex, "header", "Column header row.");
+    for (let r = headerRowIndex + 1; r <= headerRowIndex + bandLength; r++) {
+      classify(r, "header", isColumnLetterRow(grid[r]) ? "Column-letter row of the header." : "Sub-header row (column names under a merged group heading).");
+    }
+  };
+  applyHeader(headerMatch);
+  const firstHeaderRowNumber = headerRowNumber;
+  // Rows of a table that has no work-item columns (e.g. an allowance or
+  // contact list next to the schedule): kept in Layer 1, never items.
+  let inNonWorkItemTable = false;
+  let unassignedCount = 0;
+
+  for (let r = 0; r < headerRowIndex; r++) {
+    if (!isRowBlank(grid[r])) {
+      classify(r, "info", "Above the table header (title, project or application information) — kept in the complete extraction, not mapped.");
+    }
+  }
+
+  // (department, workItemNo) pairs already seen ON THIS SHEET — the
+  // upsert key upsertWorkItemFromImport commits with. Surfaced as a
+  // visible issue rather than silently letting the later row's
+  // values overwrite the earlier one's with no record of it having
+  // happened (both rows are still imported; upsert intentionally
+  // collapses them to one work item, same as a genuine re-upload
+  // would — this is only about the operator being told).
+  const seenKeys = new Set<string>();
+  // Current AIA G703 "DIVISION NN — Name" section, applied to rows
+  // below it as their department when the sheet has no explicit
+  // Department column (see extractDivisionHeader above).
+  let currentDivision: string | null = null;
+
+  for (let r = headerRowIndex + 1 + bandLength; r < grid.length; r++) {
+    const row = grid[r];
+    if (isRowBlank(row)) continue;
+
+    // Another table starts here (Layer 1): map it on its own header, or —
+    // when it has no work-item columns — keep all its rows out of Layer 2.
+    if (tableStarts.includes(r) && r > headerRowIndex) {
+      const match = evaluateHeader(grid, r, nextTableStart(r));
+      if (match) {
+        applyHeader(match);
+        inNonWorkItemTable = false;
+        r = headerRowIndex + bandLength;
+        continue;
+      }
+      inNonWorkItemTable = true;
+    }
+    if (inNonWorkItemTable) {
+      classify(r, "other-table", "Row of a table without work-item columns — kept in the complete extraction, not a work item.");
+      continue;
+    }
+
+    const divisionHeader = extractDivisionHeader(row);
+    if (divisionHeader) {
+      currentDivision = divisionHeader;
+      classify(r, "division", "Division heading — sets the department of the rows below it.");
+      continue;
+    }
+    // Any other single-cell line (a title, legend, note or GRAND TOTAL
+    // label) is not a work item. In a sheet with no department column,
+    // a short ALL-CAPS line is a category heading for the rows below
+    // (e.g. "ELECTRICAL WORK"), the same way a DIVISION row is.
+    if (isSingleCellRow(row)) {
+      const text = row.map((cell) => toStringOrNull(cell)).find((cell) => cell !== null) ?? "";
+      if (isTotalRowMarker(text)) {
+        classify(r, "total", "Total line — not a work item.");
+      } else if (
+        !hasDepartmentColumn &&
+        text.length <= 60 &&
+        /[A-Z]/.test(text) &&
+        text === text.toUpperCase()
+      ) {
+        currentDivision = text.trim();
+        classify(r, "heading", "Section heading — sets the department of the rows below it.");
+      } else {
+        classify(r, "note", "Single text line (title, note or legend) — not a work item.");
+      }
+      continue;
+    }
+    // A repeated header row (multi-page sheets): two or more cells equal
+    // their own column's heading.
+    if (
+      isColumnLetterRow(row) ||
+      row.filter((cell, c) => toStringOrNull(cell) !== null && normalizeHeader(cell) === normalizeHeader(headerCells[c]))
+        .length >= 2
+    ) {
+      classify(r, "repeated-header", "Repeated column-header row.");
+      continue;
+    }
+
+    const sourceRow = sheetRow(r);
+    const cellAt = (col: number) =>
+      sheet[XLSX.utils.encode_cell({ r: rowOffset + r, c: colOffset + col })] as XLSX.CellObject | undefined;
+    const get = (field: NormalizedField): unknown => {
+      const col = fieldCol.get(field);
+      return col === undefined ? undefined : row[col];
+    };
+    const cellOf = (field: NormalizedField) => {
+      const col = fieldCol.get(field);
+      return col === undefined ? undefined : cellAt(col);
+    };
+
+    // A department cell may itself read "DIVISION 03 — CONCRETE": keep
+    // just the name, exactly as a DIVISION heading row does.
+    const departmentCell = toStringOrNull(get("department"));
+    const departmentFromCell = departmentCell
+      ? (departmentCell.match(/^division\s*[\w.]*\s*[-–—:]\s*(.+)$/i)?.[1].trim() ?? departmentCell)
+      : null;
+    let department = departmentFromCell ?? currentDivision;
+    const rawDescription = toStringOrNull(get("description"));
+    const workItemNo = identifierText(cellOf("workItemNo"), get("workItemNo"));
+    const csiLineCode = identifierText(cellOf("csiLineCode"), get("csiLineCode"));
+
+    // Multi-page continuation sheets repeat the column header row on
+    // every page, and typically carry a subtotal/grand-total row per
+    // division or at the sheet's end. Neither is a real work item, so
+    // both are skipped (and reported as such) rather than imported as
+    // bogus rows. Checked against whichever of description/item-no/
+    // CSI-code the marker text actually landed in — a sheet with no
+    // Department column (e.g. G703) puts "SUBTOTAL"/"GRAND TOTAL" under
+    // ITEM NO., not Description, and it must be caught there too, BEFORE
+    // synthesizeDescription below would otherwise turn it into a fake
+    // "Item SUBTOTAL" work item.
+    if (rawDescription && FIELD_ALIASES.description.includes(normalizeHeader(rawDescription))) {
+      classify(r, "repeated-header", "Repeated column-header row.");
+      continue;
+    }
+    if (isTotalRowMarker(rawDescription) || isTotalRowMarker(workItemNo) || isTotalRowMarker(csiLineCode)) {
+      classify(r, "total", "Subtotal/total line — not a work item.");
+      continue;
+    }
+
+    if (tableHasIdentifiers && identifyingFields.every((f) => toStringOrNull(get(f)) === null)) {
+      if (rawDescription) {
+        issues.push({
+          sourceRow,
+          sourceSheet: sheetName,
+          message: "No item number, CSI code, quantity, unit or value — read as a note, not a work item (skipped).",
+        });
+        classify(r, "note", "No item number, CSI code, quantity, unit or value — read as a note.");
+      } else {
+        classify(r, "unmapped", "No description, item number, CSI code, quantity, unit or value in the mapped columns.");
+      }
+      continue;
+    }
+
+    // A row genuinely missing "Description of Work" isn't necessarily
+    // a bad row — G703 structure means the item number or CSI code
+    // often still uniquely identifies it (see synthesizeDescription).
+    // Only a row with NEITHER a description NOR anything to infer one
+    // from is truly unusable and skipped.
+    const description = rawDescription ?? synthesizeDescription(workItemNo, csiLineCode);
+    if (!description) {
+      issues.push({ sourceRow, sourceSheet: sheetName, message: "Missing work item description — row skipped." });
+      classify(r, "unmapped", "Missing work item description (and no item number or CSI code to identify it).");
+      continue;
+    }
+
+    if (!department) {
+      department = UNASSIGNED_DEPARTMENT;
+      unassignedCount++;
+    }
+    const descriptionInferred = !rawDescription;
+    if (descriptionInferred) {
+      issues.push({
+        sourceRow,
+        sourceSheet: sheetName,
+        message: `No description column value — used "${description}" from the item/CSI code instead.`,
+      });
+    }
+
+    // Values in mapped columns that can't be stored in their field (text
+    // in a quantity column, a negative amount, an error cell, a formula
+    // with no saved result, a date) are kept with the item's additional
+    // fields under the column's own heading — never silently dropped.
+    const preserved: Record<string, string | number> = {};
+    const preserve = (field: NormalizedField, value?: string | number | null) => {
+      const col = fieldCol.get(field);
+      const key = col === undefined ? null : columnKeys[col];
+      const v = value !== undefined ? value : col === undefined ? null : additionalValue(cellAt(col), row[col]);
+      if (key && v !== null) preserved[key] = v;
+    };
+    const readAmount = (field: "plannedQuantity" | "scheduledValue", negativeMessage: string): number | null => {
+      const col = fieldCol.get(field);
+      if (col === undefined) return null;
+      const label = FIELD_LABELS[field];
+      const cell = cellAt(col);
+      if (cell?.f && (cell.v === undefined || cell.t === "z")) {
+        issues.push({
+          sourceRow,
+          sourceSheet: sheetName,
+          message: `${label} is a formula with no saved result in the file (formulas are not recalculated) — not imported as ${label}; formula kept with the item's extra columns.`,
+        });
+        preserve(field);
+        return null;
+      }
+      if (cell?.t === "e") {
+        issues.push({
+          sourceRow,
+          sourceSheet: sheetName,
+          message: `${label} cell shows an error (${cell.w ?? "error"}) — not imported as ${label}; kept with the item's extra columns.`,
+        });
+        preserve(field);
+        return null;
+      }
+      const parsed = toNumberOrNull(row[col]);
+      if (parsed.wasNegative) {
+        issues.push({ sourceRow, sourceSheet: sheetName, message: `${negativeMessage} Original value kept with the item's extra columns.` });
+        preserve(field);
+      } else if (parsed.value === null && toStringOrNull(row[col]) !== null) {
+        const text = String(row[col]).trim();
+        issues.push({
+          sourceRow,
+          sourceSheet: sheetName,
+          message: `${label} "${text.length > 40 ? `${text.slice(0, 39)}…` : text}" is not a number — not imported as ${label}; kept with the item's extra columns.`,
+        });
+        preserve(field);
+      }
+      return parsed.value;
+    };
+    const plannedQuantity = readAmount("plannedQuantity", "Planned quantity was negative — ignored, row still imported without it.");
+    const scheduledValue = readAmount("scheduledValue", "Scheduled value was negative — ignored, row still imported without it.");
+    // Work items have no date columns: mapped dates are kept with the
+    // item's additional fields (ISO) instead of being discarded on commit.
+    const startDate = toDateStringOrNull(get("startDate"));
+    const endDate = toDateStringOrNull(get("endDate"));
+    if (startDate) preserve("startDate", startDate);
+    if (endDate) preserve("endDate", endDate);
+
+    const dedupeKey = `${department.trim().toLowerCase()}::${(workItemNo ?? description).trim().toLowerCase()}`;
+    if (seenKeys.has(dedupeKey)) {
+      issues.push({
+        sourceRow,
+        sourceSheet: sheetName,
+        message: `Duplicate of an earlier row in this sheet (same department${
+          workItemNo ? " and item #" : " and description"
+        }) — this row's values will overwrite the earlier one's on import.`,
+      });
+    }
+    seenKeys.add(dedupeKey);
+
+    const extra = collectAdditionalFields(columnKeys, columnField, row, cellAt);
+    const additionalFields = extra || Object.keys(preserved).length > 0 ? { ...(extra ?? {}), ...preserved } : null;
+    rows.push({
+      sourceRow,
+      sourceSheet: sheetName,
+      department,
+      workItemNo,
+      description,
+      descriptionInferred,
+      plannedQuantity,
+      unitOfMeasure: toStringOrNull(get("unitOfMeasure")),
+      scheduledValue,
+      csiLineCode,
+      startDate,
+      endDate,
+      additionalFields,
+    });
+    classify(r, "work-item", "Work item.");
+  }
+
+  if (unassignedCount > 0) {
+    issues.push({
+      sourceRow: firstHeaderRowNumber,
+      sourceSheet: sheetName,
+      message: `${unassignedCount} row(s) have no department column or DIVISION/category heading — they will be placed under "${UNASSIGNED_DEPARTMENT}" (existing work items keep their own department).`,
+    });
+  }
+  if (rows.length === 0) {
+    const read = columnMappings[0].columns.map((c) => `${c.header} → ${c.field}`).join(", ");
+    diagnostics.push(
+      `Sheet "${sheetName}": header row ${firstHeaderRowNumber} was read (${read}), but no row below it had a work description or item number.`
+    );
+  }
+  return { rows, issues, diagnostics, columnMappings, headerRow: firstHeaderRowNumber, outcome };
 }
 
 /**

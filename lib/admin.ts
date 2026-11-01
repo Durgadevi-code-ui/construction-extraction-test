@@ -553,8 +553,25 @@ export async function upsertWorkItemFromImport(
      * erases a previously-captured field just because one file version
      * happened not to include that column), stored as-is on create. */
     additionalFields: Record<string, string | number> | null;
+    /** Where this row came from in the import (stored under the reserved
+     * additional_fields.__source key, which dashboards and the export
+     * ignore): the import, sheet, sheet row, Layer 1 table and the item
+     * number exactly as the file had it (null when the file had none). */
+    source?: ImportRowSource | null;
+    /** Work items already written by EARLIER rows of the same import. They
+     * are never matched again, so two source rows (e.g. the same item
+     * number on two sheets) are never merged into one work item. */
+    claimed?: Set<string>;
   }
-): Promise<{ workItemId: string; departmentId: string; wasCreated: boolean; departmentWasCreated: boolean }> {
+): Promise<{
+  workItemId: string;
+  departmentId: string;
+  wasCreated: boolean;
+  departmentWasCreated: boolean;
+  /** Set when the file's item number had to be changed to store the row
+   * as its own work item (a uniqueness rule refused the number). */
+  lineItemAdjusted?: string;
+}> {
   const { data: projectItems, error: findError } = await supabase
     .from("work_items")
     .select("work_item_id, department_id, line_item_no, description_of_work, additional_fields")
@@ -563,18 +580,26 @@ export async function upsertWorkItemFromImport(
   if (findError) {
     throw new Error(`Failed to look up work item: ${findError.message}`);
   }
+  const available = (projectItems ?? []).filter((w) => !params.claimed?.has(w.work_item_id as string));
+  const fromSameSheet = (w: { additional_fields: unknown }) =>
+    !!params.source && (w.additional_fields as { __source?: ImportRowSource } | null)?.__source?.sheet === params.source.sheet;
 
   let existing:
-    | { work_item_id: string; department_id: string; additional_fields: Record<string, string | number> | null }
+    | { work_item_id: string; department_id: string; additional_fields: Record<string, unknown> | null }
     | undefined;
 
   if (params.lineItemNo) {
     const targetKey = normalizeLineItemNo(params.lineItemNo);
-    const projectWideMatches = (projectItems ?? []).filter(
+    const projectWideMatches = available.filter(
       (w) => normalizeLineItemNo(w.line_item_no as string) === targetKey
     );
     if (projectWideMatches.length === 1) {
       existing = projectWideMatches[0];
+    } else if (projectWideMatches.length > 1) {
+      // Several items share the number (rows kept apart on an earlier
+      // import): the one that came from this same sheet is this row.
+      const fromSheet = projectWideMatches.filter(fromSameSheet);
+      if (fromSheet.length === 1) existing = fromSheet[0];
     }
   }
 
@@ -589,17 +614,20 @@ export async function upsertWorkItemFromImport(
     departmentWasCreated = dept.wasCreated;
 
     existing = params.lineItemNo
-      ? (projectItems ?? []).find(
+      ? available.find(
           (w) =>
             w.department_id === departmentId &&
             normalizeLineItemNo(w.line_item_no as string) === normalizeLineItemNo(params.lineItemNo as string)
         )
-      : (projectItems ?? []).find(
+      : available.find(
           (w) =>
             w.department_id === departmentId &&
             (w.description_of_work as string).trim().toLowerCase() === params.description.trim().toLowerCase()
         );
   }
+
+  const withSource = (fields: Record<string, unknown> | null): Record<string, unknown> | null =>
+    params.source ? { ...(fields ?? {}), __source: params.source } : fields;
 
   if (existing) {
     const mergedAdditionalFields =
@@ -619,13 +647,14 @@ export async function upsertWorkItemFromImport(
         ...(params.unitOfMeasure !== null ? { unit_of_measure: params.unitOfMeasure } : {}),
         ...(params.scheduledValue !== null ? { scheduled_value: params.scheduledValue } : {}),
         ...(params.csiLineCode !== null ? { csi_line_code: params.csiLineCode } : {}),
-        additional_fields: mergedAdditionalFields,
+        additional_fields: withSource(mergedAdditionalFields),
       })
       .eq("work_item_id", existing.work_item_id);
 
     if (updateError) {
       throw new Error(`Failed to update work item: ${updateError.message}`);
     }
+    params.claimed?.add(existing.work_item_id);
     return { workItemId: existing.work_item_id, departmentId: existing.department_id, wasCreated: false, departmentWasCreated };
   }
 
@@ -641,28 +670,51 @@ export async function upsertWorkItemFromImport(
     lineItemNo = `AUTO-${(count ?? 0) + 1}`;
   }
 
-  const { data: created, error: createError } = await supabase
-    .from("work_items")
-    .insert({
-      project_id: params.projectId,
-      department_id: departmentId,
-      line_item_no: lineItemNo,
-      description_of_work: params.description,
-      planned_quantity: params.plannedQuantity,
-      unit_of_measure: params.unitOfMeasure,
-      scheduled_value: params.scheduledValue,
-      csi_line_code: params.csiLineCode,
-      additional_fields: params.additionalFields,
-      status: "Active",
-    })
-    .select("work_item_id")
-    .single();
+  const insertItem = (line: string) =>
+    supabase
+      .from("work_items")
+      .insert({
+        project_id: params.projectId,
+        department_id: departmentId,
+        line_item_no: line,
+        description_of_work: params.description,
+        planned_quantity: params.plannedQuantity,
+        unit_of_measure: params.unitOfMeasure,
+        scheduled_value: params.scheduledValue,
+        csi_line_code: params.csiLineCode,
+        additional_fields: withSource(params.additionalFields),
+        status: "Active",
+      })
+      .select("work_item_id")
+      .single();
+
+  let { data: created, error: createError } = await insertItem(lineItemNo);
+  let lineItemAdjusted: string | undefined;
+  // A uniqueness rule on item numbers refused a second row with the same
+  // number: store it as its own item under a visibly derived number (the
+  // file's number stays in __source.lineItemNo) instead of merging it.
+  if (createError?.code === "23505" && params.source) {
+    lineItemAdjusted = `${lineItemNo} (${params.source.sheet} row ${params.source.row})`;
+    ({ data: created, error: createError } = await insertItem(lineItemAdjusted));
+  }
 
   if (createError || !created) {
     throw new Error(`Failed to create work item: ${createError?.message ?? "no row returned"}`);
   }
-  return { workItemId: created.work_item_id, departmentId, wasCreated: true, departmentWasCreated };
+  params.claimed?.add(created.work_item_id);
+  return { workItemId: created.work_item_id, departmentId, wasCreated: true, departmentWasCreated, ...(lineItemAdjusted ? { lineItemAdjusted } : {}) };
 }
+
+/** Provenance of an imported work item (additional_fields.__source). */
+export type ImportRowSource = {
+  importId: string;
+  sheet: string;
+  row: number;
+  table: number | null;
+  /** The item number exactly as in the file (null when it had none and a
+   * system AUTO-n number was assigned). */
+  lineItemNo: string | null;
+};
 
 export type AdminWorkItem = {
   workItemId: string;
