@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/no-require-imports -- CommonJS on purpose: run by `node --test` through tests/register-ts.cjs, which loads CommonJS packages such as xlsx. */
-// Authentication tests: demo login is gone, and the only ways to get a
-// session are a correct password for a linked account (app/login/actions.ts)
-// or a Supabase-emailed link (app/auth/confirm/route.ts). The real login
+// Authentication tests: the old passwordless demo login is gone, and the
+// only ways to get a session are a correct password for a linked account
+// (app/login/actions.ts, or app/demo-login/actions.ts for the isolated demo
+// account — see tests/demo-login.test.cjs) or a Supabase-emailed link
+// (app/auth/confirm/route.ts). The real login
 // server actions run with only Supabase, next/headers and next/navigation
 // replaced by in-memory stubs (no network, no database). Run with `npm test`.
 const test = require("node:test");
@@ -54,12 +56,16 @@ test("demo login: the demo modules no longer exist", () => {
   assert.throws(() => require("../app/login/demoActions.ts"), { code: "MODULE_NOT_FOUND" });
 });
 
-test("demo login: no code reads DEMO_* variables or renders demo identities", () => {
+test("demo login: no code reads the old DEMO_MODE / DEMO_USER_* variables or renders demo identities", () => {
+  // The separate password-based Demo Login (app/demo-login) reads only
+  // DEMO_LOGIN_* / DEMO_PROJECT_IDS, so old settings still in an .env
+  // file enable nothing.
   const offenders = sourceFiles().filter((rel) =>
-    /DEMO_MODE|DEMO_USER_|demoLogin|demoAuth|DemoLoginPanel|Enter Demo/.test(read(rel))
+    /DEMO_MODE|DEMO_USER_|demoAuth|DemoLoginPanel|DemoRoleKey|admin_all/.test(read(rel))
   );
   assert.deepEqual(offenders, []);
   assert.doesNotMatch(read("app/login/page.tsx"), /demo/i, "login page has no demo UI or messaging");
+  assert.doesNotMatch(read("components/auth/LoginForm.tsx"), /demo/i, "login form has no demo UI");
 });
 
 test("sessions: only a password sign-in or a Supabase-emailed link can create one", () => {
@@ -74,6 +80,8 @@ test("sessions: only a password sign-in or a Supabase-emailed link can create on
   }
   assert.deepEqual(found, {
     "app/auth/confirm/route.ts": ["verifyOtp"],
+    // Separate Demo Login: a password sign-in for the demo account only.
+    "app/demo-login/actions.ts": ["signInWithPassword"],
     "app/login/actions.ts": ["signInWithPassword"],
     // setPasswordVerified's proof sign-in with the password it just set;
     // that session is revoked immediately (asserted below).

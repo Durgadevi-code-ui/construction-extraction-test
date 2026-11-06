@@ -2,6 +2,7 @@ import "server-only";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "./supabaseServer";
 import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
+import { demoSessionAllowed } from "./demoAccess";
 
 /**
  * Server-verified identity for the current request — the "DAL" Next.js
@@ -53,13 +54,23 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   // Looked up with the service-role client, keyed on the id getUser()
   // just verified — so this keeps working once public.users has no
   // anon/authenticated policy (00000000000022).
-  const { data: profile, error: profileError } = await getSupabaseServiceRoleClient()
+  const admin = getSupabaseServiceRoleClient();
+  const { data: profile, error: profileError } = await admin
     .from("users")
     .select("user_id, user_mail")
     .eq("auth_user_id", authUser.id)
     .maybeSingle();
 
   if (profileError || !profile) return null;
+
+  // A configured demo account (app/demo-login) is re-checked as isolated
+  // on every request; any other account is unaffected (lib/demoAccess.ts).
+  const allowed = await demoSessionAllowed(admin, {
+    authUserId: authUser.id,
+    authEmail: authUser.email ?? "",
+    appEmail: profile.user_mail as string,
+  });
+  if (!allowed) return null;
 
   return {
     authUserId: authUser.id,
