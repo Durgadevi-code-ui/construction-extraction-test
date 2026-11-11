@@ -6,6 +6,7 @@ import { formatQuantity } from "@/lib/format";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import WorkbookExtractionViewer from "./WorkbookExtractionViewer";
+import { READ_ONLY_MESSAGE, ReadOnlyNote, useReadOnly } from "@/components/ui/ReadOnly";
 
 type ParsedRow = {
   sourceRow: number;
@@ -121,6 +122,9 @@ type CommitResponse = {
  * changes" requirement.
  */
 export default function ExcelImportPanel({ projectId }: { projectId: string }) {
+  // Demo Login: the stored workbook data stays viewable (a read); choosing
+  // and importing a new file is turned off.
+  const readOnly = useReadOnly();
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
@@ -216,9 +220,14 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
 
       {!result && (
         <>
+          {readOnly && (
+            <ReadOnlyNote>Importing files is turned off in the read-only demo. The imported workbook data below stays viewable.</ReadOnlyNote>
+          )}
           <input
             ref={fileInputRef}
             type="file"
+            disabled={readOnly}
+            title={readOnly ? READ_ONLY_MESSAGE : undefined}
             accept=".xlsx,.xls,.csv"
             onChange={(e) => {
               setFile(e.target.files?.[0] ?? null);
@@ -246,7 +255,7 @@ export default function ExcelImportPanel({ projectId }: { projectId: string }) {
           </p>
 
           {!preview ? (
-            <Button size="sm" onClick={handleParse} disabled={!file || busy}>
+            <Button size="sm" onClick={handleParse} disabled={readOnly || !file || busy}>
               {busy ? "Reading…" : "Read File"}
             </Button>
           ) : (

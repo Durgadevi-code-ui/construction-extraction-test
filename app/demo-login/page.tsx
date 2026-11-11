@@ -50,8 +50,9 @@ export default function DemoLoginPage() {
             </span>
             <h2 className="mt-2 text-xl sm:text-2xl font-extrabold text-foreground tracking-tight">Demo Login</h2>
             <p className="text-sm text-foreground-secondary mt-1">
-              For demonstrations and testing only. Choose a role and team; no email or password is
-              needed. Every role enters the existing project with its own permissions.
+              For demonstrations and testing only. Choose a role and team, then sign in; no email or
+              password is needed. Every role enters the same application and existing projects with
+              exactly its own permissions.
             </p>
           </div>
 

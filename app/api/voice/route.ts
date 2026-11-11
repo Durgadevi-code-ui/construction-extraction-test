@@ -13,6 +13,7 @@ import {
   type WorkItemAmbiguityResult,
 } from "@/lib/construction";
 import { getCurrentUser } from "@/lib/session";
+import { demoWriteRefusal } from "@/lib/demoWriteGuard";
 import { MAX_DESCRIPTION_LENGTH, tooLongError } from "@/lib/inputLimits";
 import { RATE_LIMITS, rateLimitResponse } from "@/lib/rateLimit";
 import { createReviewToken } from "@/lib/submissionReviewToken";
@@ -42,6 +43,8 @@ export async function POST(request: NextRequest) {
   if (!sessionUser) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  const demoReadOnly = demoWriteRefusal(sessionUser);
+  if (demoReadOnly) return demoReadOnly;
   // Per-user cap on the paid extraction pipeline (lib/rateLimit.ts).
   const limited = await rateLimitResponse(RATE_LIMITS.extraction, sessionUser.userId);
   if (limited) return limited;

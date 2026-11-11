@@ -31,10 +31,11 @@ export async function enterDemoWorkspace(_prevState: DemoLoginState, formData: F
     return { error: "Choose one of the listed demo roles." };
   }
 
-  // Per client IP, sharing the login counter. No per-account limit: the
-  // demo accounts are shared, so one visitor could otherwise lock a role
-  // out for everyone.
-  const limit = await checkRateLimit(RATE_LIMITS.loginPerIp, clientIp(await headers()));
+  // Per client IP, on its own counter (lib/rateLimit.ts demoLoginPerIp) so
+  // demo clicks don't use up that IP's normal sign-in allowance. No
+  // per-account limit: the demo accounts are shared, so one visitor could
+  // otherwise lock a role out for everyone.
+  const limit = await checkRateLimit(RATE_LIMITS.demoLoginPerIp, clientIp(await headers()));
   if (!limit.allowed) return { error: rateLimitMessage(limit) };
 
   const supabase = await createSupabaseServerClient();
@@ -75,12 +76,16 @@ export async function enterDemoWorkspace(_prevState: DemoLoginState, formData: F
     if (check.reason === "lookup-failed") {
       return { error: `The sign-in service is temporarily unavailable. Please try again shortly. (ref ${ref})` };
     }
+    if (check.reason === "project-not-isolated") {
+      return { error: `Demo access is limited to presentation projects, and a configured project has real members, so demo access was refused. Contact your Administrator. (ref ${ref})` };
+    }
     return { error: `This demo role is not set up as an isolated demo account, so demo access was refused. Contact your Administrator. (ref ${ref})` };
   }
 
   logDemo(logRef(), slot.key, "session", "signed-in", { user: check.userId.slice(0, 8) });
-  // The Admin slot opens Admin Setup (scoped to the demo project); every
-  // other role goes to /workflow, which routes to its own dashboard.
+  // The presentation Admin opens Admin Setup (scoped to the presentation
+  // project); every other role goes to /workflow, which routes to its own
+  // dashboard (same as /login).
   redirect(slot.delegatedAdmin ? "/admin/setup" : "/workflow");
 }
 

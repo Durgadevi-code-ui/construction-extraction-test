@@ -3,6 +3,7 @@ import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { updateTaskProgressAsWorker } from "@/lib/workflow";
 import { getCurrentUser } from "@/lib/session";
+import { demoWriteRefusal } from "@/lib/demoWriteGuard";
 
 export const runtime = "nodejs";
 
@@ -20,6 +21,8 @@ export async function POST(request: NextRequest) {
   if (!currentUser) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  const demoReadOnly = demoWriteRefusal(currentUser);
+  if (demoReadOnly) return demoReadOnly;
 
   const supabase = getSupabaseClient();
 

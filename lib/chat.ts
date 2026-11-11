@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getUserContext, isAdminUser } from "./authContext";
 import { formatUserDisplayName } from "./format";
+import { isDemoAccountEmail } from "./demoEmail";
 
 /**
  * Project Communication / Chat — a simple project-scoped message
@@ -185,8 +186,22 @@ export async function sendChatMessage(
 export async function listProjectContacts(
   supabase: SupabaseClient,
   userId: string,
-  requestedProjectId?: string | null
+  requestedProjectId?: string | null,
+  options: { demoSession?: boolean } = {}
 ): Promise<ChatContact[]> {
+  const contacts = await listAllProjectContacts(supabase, userId, requestedProjectId);
+  // A Demo Login session (shared, public) only ever reaches other demo
+  // accounts: never the real Admin(s), never a real person. Everyone else
+  // gets the list unchanged.
+  const visible = options.demoSession ? contacts.filter((c) => c.role !== "ADMIN" && c.isDemo) : contacts;
+  return visible.map(({ userId: id, name, role }) => ({ userId: id, name, role }));
+}
+
+async function listAllProjectContacts(
+  supabase: SupabaseClient,
+  userId: string,
+  requestedProjectId?: string | null
+): Promise<(ChatContact & { isDemo: boolean })[]> {
   const { projectId } = await resolveSenderContext(supabase, userId, requestedProjectId);
 
   const { data: memberRows, error: memberError } = await supabase
@@ -215,7 +230,7 @@ export async function listProjectContacts(
   // project role) or more than once in memberRows (more than one
   // Active role row) — contacts are per-person, first occurrence wins.
   const seen = new Set<string>();
-  const contacts: ChatContact[] = [];
+  const contacts: (ChatContact & { isDemo: boolean })[] = [];
 
   for (const row of memberRows ?? []) {
     const uid = row.user_id as string;
@@ -230,6 +245,7 @@ export async function listProjectContacts(
         email: (userRow?.user_mail as string | null) ?? "",
       }),
       role: row.role as string,
+      isDemo: isDemoAccountEmail(userRow?.user_mail),
     });
   }
 
@@ -245,6 +261,7 @@ export async function listProjectContacts(
         email: (row.user_mail as string | null) ?? "",
       }),
       role: "ADMIN",
+      isDemo: isDemoAccountEmail(row.user_mail),
     });
   }
 
@@ -341,7 +358,8 @@ export async function sendDirectMessage(
   userId: string,
   recipientUserId: string,
   body: string,
-  requestedProjectId?: string | null
+  requestedProjectId?: string | null,
+  options: { demoSession?: boolean } = {}
 ): Promise<void> {
   const trimmed = body.trim();
   if (!trimmed) {
@@ -353,7 +371,7 @@ export async function sendDirectMessage(
 
   const { projectId, role } = await resolveSenderContext(supabase, userId, requestedProjectId);
 
-  const contacts = await listProjectContacts(supabase, userId, requestedProjectId);
+  const contacts = await listProjectContacts(supabase, userId, requestedProjectId, options);
   if (!contacts.some((c) => c.userId === recipientUserId)) {
     throw new Error("You can only message users in your own project.");
   }

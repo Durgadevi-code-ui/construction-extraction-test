@@ -8,10 +8,14 @@ import Button from "@/components/ui/Button";
 import { Label, Select } from "@/components/ui/Input";
 
 /**
- * Role, then trade/team, then one click — no email or password fields.
+ * Role, then trade/team, then Sign In — no email or password fields.
  * Lists only what the server says it can sign in as (lib/demoAccess.ts
  * availableDemoRoles); the form posts the chosen slot key and the server
  * resolves it, so editing the page can't reach any other account.
+ *
+ * "Admin" is the presentation Admin demo account (lib/demoAccess.ts
+ * admin_demo), never the real Admin: it opens the Admin screens scoped to
+ * the presentation project.
  */
 export default function DemoLoginForm({ roles }: { roles: DemoRoleOption[] }) {
   const [state, formAction, pending] = useActionState<DemoLoginState, FormData>(enterDemoWorkspace, undefined);
@@ -50,7 +54,7 @@ export default function DemoLoginForm({ roles }: { roles: DemoRoleOption[] }) {
         </Select>
       </div>
 
-      {activeGroup && activeGroup.roles.length > 1 ? (
+      {activeGroup && activeGroup.roles.length > 1 && (
         <div>
           <Label htmlFor="demo-team">Trade / Team</Label>
           <Select id="demo-team" value={selectedKey} onChange={(e) => setSelectedKey(e.target.value)}>
@@ -61,17 +65,12 @@ export default function DemoLoginForm({ roles }: { roles: DemoRoleOption[] }) {
             ))}
           </Select>
         </div>
-      ) : (
-        activeGroup && (
-          <p className="text-sm text-foreground-secondary">
-            Access: <span className="font-medium text-foreground">{activeGroup.roles[0].team}</span>
-          </p>
-        )
       )}
 
       <p className="text-xs text-foreground-secondary">
-        Contractor is the Supervisor role and Subcontractor the Foreman role. Admin manages the
-        projects (work items, departments, imports, reviews) but not users or passwords.
+        {activeGroup?.name === "Admin"
+          ? "Opens Admin Setup for the presentation project, with the Admin screens and navigation."
+          : "Contractor is the Supervisor role and Subcontractor the Foreman role. Changes you make are saved to the presentation project only."}
       </p>
 
       {state?.error && (
@@ -81,7 +80,7 @@ export default function DemoLoginForm({ roles }: { roles: DemoRoleOption[] }) {
       )}
 
       <Button type="submit" disabled={pending || !selectedKey} className="w-full">
-        {pending ? "Entering…" : "Enter Demo Workspace"}
+        {pending ? "Signing in…" : "Sign In"}
       </Button>
 
       <p className="text-center text-xs text-foreground-secondary">

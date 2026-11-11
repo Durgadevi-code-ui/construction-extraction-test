@@ -5,6 +5,7 @@ import { useState } from "react";
 import { formatPercent, humanizeApprovalStatus } from "@/lib/format";
 import StatusFlow from "./StatusFlow";
 import PlannedQuantityEditor from "./PlannedQuantityEditor";
+import { ReadOnlyFieldset } from "@/components/ui/ReadOnly";
 import AssignmentManager, {
   type AssignmentWorkerOption,
   type AssignmentWorkItemOption,
@@ -273,6 +274,7 @@ function DelegatedProgressReviewQueue({
                   />
                 )}
 
+                <ReadOnlyFieldset>
                 <div className="flex gap-2 pt-1 flex-wrap">
                   <button
                     onClick={() => run(validationId, "approve")}
@@ -347,6 +349,7 @@ function DelegatedProgressReviewQueue({
                     </button>
                   )}
                 </div>
+                </ReadOnlyFieldset>
               </div>
             );
           })}
@@ -416,6 +419,7 @@ function DelegatedWorkItemManager({
         <p className="text-xs text-foreground-secondary mt-0.5">Delegated Admin capability (temporary).</p>
       </div>
 
+      <ReadOnlyFieldset notice="Creating and editing work items is turned off in the read-only demo.">
       <form onSubmit={handleCreate} className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <input
           value={lineItemNo}
@@ -460,6 +464,7 @@ function DelegatedWorkItemManager({
         </button>
         {error && <p className="sm:col-span-2 text-sm text-error">{error}</p>}
       </form>
+      </ReadOnlyFieldset>
 
       <div>
         <h3 className="text-xs font-medium text-foreground-secondary mb-2">Existing Work Items</h3>

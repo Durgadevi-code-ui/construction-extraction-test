@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseServiceRoleClient } from "@/lib/supabaseAdmin";
 import { getCurrentUser } from "@/lib/session";
+import { demoWriteRefusal } from "@/lib/demoWriteGuard";
 import {
   listChatMessages,
   sendChatMessage,
@@ -59,7 +60,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(unread);
     }
     if (wantsContacts) {
-      const contacts = await listProjectContacts(supabase, currentUser.userId, projectId);
+      const contacts = await listProjectContacts(supabase, currentUser.userId, projectId, { demoSession: currentUser.isDemo });
       return NextResponse.json({ contacts });
     }
     const messages = peer
@@ -77,6 +78,8 @@ export async function POST(request: NextRequest) {
   if (!currentUser) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  const demoReadOnly = demoWriteRefusal(currentUser);
+  if (demoReadOnly) return demoReadOnly;
 
   const supabase = getSupabaseServiceRoleClient();
 
@@ -88,7 +91,7 @@ export async function POST(request: NextRequest) {
       typeof payload.recipientUserId === "string" ? payload.recipientUserId : null;
 
     if (recipientUserId) {
-      await sendDirectMessage(supabase, currentUser.userId, recipientUserId, text, projectId);
+      await sendDirectMessage(supabase, currentUser.userId, recipientUserId, text, projectId, { demoSession: currentUser.isDemo });
     } else {
       await sendChatMessage(supabase, currentUser.userId, text, projectId);
     }

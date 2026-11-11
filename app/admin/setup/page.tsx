@@ -9,7 +9,7 @@ import {
   listWorkItemDependencies,
   listWorkItems,
 } from "@/lib/admin";
-import { listDelegations, resolveAdminSetupAccess } from "@/lib/delegation";
+import { getActiveDelegationsForUser, listDelegations, resolveAdminSetupAccess } from "@/lib/delegation";
 import { listSelectableUsers } from "@/lib/workflow";
 import { requireCurrentUser } from "@/lib/session";
 import AdminSetupPanel from "@/components/admin/AdminSetupPanel";
@@ -106,7 +106,18 @@ export default async function AdminSetupPage() {
   const inDepartmentScope = (departmentId: string) =>
     access.isRealAdmin || access.departmentIds === "ALL" || access.departmentIds.has(departmentId);
 
-  const visibleCompanies = access.isRealAdmin ? companies : [];
+  // The presentation Admin (a Demo Login account with a delegation over the
+  // presentation project only — lib/demoAccess.ts admin_demo) gets the
+  // Admin screens and navigation. Every list stays filtered to that scope
+  // below; the modules its delegation doesn't grant (Companies, Users,
+  // Delegations) are shown read-only, with only in-scope rows.
+  const presentationAdmin = currentUser.isDemo && !access.isRealAdmin;
+
+  const visibleCompanies = access.isRealAdmin
+    ? companies
+    : presentationAdmin
+      ? companies.filter((c) => projects.some((p) => p.companyId === c.companyId && inProjectScope(p.projectId)))
+      : [];
   // Projects/Departments are needed broadly (e.g. as picker options on
   // the Departments/Users tabs even without PROJECT_MANAGEMENT/
   // DEPARTMENT_MANAGEMENT itself), so these two are scoped by
@@ -124,7 +135,18 @@ export default async function AdminSetupPage() {
   const visibleDepartments = access.isRealAdmin
     ? departments
     : departments.filter((d) => inDepartmentScope(d.departmentId));
-  const hasWorkItemManagement = access.isRealAdmin || access.permissions.has("WORK_ITEM_MANAGEMENT");
+  // The presentation Admin's delegation also carries the workflow
+  // permissions (WORK_ITEM_MANAGEMENT, …), which resolveAdminSetupAccess
+  // doesn't count as Admin Setup modules; read them so its Work Items tab
+  // works (each /api/admin route still checks the same delegation). Demo
+  // sessions only — every other caller keeps exactly access.permissions.
+  const presentationPermissions = new Set(access.permissions);
+  if (presentationAdmin) {
+    for (const d of await getActiveDelegationsForUser(supabase, userId).catch(() => [])) {
+      d.permissions.forEach((p) => presentationPermissions.add(p));
+    }
+  }
+  const hasWorkItemManagement = access.isRealAdmin || presentationPermissions.has("WORK_ITEM_MANAGEMENT");
   const hasUserManagement = access.isRealAdmin || access.permissions.has("USER_MANAGEMENT");
   const visibleWorkItems = !hasWorkItemManagement
     ? []
@@ -136,7 +158,7 @@ export default async function AdminSetupPage() {
     : access.isRealAdmin
       ? workItemDependencies
       : workItemDependencies.filter((dep) => visibleWorkItems.some((w) => w.workItemId === dep.workItemId));
-  const visibleUsers = !hasUserManagement
+  const visibleUsers = !hasUserManagement && !presentationAdmin
     ? []
     : access.isRealAdmin
       ? users
@@ -148,7 +170,8 @@ export default async function AdminSetupPage() {
           adminUserId={userId}
           userEmail={currentUser.email}
           isRealAdmin={access.isRealAdmin}
-          delegatedPermissions={Array.from(access.permissions)}
+          presentationAdmin={presentationAdmin}
+          delegatedPermissions={Array.from(presentationPermissions)}
           companies={visibleCompanies}
           projects={visibleProjects}
           departments={visibleDepartments}

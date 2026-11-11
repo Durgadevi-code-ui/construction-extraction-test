@@ -12,6 +12,7 @@ import Input from "@/components/ui/Input";
 import SortControl, { type SortDir, type SortState } from "@/components/workflow/SortControl";
 
 import { errorMessage, readApiJson } from "@/lib/apiClient";
+import { ReadOnlyFieldset } from "@/components/ui/ReadOnly";
 export type ForemanQueueItem = {
   submissionId: string;
   /** When it was submitted (extraction_submissions.created_at) — used
@@ -225,6 +226,7 @@ export default function ForemanQueue({
         <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
       )}
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-surface-soft px-3 py-2 text-sm">
+        <ReadOnlyFieldset className="contents">
         <label
           className="flex items-center gap-2 text-foreground-secondary"
           title="Double-click to select all items"
@@ -241,6 +243,7 @@ export default function ForemanQueue({
         <Button size="sm" onClick={forwardSelected} disabled={bulkBusy || selectedItems.length === 0}>
           {bulkBusy ? "Forwarding…" : `Forward to Contractor${selectedItems.length ? ` (${selectedItems.length})` : ""}`}
         </Button>
+        </ReadOnlyFieldset>
         <span className="text-xs text-foreground-muted">
           Tick items to forward them together. Double-click the checkbox to select all.
         </span>
@@ -357,6 +360,7 @@ export default function ForemanQueue({
             <StatusFlow statusCode="AWAITING_FOREMAN_REVIEW" />
             </ReviewCardLayout>
 
+            <ReadOnlyFieldset>
             <div className="flex gap-2 pt-1 flex-wrap">
               {isEditing ? (
                 <>
@@ -424,6 +428,7 @@ export default function ForemanQueue({
                 {busyId === item.submissionId ? "Forwarding…" : "Forward to Contractor"}
               </Button>
             </div>
+            </ReadOnlyFieldset>
             {/* Live Updates for this work item live on Work Items (one entry
                 point per work item) — not repeated on the review card. */}
           </Card>

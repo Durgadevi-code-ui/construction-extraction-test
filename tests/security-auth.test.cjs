@@ -116,6 +116,9 @@ stubFile(require.resolve(path.join(ROOT, "lib/supabaseServer.ts")), {
       signOut: async (opts) => (signOutCalls++, signOutScopes.push(opts?.scope ?? "default"), { error: null }),
       resetPasswordForEmail: async (email, opts) => (resetCalls.push(opts), { data: {}, error: null }),
       updateUser: async () => updateUserResult,
+      // The signed-in (real, non-demo) user — updatePassword and logout
+      // check it to keep shared Demo Login accounts out.
+      getUser: async () => ({ data: { user: { id: "auth-1", email: "site.lead@example-builders.com" } }, error: null }),
     },
   }),
 });

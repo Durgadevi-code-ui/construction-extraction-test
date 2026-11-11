@@ -3,6 +3,7 @@ import { getSupabaseClient } from "@/lib/supabase";
 import { getExecutiveSummary, getUserContext, type ExecutiveSummaryPeriod } from "@/lib/workflow";
 import { CONTRACTOR_ROLES } from "@/lib/authContext";
 import { getCurrentUser } from "@/lib/session";
+import { demoWriteRefusal } from "@/lib/demoWriteGuard";
 
 export const runtime = "nodejs";
 
@@ -15,17 +16,45 @@ const VALID_PERIODS: ExecutiveSummaryPeriod[] = ["daily", "weekly", "monthly"];
  * parse prose. `period` (daily/weekly/monthly, default daily) selects
  * the date window; the calculation engine itself is the same one for
  * all three. Identity and scope come only from the verified session.
+ *
+ * A pure read (no write anywhere in getExecutiveSummary), so it is served
+ * by GET (?period=&projectId=&departmentId=) — which is what the dashboard
+ * uses, and what keeps it working for read-only Demo Login sessions.
+ * POST with the same fields in a JSON body is kept, unchanged, for any
+ * existing caller.
  */
+export async function GET(request: NextRequest) {
+  const currentUser = await getCurrentUser();
+  if (!currentUser) {
+    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  const params = request.nextUrl.searchParams;
+  return summarize(currentUser.userId, {
+    period: params.get("period"),
+    projectId: params.get("projectId"),
+    departmentId: params.get("departmentId"),
+  });
+}
+
 export async function POST(request: NextRequest) {
   const currentUser = await getCurrentUser();
   if (!currentUser) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  const demoReadOnly = demoWriteRefusal(currentUser);
+  if (demoReadOnly) return demoReadOnly;
 
+  const body = await request.json().catch(() => ({}));
+  return summarize(currentUser.userId, body ?? {});
+}
+
+async function summarize(
+  userId: string,
+  body: { period?: unknown; projectId?: unknown; departmentId?: unknown }
+): Promise<NextResponse> {
   const supabase = getSupabaseClient();
 
   try {
-    const body = await request.json().catch(() => ({}));
     // Optional project context (Contractor with roles on several
     // projects) — only selects among the caller's own Active roles; the
     // role check below still applies to whichever role that resolves to.
@@ -33,7 +62,7 @@ export async function POST(request: NextRequest) {
     // departmentId narrows within that project the same way.
     const departmentId: string | undefined =
       typeof body?.departmentId === "string" && body.departmentId ? body.departmentId : undefined;
-    const ctx = await getUserContext(supabase, currentUser.userId, projectId ? { projectId, departmentId } : undefined);
+    const ctx = await getUserContext(supabase, userId, projectId ? { projectId, departmentId } : undefined);
     if (![...CONTRACTOR_ROLES, "FOREMAN"].includes(ctx.role)) {
       return NextResponse.json({ error: "Not authorized." }, { status: 403 });
     }
@@ -43,7 +72,7 @@ export async function POST(request: NextRequest) {
       ? (requestedPeriod as ExecutiveSummaryPeriod)
       : "daily";
 
-    const summary = await getExecutiveSummary(supabase, currentUser.userId, period, ctx.projectId, ctx.departmentId);
+    const summary = await getExecutiveSummary(supabase, userId, period, ctx.projectId, ctx.departmentId);
     return NextResponse.json({ summary });
   } catch (err) {
     console.error("Executive summary failed:", err);

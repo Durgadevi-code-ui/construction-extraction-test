@@ -6,6 +6,7 @@ import { getDepartmentProjectId, getUserLinkContext } from "@/lib/admin";
 import { assertAdminOrDelegated } from "@/lib/delegation";
 import { isAdminUser } from "@/lib/authContext";
 import { getCurrentUser } from "@/lib/session";
+import { demoWriteRefusal } from "@/lib/demoWriteGuard";
 import { passwordProblem, setPasswordVerified } from "@/lib/authAccounts";
 
 export const runtime = "nodejs";
@@ -32,6 +33,8 @@ export async function POST(request: NextRequest) {
   if (!currentUser) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  const demoReadOnly = demoWriteRefusal(currentUser);
+  if (demoReadOnly) return demoReadOnly;
 
   const supabase = getSupabaseClient();
 

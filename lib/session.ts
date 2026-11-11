@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "./supabaseServer";
 import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
 import { demoSessionAllowed } from "./demoAccess";
+import { isDemoAccountEmail, isDemoReadOnlyMode } from "./demoEmail";
 
 /**
  * Server-verified identity for the current request — the "DAL" Next.js
@@ -39,6 +40,9 @@ export type CurrentUser = {
    * this, not authUserId. */
   userId: string;
   email: string;
+  /** A shared Demo Login account (reserved @example.com domain, same rule
+   * as proxy.ts): read-only everywhere — see lib/demoWriteGuard.ts. */
+  isDemo: boolean;
 };
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
@@ -76,7 +80,28 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     authUserId: authUser.id,
     userId: profile.user_id as string,
     email: profile.user_mail as string,
+    isDemo: isDemoAccountEmail(authUser.email) || isDemoAccountEmail(profile.user_mail),
   };
+}
+
+/**
+ * Whether this request's session is a demo account AND the
+ * DEMO_LOGIN_READ_ONLY emergency switch is on — for the UI only (read-only
+ * banner and disabled controls, app/workflow/layout.tsx and
+ * app/admin/setup/layout.tsx). False by default, so demo sessions get the
+ * exact same screens as everyone else. Reads the verified token claims, no
+ * database query; authorization never depends on it (that is
+ * getCurrentUser + lib/demoWriteGuard.ts + proxy.ts).
+ */
+export async function isDemoSession(): Promise<boolean> {
+  if (!isDemoReadOnlyMode()) return false;
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { data } = await supabase.auth.getClaims();
+    return isDemoAccountEmail(data?.claims?.email);
+  } catch {
+    return false;
+  }
 }
 
 /**

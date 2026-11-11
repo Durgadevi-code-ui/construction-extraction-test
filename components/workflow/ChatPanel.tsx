@@ -8,6 +8,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import ErrorNotice from "@/components/ui/ErrorNotice";
 import { humanizeRole } from "@/lib/format";
 import { errorMessage, readApiJson } from "@/lib/apiClient";
+import { READ_ONLY_MESSAGE, useReadOnly } from "@/components/ui/ReadOnly";
 
 type ChatMessage = {
   chatMessageId: string;
@@ -96,6 +97,7 @@ export default function ChatPanel({
   query?: string;
 }) {
   const [projectId, setProjectId] = useState(projects?.[0]?.projectId ?? contextProjectId ?? "");
+  const readOnly = useReadOnly();
   const [contacts, setContacts] = useState<ChatContact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(true);
   const [contactsError, setContactsError] = useState<string | null>(null);
@@ -472,14 +474,15 @@ export default function ChatPanel({
             type="text"
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Type a message…"
-            disabled={needsProject || sending}
+            placeholder={readOnly ? "Messaging is turned off in the read-only demo" : "Type a message…"}
+            disabled={readOnly || needsProject || sending}
+            title={readOnly ? READ_ONLY_MESSAGE : undefined}
             maxLength={2000}
             className="flex-1 rounded-lg border border-line bg-white text-foreground px-3 py-2 text-sm placeholder:text-foreground-placeholder transition-colors duration-150 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 disabled:opacity-50"
           />
           <button
             type="submit"
-            disabled={needsProject || sending || !text.trim()}
+            disabled={readOnly || needsProject || sending || !text.trim()}
             className="inline-flex items-center gap-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white px-4 py-2 text-sm font-semibold transition-colors duration-150 disabled:opacity-50"
           >
             <Send className="h-4 w-4" strokeWidth={2} />

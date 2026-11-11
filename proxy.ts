@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { SESSION_COOKIE_OPTIONS } from "@/lib/sessionCookies";
-import { isDemoAccountEmail } from "@/lib/demoEmail";
+import { DEMO_READ_ONLY_MESSAGE, isDemoAccountEmail, isDemoReadOnlyMode } from "@/lib/demoEmail";
 
 /**
  * Named `proxy.ts`, not `middleware.ts` — Next.js 16 deprecated and
@@ -72,11 +72,8 @@ export async function proxy(request: NextRequest) {
     // the email can't be forged; a request with no session falls through to
     // the route's own 401.
     const { data } = await supabase.auth.getClaims();
-    if (isDemoAccountEmail(data?.claims?.email)) {
-      return NextResponse.json(
-        { error: "Demo access is read-only: you can view everything this role can see, but changes are not saved." },
-        { status: 403 }
-      );
+    if (isDemoReadOnlyMode() && isDemoAccountEmail(data?.claims?.email)) {
+      return NextResponse.json({ error: DEMO_READ_ONLY_MESSAGE }, { status: 403 });
     }
     return response;
   }

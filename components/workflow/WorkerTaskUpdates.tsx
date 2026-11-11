@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
+import { READ_ONLY_MESSAGE, useReadOnly } from "@/components/ui/ReadOnly";
 import { formatDateUS, formatPercent, formatTimeUS } from "@/lib/format";
 import { errorMessage, readApiJson } from "@/lib/apiClient";
 import type { WorkItemTaskView } from "@/components/workflow/WorkItemSelector";
@@ -36,6 +37,7 @@ export default function WorkerTaskUpdates({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
+  const readOnly = useReadOnly();
 
   function startEdit(task: WorkItemTaskView) {
     setEditingId(task.id);
@@ -93,7 +95,13 @@ export default function WorkerTaskUpdates({
                   <Badge variant="neutral">No update yet</Badge>
                 )}
                 {task.updateAccess && editingId !== task.id && (
-                  <Button variant="secondary" size="sm" onClick={() => startEdit(task)}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => startEdit(task)}
+                    disabled={readOnly}
+                    title={readOnly ? READ_ONLY_MESSAGE : undefined}
+                  >
                     Update task
                   </Button>
                 )}

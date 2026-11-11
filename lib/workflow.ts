@@ -166,12 +166,21 @@ async function getPrimaryAssignedWorkItem(
     : undefined;
 
   if (!workItem) {
-    throw new Error(
-      `No work item is assigned to worker ${workerId} in department ${departmentId}`
-    );
+    throw new NoAssignedWorkItemError(workerId, departmentId);
   }
 
   return workItem;
+}
+
+/** A Worker with no Active assignment in their department — an expected,
+ * empty state (e.g. a newly added Worker), not a server failure: the
+ * worker API answers it with `{ workItem: null }` instead of a 500, the
+ * same "No work items assigned yet" the Worker Dashboard already shows. */
+export class NoAssignedWorkItemError extends Error {
+  constructor(workerId: string, departmentId: string) {
+    super(`No work item is assigned to worker ${workerId} in department ${departmentId}`);
+    this.name = "NoAssignedWorkItemError";
+  }
 }
 
 /** One selectable task/activity under a work item — stored as data in

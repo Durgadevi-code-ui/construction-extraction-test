@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
-import { getWorkerDashboard, submitWorkerProgress } from "@/lib/workflow";
+import { getWorkerDashboard, NoAssignedWorkItemError, submitWorkerProgress } from "@/lib/workflow";
 import { getCurrentUser } from "@/lib/session";
+import { demoWriteRefusal } from "@/lib/demoWriteGuard";
 import { MAX_DESCRIPTION_LENGTH, tooLongError } from "@/lib/inputLimits";
 
 export const runtime = "nodejs";
@@ -20,6 +21,9 @@ export async function GET(request: NextRequest) {
     const dashboard = await getWorkerDashboard(supabase, currentUser.userId, workItemId);
     return NextResponse.json(dashboard);
   } catch (err) {
+    if (err instanceof NoAssignedWorkItemError) {
+      return NextResponse.json({ workItem: null, message: "No work items assigned yet." });
+    }
     console.error("Failed to load worker dashboard:", err);
     const message = err instanceof Error ? err.message : "Failed to load dashboard.";
     return jsonError(message, 500);
@@ -37,6 +41,8 @@ export async function POST(request: NextRequest) {
   if (!currentUser) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  const demoReadOnly = demoWriteRefusal(currentUser);
+  if (demoReadOnly) return demoReadOnly;
 
   const supabase = getSupabaseClient();
 

@@ -936,3 +936,51 @@ test("reset password: Supabase accepts but the proof sign-in fails → reported 
   assert.equal(res.status, 500);
   assert.match((await res.json()).error, /not confirmed.*old password no longer works/);
 });
+
+// ---- Demo Login read-only, at the route itself (lib/demoWriteGuard.ts) ----
+// The second layer behind proxy.ts: even if a demo session's write reached a
+// route, the real handler refuses it before touching the database.
+test("demo sessions, emergency switch DEMO_LOGIN_READ_ONLY=true: real write handlers answer 403 read-only before any database or storage call", async () => {
+  process.env.DEMO_LOGIN_READ_ONLY = "true";
+  const demo = { authUserId: "auth-demo", userId: "user-demo", email: "demo.admin@example.com", isDemo: true };
+  const routes = [
+    ["POST /api/admin/users", () => adminUsers.POST(jsonRequest("/api/admin/users", { email: "x@abc.test", role: "WORKER" }))],
+    ["POST /api/admin/work-items", () => adminWorkItems.POST(jsonRequest("/api/admin/work-items", { departmentId: "d" }))],
+    ["POST /api/admin/reset-password", () => resetPasswordRoute.POST(jsonRequest("/api/admin/reset-password", { targetUserId: "u" }))],
+    ["POST /api/workflow/live-updates", () => liveUpdates.POST(jsonRequest("/api/workflow/live-updates", {}))],
+    ["POST /api/user-validation", () => userValidation.POST(jsonRequest("/api/user-validation", {}))],
+  ];
+  for (const [name, call] of routes) {
+    currentUser = demo;
+    supabase = mockSupabase();
+    const res = await call();
+    assert.equal(res.status, 403, name);
+    assert.match((await res.json()).error, /read-only/, name);
+    assert.equal(supabase.log.length, 0, `${name}: no query`);
+    assert.equal(supabase.storageLog.length, 0, `${name}: no storage call`);
+  }
+  // A real user's request goes past the guard as before (here: on to the
+  // route's own checks, which answer something other than read-only).
+  currentUser = { authUserId: "auth-real", userId: "user-real", email: "real@abc.test", isDemo: false };
+  supabase = mockSupabase();
+  const res = await adminUsers.POST(jsonRequest("/api/admin/users", { email: "x@abc.test", role: "WORKER" }));
+  assert.doesNotMatch((await res.json()).error ?? "", /read-only/);
+  currentUser = null;
+  delete process.env.DEMO_LOGIN_READ_ONLY;
+});
+
+test("demo sessions, default: the same application — a write reaches the route's normal authorization, which decides", async () => {
+  delete process.env.DEMO_LOGIN_READ_ONLY;
+  currentUser = { authUserId: "auth-demo", userId: "user-demo", email: "demo.worker.concrete@example.com", isDemo: true };
+  const send = async () => {
+    supabase = mockSupabase();
+    const res = await adminUsers.POST(jsonRequest("/api/admin/users", { email: "x@abc.test", role: "WORKER" }));
+    return { status: res.status, body: await res.json() };
+  };
+  const demoResult = await send();
+  assert.doesNotMatch(demoResult.body.error ?? "", /read-only/, "not refused for being a demo");
+  currentUser = { authUserId: "auth-real", userId: "user-real", email: "real@abc.test", isDemo: false };
+  const realResult = await send();
+  assert.deepEqual(demoResult, realResult, "exactly the answer a real user with the same request gets");
+  currentUser = null;
+});

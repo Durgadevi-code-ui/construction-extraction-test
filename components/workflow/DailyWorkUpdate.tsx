@@ -7,6 +7,7 @@ import TextInput, { type ConfirmedWorkItem } from "@/components/TextInput";
 import WorkerSubmitForm from "@/components/workflow/WorkerSubmitForm";
 import LiveUpdateBar from "@/components/workflow/LiveUpdateBar";
 import Button from "@/components/ui/Button";
+import { ReadOnlyFieldset } from "@/components/ui/ReadOnly";
 import {
   applyValidationResult,
   initialLockState,
@@ -285,6 +286,7 @@ export default function DailyWorkUpdate({
             and Confirm & Continue aren't pushed below the whole voice card;
             phones keep the stacked order (voice first). Side by side they
             share one height so the pair reads as a balanced row. */}
+        <ReadOnlyFieldset notice="Recording and submitting daily updates is turned off in the read-only demo. Your submitted updates and their review status are shown as usual.">
         <div
           key={captureKey}
           ref={captureGridRef}
@@ -320,6 +322,7 @@ export default function DailyWorkUpdate({
             workItemExplicitlySelected={workItemExplicitlySelected}
           />
         </div>
+        </ReadOnlyFieldset>
       </div>
 
       {/* ---------- Step 2: Review & Submit ---------- */}

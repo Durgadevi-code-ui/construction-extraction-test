@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type {
   Company,
   Project,
@@ -34,6 +34,14 @@ import EmptyState from "@/components/ui/EmptyState";
 import Link from "next/link";
 import DashboardShell, { type ShellTab } from "@/components/workflow/DashboardShell";
 import ChatPanel from "@/components/workflow/ChatPanel";
+import {
+  READ_ONLY_MESSAGE,
+  ReadOnlyFieldset,
+  ReadOnlyNote,
+  ReadOnlyProvider,
+  WriteButton,
+  useReadOnly,
+} from "@/components/ui/ReadOnly";
 
 type Props = {
   adminUserId: string;
@@ -49,6 +57,11 @@ type Props = {
    * filtered to the caller's scope server-side (app/admin/setup/page.tsx)
    * — this component never re-derives or trusts a wider scope. */
   isRealAdmin: boolean;
+  /** The Demo Login presentation Admin (lib/demoAccess.ts admin_demo): a
+   * delegated caller shown the Admin screens and navigation. Every list is
+   * still scoped server-side; modules its delegation doesn't grant are
+   * rendered read-only. False for everyone else (no change for them). */
+  presentationAdmin?: boolean;
   /** Which administrative permissions an active delegation currently
    * grants — irrelevant when isRealAdmin (a real Admin can always do
    * everything). Empty for a real Admin. */
@@ -100,8 +113,8 @@ const TAB_HEADING: Record<Tab, string> = {
  * delegate with only e.g. USER_MANAGEMENT never even sees a Companies
  * or Work Items tab to try their luck against (backend still enforces
  * this independently — see every /api/admin/* route). */
-function visibleTabs(isRealAdmin: boolean, delegatedPermissions: DelegationPermission[]): Tab[] {
-  if (isRealAdmin) return ALL_TABS.map((t) => t.id);
+function visibleTabs(isRealAdmin: boolean, delegatedPermissions: DelegationPermission[], presentationAdmin = false): Tab[] {
+  if (isRealAdmin || presentationAdmin) return ALL_TABS.map((t) => t.id);
   return ALL_TABS.filter((t) => !t.adminOnly && t.permission && delegatedPermissions.includes(t.permission)).map(
     (t) => t.id
   );
@@ -130,6 +143,7 @@ export default function AdminSetupPanel({
   adminUserId,
   userEmail,
   isRealAdmin,
+  presentationAdmin = false,
   delegatedPermissions,
   companies,
   projects,
@@ -141,7 +155,23 @@ export default function AdminSetupPanel({
   contractors,
   standardDepartments,
 }: Props) {
-  const shownTabs = visibleTabs(isRealAdmin, delegatedPermissions);
+  const shownTabs = visibleTabs(isRealAdmin, delegatedPermissions, presentationAdmin);
+  // Presentation Admin only: a tab its delegation doesn't grant is shown
+  // (same navigation as an Admin) but read-only. Never true for real users.
+  const viewOnly = (id: Tab): boolean => {
+    if (!presentationAdmin) return false;
+    const def = ALL_TABS.find((t) => t.id === id);
+    return !def || !!def.adminOnly || !def.permission || !delegatedPermissions.includes(def.permission);
+  };
+  const scoped = (id: Tab, content: ReactNode): ReactNode =>
+    viewOnly(id) ? (
+      <ReadOnlyProvider readOnly>
+        <ReadOnlyNote>Shown for the presentation: this Admin module is view-only here, limited to the presentation project.</ReadOnlyNote>
+        {content}
+      </ReadOnlyProvider>
+    ) : (
+      content
+    );
   const [tab, setTab] = useState<Tab>(shownTabs[0] ?? "projects");
 
   if (shownTabs.length === 0) {
@@ -174,10 +204,16 @@ export default function AdminSetupPanel({
       activeTab={activeTab}
       onTabChange={(key) => setTab(key as Tab)}
       heading={TAB_HEADING[activeTab]}
-      subheading={isRealAdmin ? undefined : "Viewing under a temporary administrative delegation."}
+      subheading={
+        isRealAdmin
+          ? undefined
+          : presentationAdmin
+            ? "Presentation workspace: demo data only."
+            : "Viewing under a temporary administrative delegation."
+      }
       userId={adminUserId}
       userEmail={userEmail}
-      roleLabel={isRealAdmin ? "Admin" : "Delegated Admin"}
+      roleLabel={isRealAdmin || presentationAdmin ? "Admin" : "Delegated Admin"}
       actions={
         // Relocated from the removed top nav bar (see
         // components/workflow/TopNav.tsx) — same two links, same
@@ -203,55 +239,67 @@ export default function AdminSetupPanel({
         </div>
       }
     >
-      {activeTab === "companies" && (
-        <div className="space-y-4">
-          <SystemOverviewStats companies={companies} projects={projects} users={users} />
-          <CompaniesTab adminUserId={adminUserId} companies={companies} />
-        </div>
-      )}
-      {activeTab === "projects" && (
-        <ProjectsTab
-          adminUserId={adminUserId}
-          isRealAdmin={isRealAdmin}
-          projects={projects}
-          companies={companies}
-        />
-      )}
-      {activeTab === "departments" && (
-        <DepartmentsTab
-          adminUserId={adminUserId}
-          isRealAdmin={isRealAdmin}
-          departments={departments}
-          projects={projects}
-          standardDepartments={standardDepartments}
-        />
-      )}
-      {activeTab === "workItems" && (
-        <WorkItemsTab
-          adminUserId={adminUserId}
-          workItems={workItems}
-          departments={departments}
-          workItemDependencies={workItemDependencies}
-        />
-      )}
-      {activeTab === "users" && (
-        <UsersTab
-          adminUserId={adminUserId}
-          isRealAdmin={isRealAdmin}
-          users={users}
-          departments={departments}
-          projects={projects}
-        />
-      )}
-      {activeTab === "delegations" && (
-        <DelegationManager
-          adminUserId={adminUserId}
-          delegations={delegations}
-          contractors={contractors}
-          projects={projects}
-          departments={departments}
-        />
-      )}
+      {activeTab === "companies" &&
+        scoped(
+          "companies",
+          <div className="space-y-4">
+            <SystemOverviewStats companies={companies} projects={projects} users={users} />
+            <CompaniesTab adminUserId={adminUserId} companies={companies} />
+          </div>
+        )}
+      {activeTab === "projects" &&
+        scoped(
+          "projects",
+          <ProjectsTab
+            adminUserId={adminUserId}
+            isRealAdmin={isRealAdmin}
+            projects={projects}
+            companies={companies}
+          />
+        )}
+      {activeTab === "departments" &&
+        scoped(
+          "departments",
+          <DepartmentsTab
+            adminUserId={adminUserId}
+            isRealAdmin={isRealAdmin}
+            departments={departments}
+            projects={projects}
+            standardDepartments={standardDepartments}
+          />
+        )}
+      {activeTab === "workItems" &&
+        scoped(
+          "workItems",
+          <WorkItemsTab
+            adminUserId={adminUserId}
+            workItems={workItems}
+            departments={departments}
+            workItemDependencies={workItemDependencies}
+          />
+        )}
+      {activeTab === "users" &&
+        scoped(
+          "users",
+          <UsersTab
+            adminUserId={adminUserId}
+            isRealAdmin={isRealAdmin}
+            users={users}
+            departments={departments}
+            projects={projects}
+          />
+        )}
+      {activeTab === "delegations" &&
+        scoped(
+          "delegations",
+          <DelegationManager
+            adminUserId={adminUserId}
+            delegations={delegations}
+            contractors={contractors}
+            projects={projects}
+            departments={departments}
+          />
+        )}
 
       {activeTab === "communication" && (
         <ChatPanel projects={projects.map((p) => ({ projectId: p.projectId, projectName: p.projectName }))} />
@@ -302,12 +350,19 @@ function SystemOverviewStats({
 
 function useSubmit(path: string, method: "POST" | "PATCH" | "DELETE" = "POST") {
   const router = useRouter();
+  const readOnly = useReadOnly();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   /** The response body on success (truthy — callers can keep `if (ok)`),
    * false on failure. */
   async function submit(body: Record<string, unknown>): Promise<Record<string, unknown> | false> {
+    // DEMO_LOGIN_READ_ONLY on (lib/demoEmail.ts): the controls are
+    // disabled; this is the backstop. Off by default: never true.
+    if (readOnly) {
+      setError(READ_ONLY_MESSAGE);
+      return false;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -349,6 +404,7 @@ function CompaniesTab({ adminUserId, companies }: { adminUserId: string; compani
 
   return (
     <div className="space-y-4">
+      <ReadOnlyFieldset>
       <form onSubmit={handleSubmit} className="bg-white rounded-lg border border-line p-4 space-y-3">
         <h2 className="font-semibold text-foreground text-sm">New Company</h2>
         <Field label="Company Name" value={name} onChange={setName} required />
@@ -359,6 +415,7 @@ function CompaniesTab({ adminUserId, companies }: { adminUserId: string; compani
           <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
         )}
       </form>
+      </ReadOnlyFieldset>
 
       <ListSection title="Existing Companies" empty={companies.length === 0}>
         {companies.map((c) => (
@@ -426,6 +483,7 @@ function ProjectsTab({
 
   return (
     <div className="space-y-4">
+      <ReadOnlyFieldset>
       <form onSubmit={handleSubmit} className="bg-white rounded-lg border border-line p-4 space-y-3">
         <h2 className="font-semibold text-foreground text-sm">New Project</h2>
         <SelectField
@@ -442,6 +500,7 @@ function ProjectsTab({
             <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
           )}
       </form>
+      </ReadOnlyFieldset>
 
       <ListSection title="Existing Projects" empty={projects.length === 0}>
         {projects.map((p) => (
@@ -495,9 +554,9 @@ function ProjectRow({ adminUserId, project }: { adminUserId: string; project: Pr
         </div>
         <div className="flex gap-2 shrink-0">
           {!editing && (
-            <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
+            <WriteButton variant="secondary" size="sm" onClick={() => setEditing(true)}>
               Edit
-            </Button>
+            </WriteButton>
           )}
         </div>
       </div>
@@ -590,6 +649,7 @@ function DepartmentsTab({
 
   return (
     <div className="space-y-4">
+      <ReadOnlyFieldset>
       <form onSubmit={handleSubmit} className="bg-white rounded-lg border border-line p-4 space-y-3">
         <h2 className="font-semibold text-foreground text-sm">New Department</h2>
         {!isRealAdmin && (
@@ -623,6 +683,7 @@ function DepartmentsTab({
             <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
           )}
       </form>
+      </ReadOnlyFieldset>
 
       <ListSection title={isRealAdmin ? "Existing Departments" : "Delegated Departments"} empty={departments.length === 0}>
         {departments.map((d) => (
@@ -661,9 +722,9 @@ function DepartmentRow({ adminUserId, department }: { adminUserId: string; depar
           <StatusBadge status={department.status} />
         </div>
         {!editing && (
-          <Button variant="secondary" size="sm" onClick={() => setEditing(true)} className="shrink-0">
+          <WriteButton variant="secondary" size="sm" onClick={() => setEditing(true)} className="shrink-0">
             Edit
-          </Button>
+          </WriteButton>
         )}
       </div>
 
@@ -749,6 +810,7 @@ function WorkItemsTab({
         ))}
       </datalist>
 
+      <ReadOnlyFieldset>
       <form onSubmit={handleSubmit} className="bg-white rounded-lg border border-line p-4 space-y-3">
         <h2 className="font-semibold text-foreground text-sm">New Work Item</h2>
         <SelectField
@@ -801,6 +863,7 @@ function WorkItemsTab({
             <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
           )}
       </form>
+      </ReadOnlyFieldset>
 
       {/* Project → Department → Work Items: the same work items as before,
           grouped by the department (and that department's project) each
@@ -934,10 +997,10 @@ function WorkItemRow({
         </div>
         {!editing && (
           <div className="flex shrink-0 gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
+            <WriteButton variant="secondary" size="sm" onClick={() => setEditing(true)}>
               Edit
-            </Button>
-            <Button
+            </WriteButton>
+            <WriteButton
               variant="secondary"
               size="sm"
               disabled={statusSubmit.submitting}
@@ -947,7 +1010,7 @@ function WorkItemRow({
               }}
             >
               {statusSubmit.submitting ? "Saving…" : isActive ? "Deactivate" : "Activate"}
-            </Button>
+            </WriteButton>
           </div>
         )}
       </div>
@@ -1110,6 +1173,7 @@ function UsersTab({
 
   return (
     <div className="space-y-4">
+      <ReadOnlyFieldset>
       <form onSubmit={handleSubmit} className="bg-white rounded-lg border border-line p-4 space-y-3">
         <h2 className="font-semibold text-foreground text-sm">New User</h2>
         {!isRealAdmin && (
@@ -1172,6 +1236,7 @@ function UsersTab({
             <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
           )}
       </form>
+      </ReadOnlyFieldset>
 
       <ListSection title={isRealAdmin ? "Existing Users" : "Users in Delegated Scope"} empty={users.length === 0}>
         {users.map((u) => (
@@ -1195,6 +1260,7 @@ function UsersTab({
                * boundary as removing an assignment above — hidden here
                * to match the server-side guard in
                * app/api/admin/link-auth/route.ts. */}
+              <ReadOnlyFieldset className="contents">
               {!u.isLinked && (isRealAdmin || u.role !== "ADMIN") && (
                 <LinkLoginButton adminUserId={adminUserId} targetUserId={u.userId} email={u.email} />
               )}
@@ -1202,6 +1268,7 @@ function UsersTab({
               {u.isLinked && u.userId !== adminUserId && (isRealAdmin || u.role !== "ADMIN") && (
                 <ResetPasswordButton targetUserId={u.userId} email={u.email} />
               )}
+              </ReadOnlyFieldset>
             </div>
             {u.projectRoles.length === 0 ? (
               <p className="text-foreground-muted mt-1">No active project/department role assignment yet.</p>
@@ -1253,9 +1320,9 @@ function RemoveAssignmentButton({
 
   return (
     <div className="flex items-center gap-2 shrink-0">
-      <Button variant="danger" size="sm" onClick={handleRemove} disabled={submitting}>
+      <WriteButton variant="danger" size="sm" onClick={handleRemove} disabled={submitting}>
         {submitting ? "Removing…" : "Remove"}
-      </Button>
+      </WriteButton>
       {error && <span className="text-xs text-error">{error}</span>}
     </div>
   );
@@ -1329,6 +1396,7 @@ function LinkLoginButton({
   }
 
   return (
+    <ReadOnlyFieldset>
     <form onSubmit={handleSubmit} className="flex items-center gap-1.5 shrink-0">
       <Input
         type="text"
@@ -1346,6 +1414,7 @@ function LinkLoginButton({
       </Button>
       {error && <span className="text-xs text-error">{error}</span>}
     </form>
+    </ReadOnlyFieldset>
   );
 }
 
@@ -1401,6 +1470,7 @@ function ResetPasswordButton({ targetUserId, email }: { targetUserId: string; em
   }
 
   return (
+    <ReadOnlyFieldset>
     <form onSubmit={handleSubmit} className="flex items-center gap-1.5 shrink-0">
       <Input
         type="text"
@@ -1418,6 +1488,7 @@ function ResetPasswordButton({ targetUserId, email }: { targetUserId: string; em
       </Button>
       {error && <span className="text-xs text-error">{error}</span>}
     </form>
+    </ReadOnlyFieldset>
   );
 }
 
@@ -1571,9 +1642,9 @@ function SelectField({
 
 function SubmitButton({ submitting, label }: { submitting: boolean; label: string }) {
   return (
-    <Button type="submit" disabled={submitting}>
+    <WriteButton type="submit" disabled={submitting}>
       {submitting ? "Saving…" : label}
-    </Button>
+    </WriteButton>
   );
 }
 

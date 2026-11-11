@@ -5,7 +5,7 @@ import { isDemoAccountEmail } from "./demoEmail";
 
 /**
  * Role-based one-click Demo Login (app/demo-login): pick a role and a
- * trade, click "Enter Demo Workspace", and the server signs in as that
+ * trade, click "Sign In", and the server signs in as that
  * role's dedicated demo account, which is a member of the EXISTING
  * project(s) (DEMO_PROJECT_IDS — owner's decision: New York City
  * Commercial Building and Test Project B). Nobody types an email or a
@@ -25,11 +25,13 @@ import { isDemoAccountEmail } from "./demoEmail";
  *     The browser sends a slot KEY from the closed list below — never an
  *     email, a password or a user id. No magic link, no session minted
  *     with the service-role key.
- *   - "Admin" is not a real ADMIN (an Admin controls every company,
- *     project, user and password). It is a Contractor-role demo account
- *     holding an admin delegation scoped to the configured project(s),
- *     without user management (so visitors can't create logins or reset
- *     anyone's password).
+ *   - The presentation "Admin" is never the real ADMIN account and never
+ *     holds users.user_role = 'ADMIN' (an ADMIN sees and controls every
+ *     company, project and user in this shared database). It is a
+ *     Contractor-role demo account holding an admin delegation scoped to
+ *     the configured presentation project(s) only, without
+ *     USER_MANAGEMENT; Admin Setup shows it the Admin screens filtered to
+ *     that scope (app/admin/setup/page.tsx presentationAdmin).
  *
  * Configuration (server-only; off unless all of it is present):
  *   DEMO_LOGIN_ENABLED=true
@@ -50,11 +52,14 @@ import { isDemoAccountEmail } from "./demoEmail";
  *      these rows (lib/authContext.ts getUserContext);
  *   4. any Active admin delegation covers configured projects only and
  *      does not include USER_MANAGEMENT;
- *   5. at sign-in only: the account holds only the slot's role, in the
+ *   5. every configured project is presentation data: its Active members
+ *      are demo (@example.com) accounts only, so a demo session (which can
+ *      write) never reaches a project a real person works in;
+ *   6. at sign-in only: the account holds only the slot's role, in the
  *      slot's team, and only the Admin slot holds a delegation.
- * Demo sessions are read-only: proxy.ts refuses their non-GET /api
- * requests, so they see what the role sees but can't change project data.
- * Checks 1–4 run again on every request (demoSessionAllowed, from
+ * Demo sessions use the application exactly as their role allows
+ * (DEMO_LOGIN_READ_ONLY=true is an emergency read-only switch,
+ * lib/demoEmail.ts). Checks 1–4 run again on every request (demoSessionAllowed, from
  * lib/session.ts getCurrentUser), so a demo account that signed in on
  * /login, or whose roles changed afterwards, loses app access at once.
  */
@@ -68,14 +73,14 @@ export type DemoSlot = {
   /** The account's user_project_roles.role. */
   role: "SUPERVISOR" | "FOREMAN" | "WORKER";
   department: string;
-  /** Holds an admin delegation scoped to the demo project (the Admin slot). */
+  /** Holds an admin delegation scoped to the presentation project (the Admin slot). */
   delegatedAdmin?: true;
 };
 
-// Fixed order: Admin, Contractors, Subcontractors, Workers (as the old
-// picker). Departments are the existing project's own.
+// Fixed order: Admin, Contractors, Subcontractors, Workers. Departments
+// are the presentation project's own.
 export const DEMO_SLOTS: readonly DemoSlot[] = [
-  { key: "admin_demo", group: "Admin", team: "Project administration", role: "SUPERVISOR", department: "Electrical Department", delegatedAdmin: true },
+  { key: "admin_demo", group: "Admin", team: "Presentation Admin", role: "SUPERVISOR", department: "Electrical Department", delegatedAdmin: true },
   { key: "contractor_electrical", group: "Contractor", team: "Electrical", role: "SUPERVISOR", department: "Electrical Department" },
   { key: "contractor_plumbing", group: "Contractor", team: "Plumbing", role: "SUPERVISOR", department: "Plumbing Department" },
   { key: "contractor_concrete", group: "Contractor", team: "Concrete", role: "SUPERVISOR", department: "Concrete Department" },
@@ -88,7 +93,7 @@ export const DEMO_SLOTS: readonly DemoSlot[] = [
 ];
 
 /** Delegated permissions that must never reach a demo account: they would
- * let a visitor create logins or reset other demo accounts' passwords. */
+ * let a visitor create logins or reset other accounts' passwords. */
 const FORBIDDEN_DEMO_PERMISSIONS = new Set(["USER_MANAGEMENT"]);
 
 export type DemoLoginConfig = {
@@ -155,6 +160,7 @@ export type DemoAccountCheck =
         | "delegation"
         | "wrong-role"
         | "missing-delegation"
+        | "project-not-isolated"
         | "lookup-failed";
     };
 
@@ -185,15 +191,19 @@ export async function checkDemoAccount(
     if (profile.user_role === "ADMIN") return { ok: false, reason: "admin" };
     const userId = profile.user_id as string;
 
-    const [{ data: roles, error: rolesError }, { data: delegations, error: delegationError }] = await Promise.all([
+    const [{ data: roles, error: rolesError }, { data: delegations, error: delegationError }, isolated] = await Promise.all([
       admin.from("user_project_roles").select("project_id, role, departments(department_name)").eq("user_id", userId).eq("status", "Active"),
       admin.from("admin_delegations").select("delegation_id").eq("delegate_user_id", userId).eq("status", "Active"),
+      demoProjectsIsolated(admin, config),
     ]);
     if (rolesError) return { ok: false, reason: "lookup-failed" };
     if (!roles || roles.length === 0) return { ok: false, reason: "no-demo-role" };
     if (roles.some((row) => !config.projectIds.has(row.project_id as string))) {
       return { ok: false, reason: "role-outside-demo" };
     }
+
+    if (isolated === null) return { ok: false, reason: "lookup-failed" };
+    if (!isolated) return { ok: false, reason: "project-not-isolated" };
 
     if (delegationError) return { ok: false, reason: "lookup-failed" };
     const delegationIds = (delegations ?? []).map((row) => row.delegation_id as string);
@@ -203,8 +213,9 @@ export async function checkDemoAccount(
         admin.from("delegation_permissions").select("delegation_id, permission").in("delegation_id", delegationIds),
       ]);
       if (scopeError || permissionError) return { ok: false, reason: "lookup-failed" };
-      // Every delegation must name demo projects only (a delegation with no
-      // project row reaches nothing, but is refused too) and no forbidden permission.
+      // Every delegation must name configured projects only (one with no
+      // project row reaches nothing, but is refused too) and no forbidden
+      // permission.
       const outside = delegationIds.some((id) => {
         const projects = (scopes ?? []).filter((row) => row.delegation_id === id);
         return projects.length === 0 || projects.some((row) => !config.projectIds.has(row.project_id as string));
@@ -229,6 +240,32 @@ export async function checkDemoAccount(
     return { ok: true, userId };
   } catch {
     return { ok: false, reason: "lookup-failed" };
+  }
+}
+
+/**
+ * Whether every configured project is presentation data: true when all of
+ * its Active members are demo (@example.com) accounts, false as soon as one
+ * real person is a member, null when the lookup fails. Demo sessions can
+ * write, so this keeps them away from client projects whatever
+ * DEMO_PROJECT_IDS says. (The real Admin is not a project member: an Admin
+ * sees every project through users.user_role, not through these rows.)
+ */
+export async function demoProjectsIsolated(admin: SupabaseClient, config: DemoLoginConfig): Promise<boolean | null> {
+  if (config.projectIds.size === 0) return false;
+  try {
+    const { data, error } = await admin
+      .from("user_project_roles")
+      .select("users(user_mail)")
+      .in("project_id", [...config.projectIds])
+      .eq("status", "Active");
+    if (error || !data) return null;
+    return data.every((row) => {
+      const user = Array.isArray(row.users) ? row.users[0] : row.users;
+      return isDemoAccountEmail((user as { user_mail?: unknown } | null)?.user_mail);
+    });
+  } catch {
+    return null;
   }
 }
 
@@ -269,17 +306,23 @@ export async function repairDemoLogin(
 
 /**
  * Per-request gate for an existing session (lib/session.ts). Any account
- * whose login or app email is a configured demo email is held to
- * checkDemoAccount on every request, wherever it signed in; with demo
- * login switched off it gets no app access at all. Every other account
- * passes after a Set lookup, with no query.
+ * whose login or app email is a demo email — configured, or any address on
+ * the reserved @example.com domain (so an account dropped from the
+ * configuration, such as the former demo Admin, is refused rather than
+ * becoming an ordinary account) — is held to checkDemoAccount on every
+ * request, wherever it signed in; with demo login switched off it gets no
+ * app access at all. Every other account passes with no query.
  */
 export async function demoSessionAllowed(
   admin: SupabaseClient,
   identity: { authUserId: string; authEmail: string; appEmail: string },
   config: DemoLoginConfig = demoLoginConfig()
 ): Promise<boolean> {
-  const isDemo = config.emails.has(normalizeEmail(identity.authEmail)) || config.emails.has(normalizeEmail(identity.appEmail));
+  const isDemo =
+    config.emails.has(normalizeEmail(identity.authEmail)) ||
+    config.emails.has(normalizeEmail(identity.appEmail)) ||
+    isDemoAccountEmail(identity.authEmail) ||
+    isDemoAccountEmail(identity.appEmail);
   if (!isDemo) return true;
   const check: DemoAccountCheck = config.enabled
     ? await checkDemoAccount(admin, config, { authUserId: identity.authUserId, email: identity.authEmail })

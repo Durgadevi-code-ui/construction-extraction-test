@@ -22,6 +22,7 @@ import ErrorNotice from "@/components/ui/ErrorNotice";
 import { errorMessage, readApiJson } from "@/lib/apiClient";
 import type { DashboardData } from "@/lib/dashboard";
 import { calculateOverallProgress } from "@/lib/calculations";
+import { ReadOnlyFieldset } from "@/components/ui/ReadOnly";
 
 export type SupervisorQueueItem = {
   submissionId: string;
@@ -311,11 +312,12 @@ export function ExecutiveSummaryCard({
   // every subsequent tab switch.
   useEffect(() => {
     let ignore = false;
-    fetch("/api/workflow/daily-summary", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ period, projectId, departmentId }),
-    })
+    // GET: a pure read (see the route), so it also works for read-only
+    // Demo Login sessions.
+    const params = new URLSearchParams({ period });
+    if (projectId) params.set("projectId", projectId);
+    if (departmentId) params.set("departmentId", departmentId);
+    fetch(`/api/workflow/daily-summary?${params.toString()}`)
       .then(async (res) => {
         const data = await readApiJson<{ summary: ExecutiveSummaryData }>(res, "Couldn't load progress tracking.");
         if (!ignore) setSummary(data.summary);
@@ -1107,6 +1109,7 @@ export default function SupervisorPanel({
       <Card className="space-y-2 text-sm">
         {isFocused && <Badge variant="warning">From your notification</Badge>}
         {eligibleIds.includes(validationId) && (
+          <ReadOnlyFieldset>
           <label className="flex items-center gap-2 text-xs text-foreground-secondary">
             <input
               type="checkbox"
@@ -1118,6 +1121,7 @@ export default function SupervisorPanel({
             />
             Select for approval
           </label>
+          </ReadOnlyFieldset>
         )}
         <ReviewCardLayout
           workItemCode={item.workItemCode}
@@ -1217,6 +1221,7 @@ export default function SupervisorPanel({
           />
         )}
 
+        <ReadOnlyFieldset>
         <div className="flex gap-2 pt-1 flex-wrap">
           <Button size="sm" onClick={() => run(validationId, "approve")} disabled={busyId === validationId || bulkBusy}>
             Approve
@@ -1292,6 +1297,7 @@ export default function SupervisorPanel({
             </Button>
           )}
         </div>
+        </ReadOnlyFieldset>
         {/* Live Updates for this work item live on Work Items (one entry
             point per work item) — not repeated on the review card. */}
       </Card>
@@ -1350,6 +1356,7 @@ export default function SupervisorPanel({
             ) : (
               <div className="space-y-4">
                 {eligibleIds.length > 0 && (
+                  <ReadOnlyFieldset notice="Approving, editing and rolling back reviews is turned off in the read-only demo.">
                   <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-surface-soft px-3 py-2 text-sm">
                     <label
                       className="flex items-center gap-2 text-foreground-secondary"
@@ -1379,6 +1386,7 @@ export default function SupervisorPanel({
                       Tick items to approve them together. Double-click the checkbox to select all.
                     </span>
                   </div>
+                  </ReadOnlyFieldset>
                 )}
                 <SortControl
                   options={REVIEW_SORT_OPTIONS}

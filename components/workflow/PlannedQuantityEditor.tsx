@@ -5,6 +5,7 @@ import { useState } from "react";
 import { formatQuantity } from "@/lib/format";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
+import { READ_ONLY_MESSAGE, useReadOnly } from "@/components/ui/ReadOnly";
 
 type Props = {
   actorUserId: string;
@@ -34,6 +35,7 @@ export default function PlannedQuantityEditor({
   const [unit, setUnit] = useState(unitOfMeasure ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const readOnly = useReadOnly();
 
   async function handleSave() {
     setSubmitting(true);
@@ -70,6 +72,8 @@ export default function PlannedQuantityEditor({
           variant="secondary"
           size="sm"
           className="!px-1.5 !py-0.5 !text-xs"
+          disabled={readOnly}
+          title={readOnly ? READ_ONLY_MESSAGE : undefined}
           onClick={() => {
             setQuantity(plannedQuantity?.toString() ?? "");
             setUnit(unitOfMeasure ?? "");

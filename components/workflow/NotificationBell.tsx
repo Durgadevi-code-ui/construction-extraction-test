@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Bell, X } from "lucide-react";
 import { formatDateTimeUS } from "@/lib/format";
 import { SkeletonRows } from "@/components/ui/Skeleton";
+import { useReadOnly } from "@/components/ui/ReadOnly";
 
 // Mirrors NotificationRecord (lib/notifications.ts) — the API already
 // returns every one of these fields (see app/api/workflow/notifications/
@@ -176,6 +177,9 @@ export default function NotificationBell({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  // Demo Login: read state isn't saved, so nothing pretends it was —
+  // notifications open and navigate as usual but stay unread.
+  const readOnly = useReadOnly();
 
   // Inline fetch-with-cleanup-flag (not a separately declared callback
   // invoked directly in the effect body) so a poll response that
@@ -242,6 +246,7 @@ export default function NotificationBell({
   }, []);
 
   async function markRead(notificationId: string) {
+    if (readOnly) return;
     setNotifications((prev) =>
       prev.map((n) => (n.notificationId === notificationId ? { ...n, isRead: true } : n))
     );
@@ -259,6 +264,7 @@ export default function NotificationBell({
   }
 
   async function markAllRead() {
+    if (readOnly) return;
     const previous = notifications;
     setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
     setUnreadCount(0);
@@ -380,7 +386,7 @@ export default function NotificationBell({
         >
           <div className="flex items-center justify-between border-b border-line px-3 py-2">
             <h3 className="text-sm font-semibold text-foreground">Notifications</h3>
-            {unreadCount > 0 && (
+            {unreadCount > 0 && !readOnly && (
               <button
                 onClick={markAllRead}
                 className="text-xs text-brand transition-colors duration-150 hover:underline"

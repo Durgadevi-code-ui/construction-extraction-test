@@ -9,6 +9,7 @@ import Input from "@/components/ui/Input";
 import useScrollActiveIntoView from "@/components/workflow/useScrollActiveIntoView";
 import { timeOfDayGreeting } from "@/lib/format";
 import { logout } from "@/app/login/actions";
+import { ReadOnlyBanner } from "@/components/ui/ReadOnly";
 
 export type ShellTab = {
   key: string;
@@ -266,6 +267,7 @@ export default function DashboardShell({
           )}
         </div>
 
+        <ReadOnlyBanner />
         {children}
       </div>
     </div>

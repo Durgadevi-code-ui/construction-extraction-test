@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseServiceRoleClient } from "@/lib/supabaseAdmin";
 import { getCurrentUser } from "@/lib/session";
+import { demoWriteRefusal } from "@/lib/demoWriteGuard";
 import { RATE_LIMITS, rateLimitResponse } from "@/lib/rateLimit";
 import { getUserContext } from "@/lib/workflow";
 import {
@@ -93,6 +94,8 @@ export async function POST(request: NextRequest) {
   if (!currentUser) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  const demoReadOnly = demoWriteRefusal(currentUser);
+  if (demoReadOnly) return demoReadOnly;
   const limited = await rateLimitResponse(RATE_LIMITS.liveUpdateUpload, currentUser.userId);
   if (limited) return limited;
 

@@ -64,6 +64,11 @@ export const RATE_LIMITS = {
   /** Password login attempts, per client IP and per email address. */
   loginPerIp: { name: "login-ip", limit: 30, windowSeconds: 10 * 60, failClosed: false },
   loginPerEmail: { name: "login-email", limit: 10, windowSeconds: 10 * 60, failClosed: false },
+  /** Demo Login one-click entries, per client IP only — its own counter,
+   * so demo clicks never use up the normal sign-in allowance of the same
+   * IP. Deliberately no per-account limit: demo accounts are shared, so a
+   * per-account counter would let one visitor lock a role out for all. */
+  demoLoginPerIp: { name: "demo-login-ip", limit: 30, windowSeconds: 10 * 60, failClosed: false },
   /** Password-reset emails, per client IP and per email address. */
   passwordResetPerIp: { name: "reset-ip", limit: 20, windowSeconds: 60 * 60, failClosed: false },
   passwordResetPerEmail: { name: "reset-email", limit: 5, windowSeconds: 60 * 60, failClosed: false },
