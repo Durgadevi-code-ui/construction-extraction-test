@@ -7,7 +7,7 @@ import { createSupabaseServerClient } from "@/lib/supabaseServer";
 import { getSupabaseServiceRoleClient } from "@/lib/supabaseAdmin";
 import { RATE_LIMITS, checkRateLimit, clientIp, rateLimitMessage } from "@/lib/rateLimit";
 import { classifySignInError } from "@/lib/authAccounts";
-import { ADMIN_DOOR_KEY, adminDoorSlot, checkDemoAccount, demoLoginConfig, demoSlot, repairDemoLogin } from "@/lib/demoAccess";
+import { ADMIN_DOOR_KEY, adminDoorAccount, checkDemoAccount, demoLoginConfig, demoSlot, repairDemoLogin } from "@/lib/demoAccess";
 
 export type DemoLoginState = { error?: string } | undefined;
 
@@ -25,18 +25,22 @@ export async function enterDemoWorkspace(_prevState: DemoLoginState, formData: F
     return { error: "Demo login is not enabled in this environment." };
   }
 
-  // The "Admin" door is not a privileged account: it signs in as an
-  // ordinary isolated demo account (adminDoorSlot) and lands on the
-  // read-only, demo-scoped Admin Setup preview. Account-management stays
-  // real-Admin-only — every /api/admin/* route re-checks isAdminUser, which
-  // a demo account never satisfies.
+  // The "Admin" door signs in as the dedicated presentation-Admin account
+  // (adminDoorAccount) — an ordinary isolated demo account, never the real
+  // ADMIN and never passwordless. Its Admin capabilities come from an admin
+  // delegation confined to the presentation project(s); the existing
+  // delegation system scopes and enforces them at every /api/admin/* route,
+  // so project creation, company/delegation/user management and ADMIN
+  // administration stay real-Admin-only. A trade role resolves to its slot.
   const roleKey = formData.get("role");
   const isAdminDoor = roleKey === ADMIN_DOOR_KEY;
-  const slot = isAdminDoor ? adminDoorSlot(config) : demoSlot(roleKey);
-  const account = slot ? config.accounts.get(slot.key) : undefined;
-  if (!slot || !account) {
+  const slot = isAdminDoor ? undefined : demoSlot(roleKey);
+  const account = isAdminDoor ? adminDoorAccount(config) : slot ? config.accounts.get(slot.key) : undefined;
+  if (!account) {
     return { error: "Choose one of the listed demo roles." };
   }
+  // A stable label for logs (never an email): the slot key, or "admin".
+  const slotLabel = isAdminDoor ? "admin" : slot!.key;
 
   // Per client IP, on its own counter (lib/rateLimit.ts demoLoginPerIp) so
   // demo clicks don't use up that IP's normal sign-in allowance. No
@@ -56,8 +60,8 @@ export async function enterDemoWorkspace(_prevState: DemoLoginState, formData: F
   };
 
   let result = await signIn();
-  if (result?.error && classifySignInError(result.error) === "invalid_credentials" && (await repairDemoLogin(admin, config, slot))) {
-    logDemo(logRef(), slot.key, "repair", "restored-configured-login", {});
+  if (result?.error && classifySignInError(result.error) === "invalid_credentials" && (await repairDemoLogin(admin, config, account, slot))) {
+    logDemo(logRef(), slotLabel, "repair", "restored-configured-login", {});
     result = await signIn();
   }
   if (!result) {
@@ -68,7 +72,7 @@ export async function enterDemoWorkspace(_prevState: DemoLoginState, formData: F
   if (error) {
     const ref = logRef();
     const kind = classifySignInError(error);
-    logDemo(ref, slot.key, "sign-in", "rejected", { kind, status: error.status, code: error.code });
+    logDemo(ref, slotLabel, "sign-in", "rejected", { kind, status: error.status, code: error.code });
     if (kind === "rate_limited") return { error: `Too many sign-in attempts. Please wait a few minutes and try again. (ref ${ref})` };
     if (kind === "unavailable") return { error: `The sign-in service is temporarily unavailable. Please try again shortly. (ref ${ref})` };
     return { error: `This demo role isn't available right now. Contact your Administrator. (ref ${ref})` };
@@ -77,7 +81,7 @@ export async function enterDemoWorkspace(_prevState: DemoLoginState, formData: F
   const check = await checkDemoAccount(admin, config, { authUserId: data.user.id, email: data.user.email ?? "" }, slot);
   if (!check.ok) {
     const ref = logRef();
-    logDemo(ref, slot.key, "isolation", "refused", { reason: check.reason });
+    logDemo(ref, slotLabel, "isolation", "refused", { reason: check.reason });
     // Only this browser's new session; other sessions of the account stay.
     await supabase.auth.signOut({ scope: "local" });
     if (check.reason === "lookup-failed") {
@@ -89,9 +93,10 @@ export async function enterDemoWorkspace(_prevState: DemoLoginState, formData: F
     return { error: `This demo role is not set up as an isolated demo account, so demo access was refused. Contact your Administrator. (ref ${ref})` };
   }
 
-  logDemo(logRef(), isAdminDoor ? "admin" : slot.key, "session", "signed-in", { user: check.userId.slice(0, 8) });
+  logDemo(logRef(), slotLabel, "session", "signed-in", { user: check.userId.slice(0, 8) });
   // Trade roles land on /workflow (routed to their own dashboard, same as
-  // /login); the Admin door lands on the read-only Admin Setup preview.
+  // /login); the Admin door lands on Admin Setup, which the existing
+  // delegation system scopes to the presentation project(s).
   redirect(isAdminDoor ? "/admin/setup" : "/workflow");
 }
 

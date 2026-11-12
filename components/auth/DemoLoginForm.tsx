@@ -14,10 +14,11 @@ import { Label, Select } from "@/components/ui/Input";
  * resolves it, so editing the page can't reach any other account.
  *
  * "Admin" is the Admin door (lib/demoAccess.ts ADMIN_DOOR_KEY): a public,
- * passwordless entry that signs in as an ordinary isolated demo account
- * and opens a READ-ONLY preview of the Admin dashboard, scoped to the demo
- * project. It is never the real ADMIN — creating users, resetting
- * passwords, changing roles and delegations require signing in as the
+ * passwordless entry that signs in as the dedicated presentation-Admin
+ * demo account and opens the normal Admin dashboard, scoped by the
+ * existing delegation system to the isolated presentation project. It is
+ * never the real ADMIN — creating new projects, companies, delegations and
+ * user accounts (and all real-project access) require signing in as the
  * Admin (the secondary link below).
  */
 const ADMIN_GROUP = "Admin";
@@ -78,7 +79,7 @@ export default function DemoLoginForm({ roles }: { roles: DemoRoleOption[] }) {
 
       <p className="text-xs text-foreground-secondary">
         {isAdmin
-          ? "Admin opens the Admin dashboard, read-only. Creating users, resetting passwords, changing roles and delegations require signing in as the Admin."
+          ? "Admin opens the Admin dashboard for the presentation project, with its departments, work items and Excel import. Creating new projects, companies, delegations and user accounts require signing in as the Admin."
           : "Contractor is the Supervisor role and Subcontractor the Foreman role. Changes you make are saved to the presentation project only."}
       </p>
 

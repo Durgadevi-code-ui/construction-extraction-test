@@ -89,11 +89,19 @@ export const DEMO_SLOTS: readonly DemoSlot[] = [
 
 export type DemoLoginConfig = {
   enabled: boolean;
-  /** Every demo email (slot accounts + DEMO_LOGIN_EMAILS). */
+  /** Every demo email (slot accounts + the Admin-door account + DEMO_LOGIN_EMAILS). */
   emails: Set<string>;
   projectIds: Set<string>;
   /** Slot key -> its account. Server-only: holds passwords. */
   accounts: Map<string, { email: string; password: string }>;
+  /** The dedicated presentation-Admin account (DEMO_LOGIN_ADMIN_DEMO_*),
+   * used only by the Admin door. NEVER a real ADMIN: it is an ordinary
+   * isolated @example.com demo account whose admin powers come solely from
+   * an admin DELEGATION confined to the presentation project(s)
+   * (checkDemoAccount allows exactly that, and nothing wider). Undefined
+   * when no presentation-Admin account is configured. Server-only: holds a
+   * password. */
+  adminAccount?: { email: string; password: string };
 };
 
 function list(value: string | undefined): string[] {
@@ -111,8 +119,20 @@ export function demoLoginConfig(env: Record<string, string | undefined> = proces
     const password = env[`${prefix}_PASSWORD`] ?? "";
     if (isDemoAccountEmail(email) && password) accounts.set(slot.key, { email, password });
   }
+  // The Admin door's dedicated account (DEMO_LOGIN_ADMIN_DEMO_*): a demo
+  // @example.com account like any other, held to the same isolation checks
+  // on every request — never a real ADMIN, never passwordless.
+  const adminEmail = normalizeEmail(env.DEMO_LOGIN_ADMIN_DEMO_EMAIL);
+  const adminPassword = env.DEMO_LOGIN_ADMIN_DEMO_PASSWORD ?? "";
+  const adminAccount =
+    isDemoAccountEmail(adminEmail) && adminPassword ? { email: adminEmail, password: adminPassword } : undefined;
+
   const emails = new Set(
-    [...list(env.DEMO_LOGIN_EMAILS).map(normalizeEmail), ...[...accounts.values()].map((a) => a.email)].filter(isDemoAccountEmail)
+    [
+      ...list(env.DEMO_LOGIN_EMAILS).map(normalizeEmail),
+      ...[...accounts.values()].map((a) => a.email),
+      ...(adminAccount ? [adminAccount.email] : []),
+    ].filter(isDemoAccountEmail)
   );
   const projectIds = new Set(list(env.DEMO_PROJECT_IDS));
   return {
@@ -120,6 +140,7 @@ export function demoLoginConfig(env: Record<string, string | undefined> = proces
     emails,
     projectIds,
     accounts,
+    adminAccount,
   };
 }
 
@@ -128,19 +149,23 @@ export function demoSlot(key: unknown): DemoSlot | undefined {
 }
 
 /**
- * The Demo Login "Admin" door. It is NOT a privileged account and never
- * signs in as the real ADMIN: it signs in as an ordinary isolated demo
- * account (the first configured slot) and lands on Admin Setup, which
- * renders a READ-ONLY, demo-scoped preview of the Admin dashboard
- * (app/admin/setup/page.tsx demoAdmin). It holds no admin role and no
- * delegation, so every /api/admin/* route still refuses it (isAdminUser)
- * — creating users, resetting passwords, changing roles and delegations
- * stay real-Admin-only. Returns the backing slot, or undefined when no
- * demo account is configured.
+ * The Demo Login "Admin" door account. It is NOT the real ADMIN and NOT a
+ * trade slot: it is the dedicated presentation-Admin demo account
+ * (DEMO_LOGIN_ADMIN_DEMO_*), an ordinary isolated @example.com account
+ * that signs in with its own password (never passwordless) and lands on
+ * the normal, delegation-driven Admin Setup. Its Admin capabilities come
+ * ENTIRELY from an admin delegation confined to the presentation
+ * project(s) (checkDemoAccount's delegation rule) and are scoped and
+ * enforced by the existing delegation system at every /api/admin/* route —
+ * so project creation, company management, delegation management, ADMIN
+ * administration and real-project access all stay real-Admin-only.
+ * Returns undefined when no presentation-Admin account is configured.
  */
 export const ADMIN_DOOR_KEY = "admin";
-export function adminDoorSlot(config: DemoLoginConfig = demoLoginConfig()): DemoSlot | undefined {
-  return DEMO_SLOTS.find((slot) => config.accounts.has(slot.key));
+export function adminDoorAccount(
+  config: DemoLoginConfig = demoLoginConfig()
+): { email: string; password: string } | undefined {
+  return config.adminAccount;
 }
 
 export type DemoRoleOption = Pick<DemoSlot, "key" | "group" | "team">;
@@ -164,7 +189,7 @@ export type DemoAccountCheck =
         | "admin"
         | "no-demo-role"
         | "role-outside-demo"
-        | "delegation"
+        | "delegation-outside-demo"
         | "wrong-role"
         | "project-not-isolated"
         | "lookup-failed";
@@ -212,9 +237,47 @@ export async function checkDemoAccount(
     if (!isolated) return { ok: false, reason: "project-not-isolated" };
 
     if (delegationError) return { ok: false, reason: "lookup-failed" };
-    // No demo account acts as an Admin of any kind: an active admin
-    // delegation (any scope, any permission) is refused outright.
-    if ((delegations ?? []).length > 0) return { ok: false, reason: "delegation" };
+    // A demo session may hold an admin delegation ONLY if every one of its
+    // active delegations is confined entirely to the configured (isolated)
+    // presentation project(s): it must name at least one project, and every
+    // project it names must be in config.projectIds. A delegation that
+    // reaches any other project — or that names no project at all — is not a
+    // safe presentation delegation, so the whole session is refused (fails
+    // closed). This is exactly what lets the dedicated presentation-Admin
+    // account (an admin delegation scoped to the presentation project) sign
+    // in with full, scoped Admin Setup, while still refusing any demo
+    // account whose delegation could touch real client data. Every ACTIVE
+    // delegation is checked, not one. Checked again on every request
+    // (demoSessionAllowed); a Revoked delegation is excluded by the status
+    // filter above, and expiry is honored independently at each route
+    // (hasDelegatedPermission.isCurrentlyActive). No demo account is ever a
+    // GLOBAL admin — users.user_role === 'ADMIN' is already refused above.
+    const activeDelegations = delegations ?? [];
+    if (activeDelegations.length > 0) {
+      const { data: delegationProjects, error: delegationProjectsError } = await admin
+        .from("delegation_projects")
+        .select("delegation_id, project_id")
+        .in(
+          "delegation_id",
+          activeDelegations.map((d) => d.delegation_id as string)
+        );
+      if (delegationProjectsError) return { ok: false, reason: "lookup-failed" };
+      const projectsByDelegation = new Map<string, string[]>();
+      for (const row of delegationProjects ?? []) {
+        const existing = projectsByDelegation.get(row.delegation_id as string) ?? [];
+        existing.push(row.project_id as string);
+        projectsByDelegation.set(row.delegation_id as string, existing);
+      }
+      for (const delegation of activeDelegations) {
+        const delegationProjectIds = projectsByDelegation.get(delegation.delegation_id as string) ?? [];
+        if (
+          delegationProjectIds.length === 0 ||
+          delegationProjectIds.some((projectId) => !config.projectIds.has(projectId))
+        ) {
+          return { ok: false, reason: "delegation-outside-demo" };
+        }
+      }
+    }
 
     if (slot) {
       // Only the slot's role, at least once in the slot's team (an account
@@ -259,19 +322,22 @@ export async function demoProjectsIsolated(admin: SupabaseClient, config: DemoLo
 }
 
 /**
- * A slot's login stopped accepting its configured password — e.g. a
- * visitor, who holds a real session for this shared account, changed it
+ * A demo account's login stopped accepting its configured password — e.g.
+ * a visitor, who holds a real session for this shared account, changed it
  * (or its email) through Supabase's API. The configured values are
  * authoritative for demo accounts, so they are put back, but only after
- * the account passes the isolation checks for this slot: a real user's
- * login is never touched, whatever the configuration says. Never throws.
+ * the account passes the isolation checks (for a trade slot, including its
+ * role/team): a real user's login is never touched, whatever the
+ * configuration says. Works for a trade slot (pass its `slot`) and for the
+ * Admin-door account (pass `slot` as undefined — the isolation checks still
+ * run, just without the per-slot role/team constraint). Never throws.
  */
 export async function repairDemoLogin(
   admin: SupabaseClient,
   config: DemoLoginConfig,
-  slot: DemoSlot
+  account: { email: string; password: string } | undefined,
+  slot?: DemoSlot
 ): Promise<boolean> {
-  const account = config.accounts.get(slot.key);
   if (!account) return false;
   try {
     const { data: profile, error } = await admin

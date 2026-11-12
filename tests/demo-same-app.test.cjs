@@ -169,6 +169,12 @@ const ADMIN_SESSION = { authUserId: "a9", userId: ADMIN, email: "admin@abc.test"
 const DELEGATE_SESSION = { authUserId: "a2", userId: DELEGATE, email: "contractor@abc.test", isDemo: false };
 const DEMO_CONTRACTOR_SESSION = { authUserId: "a1", userId: CONTRACTOR, email: "demo.contractor.electrical@example.com", isDemo: true };
 const DEMO_WORKER_SESSION = { authUserId: "a3", userId: WORKER, email: "demo.worker.electrical@example.com", isDemo: true };
+// The Demo Login "Admin" door: a DEMO session (isDemo: true) that holds the
+// same admin delegation a real delegated Contractor would (DELEGATE here) —
+// so the route authorization it meets is identical. isDemo only ever
+// reaches the inert read-only guard (off by default), never the permission
+// checks, which is exactly why a demo Admin gets full delegated CRUD.
+const DEMO_ADMIN_SESSION = { authUserId: "a2d", userId: DELEGATE, email: "demo.admin@example.com", isDemo: true };
 
 const req = (method, url, body) =>
   new NextRequest(`http://localhost${url}`, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -263,6 +269,39 @@ test("Contractors (demo or not) are not Admins: company, project, user and deleg
       assert.equal(r.db.writes.length, 0);
     }
   }
+});
+
+test("Demo Admin (delegated, within the presentation project): departments & work items create/edit save; company, project creation, user and delegation management refused", async () => {
+  // Tier 1 CRUD saves within the delegated (presentation) project.
+  let r = await as(DEMO_ADMIN_SESSION, () => projectsRoute.PATCH(req("PATCH", "/api/admin/projects", { projectId: P1, projectName: "Presentation (edited by demo admin)" })));
+  ok(r);
+  assert.equal(r.db.tables.projects.find((p) => p.project_id === P1).project_name, "Presentation (edited by demo admin)");
+  r = await as(DEMO_ADMIN_SESSION, () => departmentsRoute.POST(req("POST", "/api/admin/departments", { projectId: P1, departmentCode: "HVAC", departmentName: "HVAC Department" })));
+  ok(r);
+  assert.ok(r.db.tables.departments.some((d) => d.project_id === P1 && d.department_name === "HVAC Department"));
+  r = await as(DEMO_ADMIN_SESSION, () => workItemsRoute.POST(req("POST", "/api/admin/work-items", { departmentId: D_ELEC, lineItemNo: "77", descriptionOfWork: "Cable tray", plannedQuantity: 5, unitOfMeasure: "m" })));
+  ok(r);
+  assert.ok(r.db.tables.work_items.some((w) => w.department_id === D_ELEC && w.line_item_no === "77"));
+
+  // The excluded (real-Admin-only) operations stay refused — the genuine
+  // permission check, never a demo-specific rule — and write nothing.
+  for (const call of [
+    () => companiesRoute.POST(req("POST", "/api/admin/companies", { name: "New Co", code: "NEW" })),
+    () => projectsRoute.POST(req("POST", "/api/admin/projects", { companyId: COMPANY, projectCode: "NEW", projectName: "New" })),
+    () => usersRoute.POST(req("POST", "/api/admin/users", { email: "new.person@abc.test", role: "WORKER", projectId: P1, departmentId: D_ELEC })),
+    () => delegationsRoute.POST(req("POST", "/api/admin/delegations", { delegateUserId: CONTRACTOR, projectIds: [P1], permissions: ["WORK_ITEM_MANAGEMENT"], startsAt: "2026-01-01T00:00:00Z", endsAt: "2099-01-01T00:00:00Z" })),
+  ]) {
+    const refused = await as(DEMO_ADMIN_SESSION, call);
+    assert.equal(refused.status, 403, JSON.stringify(refused.body));
+    assert.doesNotMatch(refused.body.error ?? "", /read-only/, "the genuine permission check, not a demo rule");
+    assert.equal(refused.db.writes.length, 0);
+  }
+
+  // And never outside the delegated project — editing another company's
+  // project is refused even for the demo Admin.
+  const outside = await as(DEMO_ADMIN_SESSION, () => projectsRoute.PATCH(req("PATCH", "/api/admin/projects", { projectId: P2, projectName: "x" })));
+  assert.equal(outside.status, 403);
+  assert.equal(outside.db.writes.length, 0);
 });
 
 test("a demo Worker's own operation saves, like any Worker's", async () => {
