@@ -394,7 +394,7 @@ test("demo action: email/password fields in the request are ignored — only the
 });
 
 test("demo action: unknown, unconfigured or missing roles are refused without contacting Supabase", async () => {
-  for (const role of [undefined, "", "admin", "admin_all", "worker_hvac", "contractor_electrical", "ADMIN", "real.user@abc.test"]) {
+  for (const role of [undefined, "", "admin_all", "worker_hvac", "contractor_electrical", "ADMIN", "real.user@abc.test"]) {
     reset();
     const r = await enter(role === undefined ? {} : { role });
     assert.equal(r.error, "Choose one of the listed demo roles.", String(role));
@@ -419,14 +419,25 @@ test("demo action: an account that is not isolated, or not the slot's role, is s
   assert.deepEqual(signOutScopes, ["local"]);
 });
 
-test("demo action: a forged Admin post (admin_demo / admin) is refused — no sign-in, no session, no token", async () => {
-  for (const role of ["admin_demo", "admin"]) {
-    reset();
-    assert.match((await enter({ role })).error, /Choose one of the listed demo roles/, role);
-    assert.deepEqual(signInCalls, [], `${role}: no sign-in attempted`);
-    assert.equal(linkCalls.length + otpCalls.length, 0, "no one-time token, no passwordless session");
-    assert.equal(cookieJar.size, 0);
-  }
+test("Admin door: 'admin' opens the read-only preview as a demo account; 'admin_demo' is refused — never a passwordless real-Admin session", async () => {
+  // The Admin door signs in as an ordinary isolated demo account (the first
+  // configured slot) and lands on the read-only Admin Setup preview.
+  reset();
+  assert.deepEqual(await enter({ role: "admin" }), { redirect: "/admin/setup" });
+  assert.deepEqual(signInCalls, [{ email: WORKER, password: "pw-worker-1" }], "signs in as a demo account with its server-held password");
+  assert.equal(linkCalls.length + otpCalls.length, 0, "no one-time token — never a passwordless real-ADMIN session");
+
+  // A forged legacy key is still just an unknown role.
+  reset();
+  assert.match((await enter({ role: "admin_demo" })).error, /Choose one of the listed demo roles/);
+  assert.deepEqual(signInCalls, [], "admin_demo: no sign-in attempted");
+  assert.equal(linkCalls.length + otpCalls.length, 0);
+  assert.equal(cookieJar.size, 0);
+
+  // With no demo account configured, the door has nothing to back onto.
+  reset({ DEMO_LOGIN_WORKER_ELECTRICAL_EMAIL: "", DEMO_LOGIN_WORKER_ELECTRICAL_PASSWORD: "", DEMO_LOGIN_EMAILS: "demo.viewer@example.com" });
+  assert.match((await enter({ role: "admin" })).error, /Choose one of the listed demo roles/);
+  assert.deepEqual(signInCalls, [], "no backing account: no sign-in attempted");
 });
 
 test("demo action: every trade role goes to /workflow, which routes it to its own dashboard", async () => {
@@ -760,26 +771,34 @@ test("daily summary is a read: GET serves it without the write guard; POST kept 
 
 // ------------------------------------------------------------ Admin Setup: one Admin
 
-test("Admin Setup: one Admin — no demo Admin branch, label, view-only wrapping or slot", () => {
+test("Admin door: a read-only, demo-scoped Admin preview — account-management stays real-Admin-only", () => {
   const page = fs.readFileSync(path.join(ROOT, "app/admin/setup/page.tsx"), "utf8");
-  assert.doesNotMatch(page, /isDemo|presentationAdmin|DemoAdmin/i, "no demo branch in the page");
-  assert.match(page, /resolveAdminSetupAccess\(supabase, userId\)/, "access still resolved the same way");
-  assert.match(page, /access\.isRealAdmin \? listDelegations\(supabase, userId\)/, "the full delegation list stays real-Admin-only");
-  assert.match(page, /const visibleCompanies = access\.isRealAdmin \? companies : \[\];/, "real Admin sees every company; nobody else any");
+  // A demo session gets a read-only, demo-scoped preview — never real-Admin rights.
+  assert.match(page, /const demoAdmin = currentUser\.isDemo && !access\?\.isRealAdmin;/, "the demo preview is gated on the verified demo session, never real-Admin");
+  assert.match(page, /demoAdmin \? <ReadOnlyProvider readOnly>/, "the demo preview is always read-only");
+  assert.match(page, /resolveAdminSetupAccess\(supabase, userId\)/, "access still resolved the same way for real/delegated callers");
+  assert.match(page, /access\?\.isRealAdmin \? listDelegations\(supabase, userId\)/, "the full delegation list stays real-Admin-only");
+  assert.match(page, /demoLoginConfig\(\)\.projectIds/, "the demo preview is scoped to the configured (isolated) demo project(s)");
   const delegationSrc = fs.readFileSync(path.join(ROOT, "lib/delegation.ts"), "utf8");
   assert.match(delegationSrc, /export async function resolveAdminSetupAccess[\s\S]*?if \(await isAdminUser\(supabase, userId\)\)/, "real Admin path unchanged");
+
   const panel = fs.readFileSync(path.join(ROOT, "components/admin/AdminSetupPanel.tsx"), "utf8");
-  assert.doesNotMatch(panel, /presentationAdmin|Demo Admin|view-only here|Presentation workspace/, "no demo-only tabs, labels or view-only notes");
-  assert.match(panel, /roleLabel=\{isRealAdmin \? "Admin" : "Delegated Admin"\}/, "the Admin label is the real Admin's only");
+  // The demo preview shows project-management tabs only — never Users or Delegations.
+  const demoTabs = panel.match(/const DEMO_ADMIN_TABS: Tab\[\] = \[([^\]]*)\];/);
+  assert.ok(demoTabs, "DEMO_ADMIN_TABS is defined");
+  assert.doesNotMatch(demoTabs[1], /users|delegations/, "no account-management tabs in the demo preview");
+  assert.match(panel, /if \(demoAdmin\) return DEMO_ADMIN_TABS;/, "a demo preview sees only the project-management tabs");
+  assert.match(panel, /roleLabel=\{demoAdmin \|\| isRealAdmin \? "Admin" : "Delegated Admin"\}/, "the demo preview shows the same Admin dashboard, no demo label");
   assert.match(panel, /\{isRealAdmin && \(\s*<Link\s+href="\/dev\/extraction-test"/, "developer tool link still real-Admin-only");
-  const home = fs.readFileSync(path.join(ROOT, "app/workflow/page.tsx"), "utf8");
-  assert.doesNotMatch(home, /isDemo/, "no demo-only landing to Admin Setup");
-  for (const file of ["lib/demoAccess.ts", "app/demo-login/actions.ts", "components/auth/DemoLoginForm.tsx", "app/admin/setup/layout.tsx", "scripts/seed-presentation-project.mjs"]) {
-    assert.doesNotMatch(fs.readFileSync(path.join(ROOT, file), "utf8"), /admin_demo|Demo Admin|delegatedAdmin|Presentation Admin/, file);
-  }
+
+  // The Admin door backs onto an ordinary isolated demo account — never a real ADMIN.
+  const demoAccess = fs.readFileSync(path.join(ROOT, "lib/demoAccess.ts"), "utf8");
+  assert.match(demoAccess, /export const ADMIN_DOOR_KEY = "admin";/);
+  assert.match(demoAccess, /adminDoorSlot[\s\S]*?DEMO_SLOTS\.find\(\(slot\) => config\.accounts\.has\(slot\.key\)\)/, "the door backs onto a configured trade slot, not an ADMIN account");
+
   const form = fs.readFileSync(path.join(ROOT, "components/auth/DemoLoginForm.tsx"), "utf8");
-  assert.match(form, /"\/login\?next=\/admin\/setup"/, "Admin on Demo Login leads to the normal sign-in (the real Admin's own credentials)");
-  assert.match(form, /Continue to Admin Sign In/);
+  assert.match(form, /value=\{isAdmin \? ADMIN_DOOR_KEY : selectedKey\}/, "choosing Admin posts the Admin-door key — no password page");
+  assert.match(form, /"\/login\?next=\/admin\/setup"/, "a secondary link still lets the real Admin sign in to manage");
 });
 
 test("no passwordless session path: the real-Admin shortcut is gone from every caller", () => {

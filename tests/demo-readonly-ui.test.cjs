@@ -61,10 +61,10 @@ test("demo sessions: every input and button in a wrapped block is disabled, with
 test("demo sessions: WriteButton is disabled with the read-only reason; banner shown once per page", () => {
   const btn = render(true, h(WriteButton, { onClick: () => {} }, "Edit"));
   assert.match(btn, /disabled=""/);
-  assert.match(btn, /title="Demo access is read-only/);
+  assert.match(btn, /title="This view is read-only/);
   const banner = render(true, h(ReadOnlyBanner));
   assert.match(banner, /role="status"/);
-  assert.match(banner, /Demo · read-only\./);
+  assert.match(banner, /Read-only\./);
 });
 
 test("read-only wiring: every client component that sends a write is demo-aware", () => {

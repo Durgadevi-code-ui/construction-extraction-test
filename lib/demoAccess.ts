@@ -127,6 +127,22 @@ export function demoSlot(key: unknown): DemoSlot | undefined {
   return typeof key === "string" ? DEMO_SLOTS.find((slot) => slot.key === key) : undefined;
 }
 
+/**
+ * The Demo Login "Admin" door. It is NOT a privileged account and never
+ * signs in as the real ADMIN: it signs in as an ordinary isolated demo
+ * account (the first configured slot) and lands on Admin Setup, which
+ * renders a READ-ONLY, demo-scoped preview of the Admin dashboard
+ * (app/admin/setup/page.tsx demoAdmin). It holds no admin role and no
+ * delegation, so every /api/admin/* route still refuses it (isAdminUser)
+ * — creating users, resetting passwords, changing roles and delegations
+ * stay real-Admin-only. Returns the backing slot, or undefined when no
+ * demo account is configured.
+ */
+export const ADMIN_DOOR_KEY = "admin";
+export function adminDoorSlot(config: DemoLoginConfig = demoLoginConfig()): DemoSlot | undefined {
+  return DEMO_SLOTS.find((slot) => config.accounts.has(slot.key));
+}
+
 export type DemoRoleOption = Pick<DemoSlot, "key" | "group" | "team">;
 
 /** The slots this server can actually sign in as — no email, no password;

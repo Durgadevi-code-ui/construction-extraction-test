@@ -54,6 +54,12 @@ type Props = {
    * grants — irrelevant when isRealAdmin (a real Admin can always do
    * everything). Empty for a real Admin. */
   delegatedPermissions: DelegationPermission[];
+  /** Demo Login "Admin" door (app/admin/setup/page.tsx demoAdmin): a
+   * public, passwordless, isolated demo session shown a READ-ONLY preview
+   * of the Admin dashboard, scoped to the demo project(s). It holds no
+   * admin permission — the account-management tabs (Users, Delegations)
+   * are hidden and every write is refused server-side (isAdminUser). */
+  demoAdmin?: boolean;
   companies: Company[];
   projects: Project[];
   departments: Department[];
@@ -101,7 +107,12 @@ const TAB_HEADING: Record<Tab, string> = {
  * delegate with only e.g. USER_MANAGEMENT never even sees a Companies
  * or Work Items tab to try their luck against (backend still enforces
  * this independently — see every /api/admin/* route). */
-function visibleTabs(isRealAdmin: boolean, delegatedPermissions: DelegationPermission[]): Tab[] {
+const DEMO_ADMIN_TABS: Tab[] = ["companies", "projects", "departments", "workItems"];
+function visibleTabs(isRealAdmin: boolean, delegatedPermissions: DelegationPermission[], demoAdmin = false): Tab[] {
+  // Demo preview: the project-management tabs only, read-only. The
+  // account-management tabs (Users, Delegations) are never shown — those
+  // operations require the real Admin to sign in.
+  if (demoAdmin) return DEMO_ADMIN_TABS;
   if (isRealAdmin) return ALL_TABS.map((t) => t.id);
   return ALL_TABS.filter((t) => !t.adminOnly && t.permission && delegatedPermissions.includes(t.permission)).map(
     (t) => t.id
@@ -132,6 +143,7 @@ export default function AdminSetupPanel({
   userEmail,
   isRealAdmin,
   delegatedPermissions,
+  demoAdmin = false,
   companies,
   projects,
   departments,
@@ -142,7 +154,7 @@ export default function AdminSetupPanel({
   contractors,
   standardDepartments,
 }: Props) {
-  const shownTabs = visibleTabs(isRealAdmin, delegatedPermissions);
+  const shownTabs = visibleTabs(isRealAdmin, delegatedPermissions, demoAdmin);
   const [tab, setTab] = useState<Tab>(shownTabs[0] ?? "projects");
 
   if (shownTabs.length === 0) {
@@ -175,10 +187,12 @@ export default function AdminSetupPanel({
       activeTab={activeTab}
       onTabChange={(key) => setTab(key as Tab)}
       heading={TAB_HEADING[activeTab]}
-      subheading={isRealAdmin ? undefined : "Viewing under a temporary administrative delegation."}
+      subheading={
+        isRealAdmin || demoAdmin ? undefined : "Viewing under a temporary administrative delegation."
+      }
       userId={adminUserId}
       userEmail={userEmail}
-      roleLabel={isRealAdmin ? "Admin" : "Delegated Admin"}
+      roleLabel={demoAdmin || isRealAdmin ? "Admin" : "Delegated Admin"}
       actions={
         // Relocated from the removed top nav bar (see
         // components/workflow/TopNav.tsx) — same two links, same
@@ -204,6 +218,19 @@ export default function AdminSetupPanel({
         </div>
       }
     >
+      {demoAdmin && (
+        <div className="mb-3 rounded-lg border border-brand-border bg-brand-soft px-3 py-2 text-sm">
+          <span className="font-semibold">Read-only.</span>{" "}
+          <span className="text-foreground-secondary">
+            Creating users, resetting passwords, changing
+            roles and managing delegations require{" "}
+          </span>
+          <Link href="/login?next=/admin/setup" className="text-brand hover:underline">
+            signing in as the Admin
+          </Link>
+          .
+        </div>
+      )}
       {activeTab === "companies" && (
         <div className="space-y-4">
           <SystemOverviewStats companies={companies} projects={projects} users={users} />
@@ -214,6 +241,7 @@ export default function AdminSetupPanel({
         <ProjectsTab
           adminUserId={adminUserId}
           isRealAdmin={isRealAdmin}
+          demoAdmin={demoAdmin}
           projects={projects}
           companies={companies}
         />
@@ -222,6 +250,7 @@ export default function AdminSetupPanel({
         <DepartmentsTab
           adminUserId={adminUserId}
           isRealAdmin={isRealAdmin}
+          demoAdmin={demoAdmin}
           departments={departments}
           projects={projects}
           standardDepartments={standardDepartments}
@@ -386,11 +415,13 @@ function CompaniesTab({ adminUserId, companies }: { adminUserId: string; compani
 function ProjectsTab({
   adminUserId,
   isRealAdmin,
+  demoAdmin = false,
   projects,
   companies,
 }: {
   adminUserId: string;
   isRealAdmin: boolean;
+  demoAdmin?: boolean;
   projects: Project[];
   companies: Company[];
 }) {
@@ -418,13 +449,29 @@ function ProjectsTab({
     return (
       <div className="space-y-4">
         <p className="text-xs text-warning bg-warning-soft border border-warning-border rounded-lg p-2.5">
-          Creating a new project is Admin-only. You can edit the details of your delegated
-          project(s) below.
+          {demoAdmin
+            ? "Read-only. Creating or editing a project, or importing an Excel workbook, requires signing in as the Admin."
+            : "Creating a new project is Admin-only. You can edit the details of your delegated project(s) below."}
         </p>
-        <ListSection title="Delegated Projects" empty={projects.length === 0}>
-          {projects.map((p) => (
-            <ProjectRow key={p.projectId} adminUserId={adminUserId} project={p} />
-          ))}
+        <ListSection title={demoAdmin ? "Projects" : "Delegated Projects"} empty={projects.length === 0}>
+          {projects.map((p) =>
+            demoAdmin ? (
+              // Read-only row only — no write controls and no Excel
+              // import/download panel (those are Admin-only server-side).
+              <div
+                key={p.projectId}
+                className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-line last:border-0 text-sm"
+              >
+                <span className="font-medium">{p.projectName}</span>
+                <span className="text-foreground-secondary">
+                  ({p.projectCode}) — {p.companyName}
+                </span>
+                <StatusBadge status={p.status} />
+              </div>
+            ) : (
+              <ProjectRow key={p.projectId} adminUserId={adminUserId} project={p} />
+            )
+          )}
         </ListSection>
       </div>
     );
@@ -562,12 +609,14 @@ function ProjectRow({ adminUserId, project }: { adminUserId: string; project: Pr
 function DepartmentsTab({
   adminUserId,
   isRealAdmin,
+  demoAdmin = false,
   departments,
   projects,
   standardDepartments,
 }: {
   adminUserId: string;
   isRealAdmin: boolean;
+  demoAdmin?: boolean;
   departments: Department[];
   projects: Project[];
   standardDepartments: StandardDepartment[];
@@ -605,7 +654,7 @@ function DepartmentsTab({
       <ReadOnlyFieldset>
       <form onSubmit={handleSubmit} className="bg-white rounded-lg border border-line p-4 space-y-3">
         <h2 className="font-semibold text-foreground text-sm">New Department</h2>
-        {!isRealAdmin && (
+        {!isRealAdmin && !demoAdmin && (
           <p className="text-xs text-warning bg-warning-soft border border-warning-border rounded-lg p-2.5">
             Creating a department requires a whole-project Department Management delegation for
             the selected project — a delegation restricted to specific departments can edit them
@@ -638,7 +687,7 @@ function DepartmentsTab({
       </form>
       </ReadOnlyFieldset>
 
-      <ListSection title={isRealAdmin ? "Existing Departments" : "Delegated Departments"} empty={departments.length === 0}>
+      <ListSection title={isRealAdmin || demoAdmin ? "Existing Departments" : "Delegated Departments"} empty={departments.length === 0}>
         {departments.map((d) => (
           <DepartmentRow key={d.departmentId} adminUserId={adminUserId} department={d} />
         ))}

@@ -13,12 +13,16 @@ import { Label, Select } from "@/components/ui/Input";
  * availableDemoRoles); the form posts the chosen slot key and the server
  * resolves it, so editing the page can't reach any other account.
  *
- * "Admin" is not a demo account: the application has one Admin. Choosing
- * it leads to the normal email/password sign-in, which opens the full
- * Admin Setup after the real Admin signs in (/login?next=/admin/setup).
+ * "Admin" is the Admin door (lib/demoAccess.ts ADMIN_DOOR_KEY): a public,
+ * passwordless entry that signs in as an ordinary isolated demo account
+ * and opens a READ-ONLY preview of the Admin dashboard, scoped to the demo
+ * project. It is never the real ADMIN — creating users, resetting
+ * passwords, changing roles and delegations require signing in as the
+ * Admin (the secondary link below).
  */
 const ADMIN_GROUP = "Admin";
-const ADMIN_SIGN_IN = "/login?next=/admin/setup";
+const ADMIN_DOOR_KEY = "admin";
+const ADMIN_REAL_SIGN_IN = "/login?next=/admin/setup";
 
 export default function DemoLoginForm({ roles }: { roles: DemoRoleOption[] }) {
   const [state, formAction, pending] = useActionState<DemoLoginState, FormData>(enterDemoWorkspace, undefined);
@@ -46,7 +50,7 @@ export default function DemoLoginForm({ roles }: { roles: DemoRoleOption[] }) {
 
   return (
     <form action={formAction} className="space-y-4">
-      <input type="hidden" name="role" value={selectedKey} />
+      <input type="hidden" name="role" value={isAdmin ? ADMIN_DOOR_KEY : selectedKey} />
 
       <div>
         <Label htmlFor="demo-role">Role</Label>
@@ -74,7 +78,7 @@ export default function DemoLoginForm({ roles }: { roles: DemoRoleOption[] }) {
 
       <p className="text-xs text-foreground-secondary">
         {isAdmin
-          ? "Admin signs in with the Admin account's own email and password and opens the full Admin Setup, exactly as on the regular sign-in page."
+          ? "Admin opens the Admin dashboard, read-only. Creating users, resetting passwords, changing roles and delegations require signing in as the Admin."
           : "Contractor is the Supervisor role and Subcontractor the Foreman role. Changes you make are saved to the presentation project only."}
       </p>
 
@@ -84,17 +88,16 @@ export default function DemoLoginForm({ roles }: { roles: DemoRoleOption[] }) {
         </p>
       )}
 
-      {isAdmin ? (
-        <Link
-          href={ADMIN_SIGN_IN}
-          className="flex w-full items-center justify-center rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90"
-        >
-          Continue to Admin Sign In
-        </Link>
-      ) : (
-        <Button type="submit" disabled={pending || !selectedKey} className="w-full">
-          {pending ? "Signing in…" : "Sign In"}
-        </Button>
+      <Button type="submit" disabled={pending || (!isAdmin && !selectedKey)} className="w-full">
+        {pending ? "Signing in…" : "Sign In"}
+      </Button>
+
+      {isAdmin && (
+        <p className="text-center text-xs text-foreground-secondary">
+          <Link href={ADMIN_REAL_SIGN_IN} className="text-brand hover:underline">
+            Manage as the Admin (sign in)
+          </Link>
+        </p>
       )}
 
       <p className="text-center text-xs text-foreground-secondary">

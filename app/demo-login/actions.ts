@@ -7,7 +7,7 @@ import { createSupabaseServerClient } from "@/lib/supabaseServer";
 import { getSupabaseServiceRoleClient } from "@/lib/supabaseAdmin";
 import { RATE_LIMITS, checkRateLimit, clientIp, rateLimitMessage } from "@/lib/rateLimit";
 import { classifySignInError } from "@/lib/authAccounts";
-import { checkDemoAccount, demoLoginConfig, demoSlot, repairDemoLogin } from "@/lib/demoAccess";
+import { ADMIN_DOOR_KEY, adminDoorSlot, checkDemoAccount, demoLoginConfig, demoSlot, repairDemoLogin } from "@/lib/demoAccess";
 
 export type DemoLoginState = { error?: string } | undefined;
 
@@ -25,7 +25,14 @@ export async function enterDemoWorkspace(_prevState: DemoLoginState, formData: F
     return { error: "Demo login is not enabled in this environment." };
   }
 
-  const slot = demoSlot(formData.get("role"));
+  // The "Admin" door is not a privileged account: it signs in as an
+  // ordinary isolated demo account (adminDoorSlot) and lands on the
+  // read-only, demo-scoped Admin Setup preview. Account-management stays
+  // real-Admin-only — every /api/admin/* route re-checks isAdminUser, which
+  // a demo account never satisfies.
+  const roleKey = formData.get("role");
+  const isAdminDoor = roleKey === ADMIN_DOOR_KEY;
+  const slot = isAdminDoor ? adminDoorSlot(config) : demoSlot(roleKey);
   const account = slot ? config.accounts.get(slot.key) : undefined;
   if (!slot || !account) {
     return { error: "Choose one of the listed demo roles." };
@@ -82,9 +89,10 @@ export async function enterDemoWorkspace(_prevState: DemoLoginState, formData: F
     return { error: `This demo role is not set up as an isolated demo account, so demo access was refused. Contact your Administrator. (ref ${ref})` };
   }
 
-  logDemo(logRef(), slot.key, "session", "signed-in", { user: check.userId.slice(0, 8) });
-  // /workflow routes every role to its own dashboard (same as /login).
-  redirect("/workflow");
+  logDemo(logRef(), isAdminDoor ? "admin" : slot.key, "session", "signed-in", { user: check.userId.slice(0, 8) });
+  // Trade roles land on /workflow (routed to their own dashboard, same as
+  // /login); the Admin door lands on the read-only Admin Setup preview.
+  redirect(isAdminDoor ? "/admin/setup" : "/workflow");
 }
 
 /** One structured server log line per demo attempt: the slot key, never

@@ -29,4 +29,4 @@ export function isDemoReadOnlyMode(): boolean {
  * DEMO_LOGIN_READ_ONLY is on — proxy.ts, the per-route guard
  * (lib/demoWriteGuard.ts) and the disabled controls in the UI. */
 export const DEMO_READ_ONLY_MESSAGE =
-  "Demo access is read-only: you can view everything this role can see, but changes are not saved.";
+  "This view is read-only: you can see everything this role can, but changes are not saved.";

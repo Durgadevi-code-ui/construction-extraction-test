@@ -83,9 +83,9 @@ export function ReadOnlyBanner() {
     >
       <Eye className="mt-0.5 h-4 w-4 shrink-0 text-brand" strokeWidth={2} aria-hidden />
       <span>
-        <span className="font-semibold">Demo · read-only.</span>{" "}
+        <span className="font-semibold">Read-only.</span>{" "}
         <span className="text-foreground-secondary">
-          You see this role&apos;s real dashboards and project data. Saving, uploading, approving
+          You see this role&apos;s dashboards and project data. Saving, uploading, approving
           and messaging are turned off.
         </span>
       </span>
