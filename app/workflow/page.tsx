@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import { getSupabaseClient } from "@/lib/supabase";
 import { getUserContext } from "@/lib/workflow";
 import { isAdminUser, CONTRACTOR_ROLES } from "@/lib/authContext";
-import { resolveAdminSetupAccess } from "@/lib/delegation";
 import { requireCurrentUser } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -21,11 +20,6 @@ export default async function WorkflowHome() {
   const supabase = getSupabaseClient();
 
   if (await isAdminUser(supabase, currentUser.userId)) {
-    redirect("/admin/setup");
-  }
-  // The presentation Admin (Demo Login, lib/demoAccess.ts admin_demo) lands
-  // where an Admin does. Demo sessions only; everyone else is unaffected.
-  if (currentUser.isDemo && (await resolveAdminSetupAccess(supabase, currentUser.userId).catch(() => null))?.canEnter) {
     redirect("/admin/setup");
   }
 

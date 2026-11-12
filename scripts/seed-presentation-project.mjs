@@ -11,12 +11,10 @@
 // Safe to run again (idempotent): every record is found by its natural key
 // first and only created when missing. Nothing is ever deleted. The only
 // existing rows it changes belong to the Demo Login accounts themselves:
-//   - their Active project roles OUTSIDE the presentation project are set to
-//     status 'Removed' (the same soft-remove Admin Setup uses), so they leave
-//     the client projects; work they recorded there is not touched;
-//   - Active admin delegations held by the presentation Admin account
-//     (demo.admin) are set to 'Revoked' unless they cover exactly the
-//     presentation project.
+// their Active project roles OUTSIDE the presentation project are set to
+// status 'Removed' (the same soft-remove Admin Setup uses), so they leave
+// the client projects; work they recorded there is not touched.
+// There is no demo Admin: the one real Admin signs in on /login.
 // No real (non-@example.com) user, project, submission, assignment, chat
 // message or file is read for changes or written.
 import fs from "node:fs";
@@ -55,7 +53,6 @@ const WORK_ITEMS = {
 
 // The Demo Login slots (same keys/roles/teams as lib/demoAccess.ts DEMO_SLOTS).
 const SLOTS = [
-  { key: "admin_demo", role: "SUPERVISOR", department: "Electrical Department", delegatedAdmin: true },
   { key: "contractor_electrical", role: "SUPERVISOR", department: "Electrical Department" },
   { key: "contractor_plumbing", role: "SUPERVISOR", department: "Plumbing Department" },
   { key: "contractor_concrete", role: "SUPERVISOR", department: "Concrete Department" },
@@ -66,17 +63,6 @@ const SLOTS = [
   { key: "worker_plumbing", role: "WORKER", department: "Plumbing Department" },
   { key: "worker_concrete", role: "WORKER", department: "Concrete Department" },
 ];
-// The presentation Admin's delegation: every Admin Setup / workflow module
-// except USER_MANAGEMENT (lib/demoAccess.ts refuses that for demo accounts).
-const ADMIN_PERMISSIONS = [
-  "PROJECT_MANAGEMENT",
-  "DEPARTMENT_MANAGEMENT",
-  "WORK_ITEM_MANAGEMENT",
-  "WORKER_ASSIGNMENT",
-  "PLANNED_QUANTITY_MANAGEMENT",
-  "PROGRESS_REVIEW",
-];
-
 // ---------------------------------------------------------------- setup
 function loadEnv() {
   const text = fs.readFileSync(path.join(REPO_ROOT, ".env.local"), "utf8");
@@ -115,9 +101,7 @@ async function preflight() {
     if (user.status !== "Active") throw new Error(`${slot.key}: ${email} is not Active`);
     accounts.push({ ...slot, email, userId: user.user_id });
   }
-  const admins = must(await db.from("users").select("user_id").eq("user_role", "ADMIN").eq("status", "Active"), "look up Admin");
-  if (admins.length !== 1) throw new Error(`expected exactly one Active ADMIN to record as the delegation's grantor, found ${admins.length}`);
-  return { accounts, adminUserId: admins[0].user_id };
+  return { accounts };
 }
 
 // ---------------------------------------------------------------- 2. find-or-create helpers
@@ -139,7 +123,7 @@ async function findOrCreate(table, match, insert, label, idColumn) {
 // ---------------------------------------------------------------- run
 async function main() {
   console.log(APPLY ? "APPLYING presentation seed\n" : "DRY RUN — nothing is written (add --apply to make these changes)\n");
-  const { accounts, adminUserId } = await preflight();
+  const { accounts } = await preflight();
   note("check", `${accounts.length} Demo Login accounts found, all @example.com, linked, Active, none ADMIN`);
 
   // Company, project, departments
@@ -219,50 +203,6 @@ async function main() {
           "assign work item"
         );
       }
-    }
-  }
-
-  // Presentation Admin delegation
-  const presAdmin = accounts.find((a) => a.delegatedAdmin);
-  const delegations = must(
-    await db.from("admin_delegations").select("delegation_id, delegation_projects(project_id), delegation_departments(department_id)").eq("delegate_user_id", presAdmin.userId).eq("status", "Active"),
-    "look up delegations"
-  );
-  const coversExactly = (d) =>
-    d.delegation_projects.length === 1 && d.delegation_projects[0].project_id === projectId && d.delegation_departments.length === 0;
-  let keep = delegations.find(coversExactly);
-  for (const d of delegations.filter((d) => d !== keep)) {
-    note("revoke", `${presAdmin.email}: delegation ${d.delegation_id.slice(0, 8)} (covers other projects) -> 'Revoked'`);
-    if (APPLY) must(await db.from("admin_delegations").update({ status: "Revoked", revoked_at: new Date().toISOString() }).eq("delegation_id", d.delegation_id), "revoke delegation");
-  }
-  if (keep) {
-    note("exists", `${presAdmin.email}: delegation over the presentation project`);
-    const perms = must(await db.from("delegation_permissions").select("permission").eq("delegation_id", keep.delegation_id), "read permissions").map((p) => p.permission);
-    for (const p of ADMIN_PERMISSIONS.filter((p) => !perms.includes(p))) {
-      note("add", `delegation permission ${p}`);
-      if (APPLY) must(await db.from("delegation_permissions").insert({ delegation_id: keep.delegation_id, permission: p }), "add permission");
-    }
-  } else {
-    note("create", `${presAdmin.email}: delegation over the presentation project only, permissions ${ADMIN_PERMISSIONS.join(", ")}, valid 1 year`);
-    if (APPLY) {
-      const now = new Date();
-      const created = must(
-        await db
-          .from("admin_delegations")
-          .insert({
-            admin_user_id: adminUserId,
-            delegate_user_id: presAdmin.userId,
-            status: "Active",
-            starts_at: now.toISOString(),
-            ends_at: new Date(now.getTime() + 365 * 24 * 3600 * 1000).toISOString(),
-            reason: "Presentation Admin for Demo Login (presentation project only)",
-          })
-          .select("delegation_id")
-          .single(),
-        "create delegation"
-      );
-      must(await db.from("delegation_projects").insert({ delegation_id: created.delegation_id, project_id: projectId }), "delegation project");
-      must(await db.from("delegation_permissions").insert(ADMIN_PERMISSIONS.map((permission) => ({ delegation_id: created.delegation_id, permission }))), "delegation permissions");
     }
   }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import type {
   Company,
   Project,
@@ -34,14 +34,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import Link from "next/link";
 import DashboardShell, { type ShellTab } from "@/components/workflow/DashboardShell";
 import ChatPanel from "@/components/workflow/ChatPanel";
-import {
-  READ_ONLY_MESSAGE,
-  ReadOnlyFieldset,
-  ReadOnlyNote,
-  ReadOnlyProvider,
-  WriteButton,
-  useReadOnly,
-} from "@/components/ui/ReadOnly";
+import { READ_ONLY_MESSAGE, ReadOnlyFieldset, WriteButton, useReadOnly } from "@/components/ui/ReadOnly";
 
 type Props = {
   adminUserId: string;
@@ -57,11 +50,6 @@ type Props = {
    * filtered to the caller's scope server-side (app/admin/setup/page.tsx)
    * — this component never re-derives or trusts a wider scope. */
   isRealAdmin: boolean;
-  /** The Demo Login presentation Admin (lib/demoAccess.ts admin_demo): a
-   * delegated caller shown the Admin screens and navigation. Every list is
-   * still scoped server-side; modules its delegation doesn't grant are
-   * rendered read-only. False for everyone else (no change for them). */
-  presentationAdmin?: boolean;
   /** Which administrative permissions an active delegation currently
    * grants — irrelevant when isRealAdmin (a real Admin can always do
    * everything). Empty for a real Admin. */
@@ -113,8 +101,8 @@ const TAB_HEADING: Record<Tab, string> = {
  * delegate with only e.g. USER_MANAGEMENT never even sees a Companies
  * or Work Items tab to try their luck against (backend still enforces
  * this independently — see every /api/admin/* route). */
-function visibleTabs(isRealAdmin: boolean, delegatedPermissions: DelegationPermission[], presentationAdmin = false): Tab[] {
-  if (isRealAdmin || presentationAdmin) return ALL_TABS.map((t) => t.id);
+function visibleTabs(isRealAdmin: boolean, delegatedPermissions: DelegationPermission[]): Tab[] {
+  if (isRealAdmin) return ALL_TABS.map((t) => t.id);
   return ALL_TABS.filter((t) => !t.adminOnly && t.permission && delegatedPermissions.includes(t.permission)).map(
     (t) => t.id
   );
@@ -143,7 +131,6 @@ export default function AdminSetupPanel({
   adminUserId,
   userEmail,
   isRealAdmin,
-  presentationAdmin = false,
   delegatedPermissions,
   companies,
   projects,
@@ -155,23 +142,7 @@ export default function AdminSetupPanel({
   contractors,
   standardDepartments,
 }: Props) {
-  const shownTabs = visibleTabs(isRealAdmin, delegatedPermissions, presentationAdmin);
-  // Presentation Admin only: a tab its delegation doesn't grant is shown
-  // (same navigation as an Admin) but read-only. Never true for real users.
-  const viewOnly = (id: Tab): boolean => {
-    if (!presentationAdmin) return false;
-    const def = ALL_TABS.find((t) => t.id === id);
-    return !def || !!def.adminOnly || !def.permission || !delegatedPermissions.includes(def.permission);
-  };
-  const scoped = (id: Tab, content: ReactNode): ReactNode =>
-    viewOnly(id) ? (
-      <ReadOnlyProvider readOnly>
-        <ReadOnlyNote>Shown for the presentation: this Admin module is view-only here, limited to the presentation project.</ReadOnlyNote>
-        {content}
-      </ReadOnlyProvider>
-    ) : (
-      content
-    );
+  const shownTabs = visibleTabs(isRealAdmin, delegatedPermissions);
   const [tab, setTab] = useState<Tab>(shownTabs[0] ?? "projects");
 
   if (shownTabs.length === 0) {
@@ -204,16 +175,10 @@ export default function AdminSetupPanel({
       activeTab={activeTab}
       onTabChange={(key) => setTab(key as Tab)}
       heading={TAB_HEADING[activeTab]}
-      subheading={
-        isRealAdmin
-          ? undefined
-          : presentationAdmin
-            ? "Presentation workspace: demo data only."
-            : "Viewing under a temporary administrative delegation."
-      }
+      subheading={isRealAdmin ? undefined : "Viewing under a temporary administrative delegation."}
       userId={adminUserId}
       userEmail={userEmail}
-      roleLabel={isRealAdmin || presentationAdmin ? "Admin" : "Delegated Admin"}
+      roleLabel={isRealAdmin ? "Admin" : "Delegated Admin"}
       actions={
         // Relocated from the removed top nav bar (see
         // components/workflow/TopNav.tsx) — same two links, same
@@ -239,67 +204,55 @@ export default function AdminSetupPanel({
         </div>
       }
     >
-      {activeTab === "companies" &&
-        scoped(
-          "companies",
-          <div className="space-y-4">
-            <SystemOverviewStats companies={companies} projects={projects} users={users} />
-            <CompaniesTab adminUserId={adminUserId} companies={companies} />
-          </div>
-        )}
-      {activeTab === "projects" &&
-        scoped(
-          "projects",
-          <ProjectsTab
-            adminUserId={adminUserId}
-            isRealAdmin={isRealAdmin}
-            projects={projects}
-            companies={companies}
-          />
-        )}
-      {activeTab === "departments" &&
-        scoped(
-          "departments",
-          <DepartmentsTab
-            adminUserId={adminUserId}
-            isRealAdmin={isRealAdmin}
-            departments={departments}
-            projects={projects}
-            standardDepartments={standardDepartments}
-          />
-        )}
-      {activeTab === "workItems" &&
-        scoped(
-          "workItems",
-          <WorkItemsTab
-            adminUserId={adminUserId}
-            workItems={workItems}
-            departments={departments}
-            workItemDependencies={workItemDependencies}
-          />
-        )}
-      {activeTab === "users" &&
-        scoped(
-          "users",
-          <UsersTab
-            adminUserId={adminUserId}
-            isRealAdmin={isRealAdmin}
-            users={users}
-            departments={departments}
-            projects={projects}
-          />
-        )}
-      {activeTab === "delegations" &&
-        scoped(
-          "delegations",
-          <DelegationManager
-            adminUserId={adminUserId}
-            delegations={delegations}
-            contractors={contractors}
-            projects={projects}
-            departments={departments}
-          />
-        )}
+      {activeTab === "companies" && (
+        <div className="space-y-4">
+          <SystemOverviewStats companies={companies} projects={projects} users={users} />
+          <CompaniesTab adminUserId={adminUserId} companies={companies} />
+        </div>
+      )}
+      {activeTab === "projects" && (
+        <ProjectsTab
+          adminUserId={adminUserId}
+          isRealAdmin={isRealAdmin}
+          projects={projects}
+          companies={companies}
+        />
+      )}
+      {activeTab === "departments" && (
+        <DepartmentsTab
+          adminUserId={adminUserId}
+          isRealAdmin={isRealAdmin}
+          departments={departments}
+          projects={projects}
+          standardDepartments={standardDepartments}
+        />
+      )}
+      {activeTab === "workItems" && (
+        <WorkItemsTab
+          adminUserId={adminUserId}
+          workItems={workItems}
+          departments={departments}
+          workItemDependencies={workItemDependencies}
+        />
+      )}
+      {activeTab === "users" && (
+        <UsersTab
+          adminUserId={adminUserId}
+          isRealAdmin={isRealAdmin}
+          users={users}
+          departments={departments}
+          projects={projects}
+        />
+      )}
+      {activeTab === "delegations" && (
+        <DelegationManager
+          adminUserId={adminUserId}
+          delegations={delegations}
+          contractors={contractors}
+          projects={projects}
+          departments={departments}
+        />
+      )}
 
       {activeTab === "communication" && (
         <ChatPanel projects={projects.map((p) => ({ projectId: p.projectId, projectName: p.projectName }))} />

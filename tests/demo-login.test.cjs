@@ -25,7 +25,7 @@ function stubFile(file, exports) {
 // ------------------------------------------------------------ fake data
 
 const WORKER = "demo.worker.electrical@example.com";
-const PRES_ADMIN = "demo.admin@example.com"; // presentation Admin: a Contractor-role demo account with a scoped delegation
+const FORMER_ADMIN = "demo.admin@example.com"; // former demo Admin: still in the database (with a delegation), no longer a slot
 // DEMO_PROJECT / SECOND_PROJECT: presentation projects (demo members only);
 // REAL_PROJECT: a client project they must never reach.
 const DEMO_PROJECT = "existing-project";
@@ -36,7 +36,7 @@ const ENV = {
   DEMO_PROJECT_IDS: `${DEMO_PROJECT},${SECOND_PROJECT}`,
   DEMO_LOGIN_WORKER_ELECTRICAL_EMAIL: ` ${WORKER.toUpperCase()} `,
   DEMO_LOGIN_WORKER_ELECTRICAL_PASSWORD: "pw-worker-1",
-  DEMO_LOGIN_ADMIN_DEMO_EMAIL: PRES_ADMIN,
+  DEMO_LOGIN_ADMIN_DEMO_EMAIL: FORMER_ADMIN,
   DEMO_LOGIN_ADMIN_DEMO_PASSWORD: "pw-admin-1",
 };
 let db;
@@ -45,7 +45,7 @@ function seed() {
   db = {
     users: [
       { user_id: "u-w", auth_user_id: "a-w", user_mail: WORKER, user_role: "WORKER", status: "Active" },
-      { user_id: "u-adm", auth_user_id: "a-adm", user_mail: PRES_ADMIN, user_role: "SUPERVISOR", status: "Active" },
+      { user_id: "u-adm", auth_user_id: "a-adm", user_mail: FORMER_ADMIN, user_role: "SUPERVISOR", status: "Active" },
       { user_id: "u-real", auth_user_id: "a-real", user_mail: "real.user@abc.test", user_role: "WORKER", status: "Active" },
       { user_id: "u-admin", auth_user_id: "a-admin", user_mail: "boss@abc.test", user_role: "ADMIN", status: "Active" },
     ],
@@ -75,7 +75,7 @@ function seed() {
   };
   logins = {
     [WORKER]: { id: "a-w", password: "pw-worker-1" },
-    [PRES_ADMIN]: { id: "a-adm", password: "pw-admin-1" },
+    [FORMER_ADMIN]: { id: "a-adm", password: "pw-admin-1" },
     "real.user@abc.test": { id: "a-real", password: "their-real-password" },
   };
 }
@@ -178,20 +178,18 @@ test("demo config: off unless enabled with a demo project and at least one confi
   assert.equal(demoLoginConfig({ DEMO_MODE: "true", DEMO_USER_ADMIN_EMAIL: "boss@example.com", DEMO_USER_WORKER_ELECTRICAL_EMAIL: "real.user@abc.test" }).enabled, false);
   const c = config();
   assert.equal(c.enabled, true);
-  assert.deepEqual([...c.emails].sort(), [PRES_ADMIN, WORKER], "emails are trimmed and lower-cased");
+  assert.deepEqual([...c.emails], [WORKER], "emails are trimmed and lower-cased; the old admin_demo settings are ignored");
 });
 
 test("demo picker: only configured roles, in a fixed order, with no email or password", () => {
   const roles = availableDemoRoles(config());
-  assert.deepEqual(roles, [
-    { key: "admin_demo", group: "Admin", team: "Presentation Admin" },
-    { key: "worker_electrical", group: "Worker", team: "Electrical" },
-  ]);
+  assert.deepEqual(roles, [{ key: "worker_electrical", group: "Worker", team: "Electrical" }], "no demo Admin, even with its old variables set");
   assert.doesNotMatch(JSON.stringify(roles), /@|pw-/);
   assert.deepEqual(availableDemoRoles(config({ DEMO_LOGIN_ENABLED: "false" })), []);
-  assert.deepEqual([...new Set(DEMO_SLOTS.map((s) => s.group))], ["Admin", "Contractor", "Subcontractor", "Worker"]);
+  assert.deepEqual([...new Set(DEMO_SLOTS.map((s) => s.group))], ["Contractor", "Subcontractor", "Worker"]);
+  assert.equal(DEMO_SLOTS.length, 9, "the 9 trade roles");
   assert.ok(DEMO_SLOTS.every((s) => s.role !== "ADMIN"), "no slot is ever a real ADMIN account");
-  assert.equal(demoSlot("admin_demo").delegatedAdmin, true, "the presentation Admin is a delegated demo account");
+  assert.equal(demoSlot("admin_demo"), undefined, "the demo Admin slot is gone");
   assert.equal(demoSlot("admin_all"), undefined, "old real-account slot keys don't exist");
   assert.equal(demoSlot({ toString: () => "worker_electrical" }), undefined);
 });
@@ -204,26 +202,17 @@ test("demo check: isolated role accounts pass, with and without their slot", asy
   assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), worker, W_SLOT), { ok: true, userId: "u-w" });
 });
 
-test("presentation Admin: a demo account with a delegation over presentation projects only — never an ADMIN", async () => {
-  const adm = { authUserId: "a-adm", email: PRES_ADMIN };
-  const A_SLOT = demoSlot("admin_demo");
+test("one Admin: the former demo Admin account (a Contractor with a delegation) is refused everywhere", async () => {
   seed();
-  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), adm, A_SLOT), { ok: true, userId: "u-adm" });
-  seed();
-  db.admin_delegations[0].status = "Revoked";
-  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), adm, A_SLOT), { ok: false, reason: "missing-delegation" });
-  seed();
-  db.users.find((u) => u.user_id === "u-adm").user_role = "ADMIN";
-  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), adm, A_SLOT), { ok: false, reason: "admin" }, "a demo account is never a real ADMIN");
-  for (const [label, mutate] of [
-    ["delegation reaching a client project", () => db.delegation_projects.push({ delegation_id: "d-demo", project_id: REAL_PROJECT })],
-    ["user management", () => db.delegation_permissions.push({ delegation_id: "d-demo", permission: "USER_MANAGEMENT" })],
-    ["delegation with no project", () => (db.delegation_projects.length = 0)],
-  ]) {
-    seed();
-    mutate();
-    assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), adm, A_SLOT), { ok: false, reason: "delegation" }, label);
-  }
+  const adm = { authUserId: "a-adm", email: FORMER_ADMIN };
+  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), adm), { ok: false, reason: "not-demo-email" }, "not configured any more");
+  assert.deepEqual(
+    await checkDemoAccount(fakeAdmin(), config({ DEMO_LOGIN_EMAILS: FORMER_ADMIN }), adm),
+    { ok: false, reason: "delegation" },
+    "even if listed again, a delegated-admin demo account is refused"
+  );
+  const { result } = await quiet(() => demoSessionAllowed(fakeAdmin(), { authUserId: "a-adm", authEmail: FORMER_ADMIN, appEmail: FORMER_ADMIN }, config()));
+  assert.equal(result, false, "a session for it (e.g. signed in on /login) gets no app access");
 });
 
 test("demo check: every way an account could reach real data is refused", async () => {
@@ -248,8 +237,9 @@ test("demo check: every way an account could reach real data is refused", async 
   assert.equal((await checkDemoAccount(fakeAdmin(), config(), worker)).ok, true);
 });
 
-test("demo check: only the Admin slot may hold a delegation, and never one reaching a client project or user management", async () => {
+test("demo check: any active admin delegation on a demo account is refused — no demo account is an Admin of any kind", async () => {
   for (const [label, projectId, permission] of [
+    ["delegation inside the demo project", DEMO_PROJECT, "WORK_ITEM_MANAGEMENT"],
     ["delegation reaching a real project", REAL_PROJECT, "PROJECT_MANAGEMENT"],
     ["user management", DEMO_PROJECT, "USER_MANAGEMENT"],
   ]) {
@@ -259,11 +249,6 @@ test("demo check: only the Admin slot may hold a delegation, and never one reach
     db.delegation_permissions.push({ delegation_id: "d-w", permission });
     assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), worker), { ok: false, reason: "delegation" }, label);
   }
-  seed();
-  db.admin_delegations.push({ delegation_id: "d-w", delegate_user_id: "u-w", status: "Active" });
-  db.delegation_projects.push({ delegation_id: "d-w", project_id: DEMO_PROJECT });
-  db.delegation_permissions.push({ delegation_id: "d-w", permission: "WORK_ITEM_MANAGEMENT" });
-  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), worker, W_SLOT), { ok: false, reason: "wrong-role" }, "a Worker slot account holding a delegation");
   // A revoked delegation doesn't count.
   seed();
   db.admin_delegations.push({ delegation_id: "d-w", delegate_user_id: "u-w", status: "Revoked" });
@@ -286,7 +271,7 @@ test("demo check: a slot only accepts an account with exactly its role and team"
   assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), worker, W_SLOT), { ok: true, userId: "u-w" }, "second configured project");
   seed();
   db.admin_delegations[0].delegate_user_id = "u-w";
-  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), worker, W_SLOT), { ok: false, reason: "wrong-role" }, "a non-Admin slot account with a delegation");
+  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), worker, W_SLOT), { ok: false, reason: "delegation" }, "a slot account holding a delegation");
 });
 
 test("demo check: presentation projects only — one real member in a configured project refuses every demo account", async () => {
@@ -294,7 +279,6 @@ test("demo check: presentation projects only — one real member in a configured
   assert.equal((await checkDemoAccount(fakeAdmin(), config(), worker)).ok, true, "real people in other projects don't matter");
   db.user_project_roles.push({ user_id: "u-real", project_id: DEMO_PROJECT, department_id: "dep-el", role: "WORKER", status: "Active" });
   assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), worker), { ok: false, reason: "project-not-isolated" });
-  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), { authUserId: "a-adm", email: PRES_ADMIN }), { ok: false, reason: "project-not-isolated" });
   // An inactive (removed) real membership doesn't count.
   db.user_project_roles[db.user_project_roles.length - 1].status = "Removed";
   assert.equal((await checkDemoAccount(fakeAdmin(), config(), worker)).ok, true);
@@ -435,12 +419,19 @@ test("demo action: an account that is not isolated, or not the slot's role, is s
   assert.deepEqual(signOutScopes, ["local"]);
 });
 
-test("demo action: the presentation Admin signs in with its own demo account and opens Admin Setup — never the real Admin", async () => {
+test("demo action: a forged Admin post (admin_demo / admin) is refused — no sign-in, no session, no token", async () => {
+  for (const role of ["admin_demo", "admin"]) {
+    reset();
+    assert.match((await enter({ role })).error, /Choose one of the listed demo roles/, role);
+    assert.deepEqual(signInCalls, [], `${role}: no sign-in attempted`);
+    assert.equal(linkCalls.length + otpCalls.length, 0, "no one-time token, no passwordless session");
+    assert.equal(cookieJar.size, 0);
+  }
+});
+
+test("demo action: every trade role goes to /workflow, which routes it to its own dashboard", async () => {
   reset();
-  assert.deepEqual(await enter({ role: "admin_demo" }), { redirect: "/admin/setup" });
-  assert.deepEqual(signInCalls, [{ email: PRES_ADMIN, password: "pw-admin-1" }]);
-  assert.equal(linkCalls.length + otpCalls.length, 0, "no one-time token, no passwordless session");
-  assert.equal(cookieJar.size, 0);
+  assert.deepEqual(await enter({ role: "worker_electrical" }), { redirect: "/workflow" });
 });
 
 test("demo action: refused when a configured project has a real member (presentation data only)", async () => {
@@ -767,22 +758,28 @@ test("daily summary is a read: GET serves it without the write guard; POST kept 
   assert.ok(panel.includes("fetch(`/api/workflow/daily-summary?${params.toString()}`)"), "the dashboard reads it with GET");
 });
 
-// ------------------------------------------------------------ Admin Setup: presentation Admin
+// ------------------------------------------------------------ Admin Setup: one Admin
 
-test("Admin Setup: the presentation Admin gets the Admin screens, scoped; the real Admin path is unchanged", () => {
+test("Admin Setup: one Admin — no demo Admin branch, label, view-only wrapping or slot", () => {
   const page = fs.readFileSync(path.join(ROOT, "app/admin/setup/page.tsx"), "utf8");
+  assert.doesNotMatch(page, /isDemo|presentationAdmin|DemoAdmin/i, "no demo branch in the page");
   assert.match(page, /resolveAdminSetupAccess\(supabase, userId\)/, "access still resolved the same way");
-  assert.match(page, /const presentationAdmin = currentUser\.isDemo && !access\.isRealAdmin;/, "only a demo session that is not a real Admin");
-  assert.match(page, /access\.isRealAdmin \? listDelegations\(supabase, userId\)/, "the delegation list stays real-Admin-only");
-  assert.match(page, /const visibleCompanies = access\.isRealAdmin\s+\? companies/, "real Admin sees every company, as before");
+  assert.match(page, /access\.isRealAdmin \? listDelegations\(supabase, userId\)/, "the full delegation list stays real-Admin-only");
+  assert.match(page, /const visibleCompanies = access\.isRealAdmin \? companies : \[\];/, "real Admin sees every company; nobody else any");
   const delegationSrc = fs.readFileSync(path.join(ROOT, "lib/delegation.ts"), "utf8");
   assert.match(delegationSrc, /export async function resolveAdminSetupAccess[\s\S]*?if \(await isAdminUser\(supabase, userId\)\)/, "real Admin path unchanged");
   const panel = fs.readFileSync(path.join(ROOT, "components/admin/AdminSetupPanel.tsx"), "utf8");
-  assert.match(panel, /if \(isRealAdmin \|\| presentationAdmin\) return ALL_TABS\.map/, "same navigation as an Admin");
-  assert.match(panel, /if \(!presentationAdmin\) return false;/, "view-only wrapping never applies to anyone else");
+  assert.doesNotMatch(panel, /presentationAdmin|Demo Admin|view-only here|Presentation workspace/, "no demo-only tabs, labels or view-only notes");
+  assert.match(panel, /roleLabel=\{isRealAdmin \? "Admin" : "Delegated Admin"\}/, "the Admin label is the real Admin's only");
   assert.match(panel, /\{isRealAdmin && \(\s*<Link\s+href="\/dev\/extraction-test"/, "developer tool link still real-Admin-only");
   const home = fs.readFileSync(path.join(ROOT, "app/workflow/page.tsx"), "utf8");
-  assert.match(home, /if \(currentUser\.isDemo && \(await resolveAdminSetupAccess/, "only demo sessions take the extra landing check");
+  assert.doesNotMatch(home, /isDemo/, "no demo-only landing to Admin Setup");
+  for (const file of ["lib/demoAccess.ts", "app/demo-login/actions.ts", "components/auth/DemoLoginForm.tsx", "app/admin/setup/layout.tsx", "scripts/seed-presentation-project.mjs"]) {
+    assert.doesNotMatch(fs.readFileSync(path.join(ROOT, file), "utf8"), /admin_demo|Demo Admin|delegatedAdmin|Presentation Admin/, file);
+  }
+  const form = fs.readFileSync(path.join(ROOT, "components/auth/DemoLoginForm.tsx"), "utf8");
+  assert.match(form, /"\/login\?next=\/admin\/setup"/, "Admin on Demo Login leads to the normal sign-in (the real Admin's own credentials)");
+  assert.match(form, /Continue to Admin Sign In/);
 });
 
 test("no passwordless session path: the real-Admin shortcut is gone from every caller", () => {

@@ -25,13 +25,11 @@ import { isDemoAccountEmail } from "./demoEmail";
  *     The browser sends a slot KEY from the closed list below — never an
  *     email, a password or a user id. No magic link, no session minted
  *     with the service-role key.
- *   - The presentation "Admin" is never the real ADMIN account and never
- *     holds users.user_role = 'ADMIN' (an ADMIN sees and controls every
- *     company, project and user in this shared database). It is a
- *     Contractor-role demo account holding an admin delegation scoped to
- *     the configured presentation project(s) only, without
- *     USER_MANAGEMENT; Admin Setup shows it the Admin screens filtered to
- *     that scope (app/admin/setup/page.tsx presentationAdmin).
+ *   - There is no demo Admin. The application has one Admin: the real
+ *     ADMIN account, with the one Admin permission system — never a
+ *     Contractor or a delegate standing in for an Admin. Choosing "Admin"
+ *     on Demo Login leads to the normal email/password sign-in
+ *     (/login?next=/admin/setup).
  *
  * Configuration (server-only; off unless all of it is present):
  *   DEMO_LOGIN_ENABLED=true
@@ -50,13 +48,13 @@ import { isDemoAccountEmail } from "./demoEmail";
  *   3. at least one Active project role, every one of them in a configured
  *      project — non-admin data access in this app is scoped by exactly
  *      these rows (lib/authContext.ts getUserContext);
- *   4. any Active admin delegation covers configured projects only and
- *      does not include USER_MANAGEMENT;
+ *   4. no Active admin delegation at all (no demo account is an Admin or
+ *      a delegated Admin);
  *   5. every configured project is presentation data: its Active members
  *      are demo (@example.com) accounts only, so a demo session (which can
  *      write) never reaches a project a real person works in;
  *   6. at sign-in only: the account holds only the slot's role, in the
- *      slot's team, and only the Admin slot holds a delegation.
+ *      slot's team.
  * Demo sessions use the application exactly as their role allows
  * (DEMO_LOGIN_READ_ONLY=true is an emergency read-only switch,
  * lib/demoEmail.ts). Checks 1–4 run again on every request (demoSessionAllowed, from
@@ -67,20 +65,17 @@ import { isDemoAccountEmail } from "./demoEmail";
 export type DemoSlot = {
   key: string;
   /** Role group shown in the picker. */
-  group: "Admin" | "Contractor" | "Subcontractor" | "Worker";
+  group: "Contractor" | "Subcontractor" | "Worker";
   /** Trade / team shown in the picker; also the account's department name. */
   team: string;
   /** The account's user_project_roles.role. */
   role: "SUPERVISOR" | "FOREMAN" | "WORKER";
   department: string;
-  /** Holds an admin delegation scoped to the presentation project (the Admin slot). */
-  delegatedAdmin?: true;
 };
 
-// Fixed order: Admin, Contractors, Subcontractors, Workers. Departments
-// are the presentation project's own.
+// Fixed order: Contractors, Subcontractors, Workers. Departments are the
+// presentation project's own. (Admin is not a demo slot: see above.)
 export const DEMO_SLOTS: readonly DemoSlot[] = [
-  { key: "admin_demo", group: "Admin", team: "Presentation Admin", role: "SUPERVISOR", department: "Electrical Department", delegatedAdmin: true },
   { key: "contractor_electrical", group: "Contractor", team: "Electrical", role: "SUPERVISOR", department: "Electrical Department" },
   { key: "contractor_plumbing", group: "Contractor", team: "Plumbing", role: "SUPERVISOR", department: "Plumbing Department" },
   { key: "contractor_concrete", group: "Contractor", team: "Concrete", role: "SUPERVISOR", department: "Concrete Department" },
@@ -91,10 +86,6 @@ export const DEMO_SLOTS: readonly DemoSlot[] = [
   { key: "worker_plumbing", group: "Worker", team: "Plumbing", role: "WORKER", department: "Plumbing Department" },
   { key: "worker_concrete", group: "Worker", team: "Concrete", role: "WORKER", department: "Concrete Department" },
 ];
-
-/** Delegated permissions that must never reach a demo account: they would
- * let a visitor create logins or reset other accounts' passwords. */
-const FORBIDDEN_DEMO_PERMISSIONS = new Set(["USER_MANAGEMENT"]);
 
 export type DemoLoginConfig = {
   enabled: boolean;
@@ -159,7 +150,6 @@ export type DemoAccountCheck =
         | "role-outside-demo"
         | "delegation"
         | "wrong-role"
-        | "missing-delegation"
         | "project-not-isolated"
         | "lookup-failed";
     };
@@ -206,24 +196,9 @@ export async function checkDemoAccount(
     if (!isolated) return { ok: false, reason: "project-not-isolated" };
 
     if (delegationError) return { ok: false, reason: "lookup-failed" };
-    const delegationIds = (delegations ?? []).map((row) => row.delegation_id as string);
-    if (delegationIds.length > 0) {
-      const [{ data: scopes, error: scopeError }, { data: permissions, error: permissionError }] = await Promise.all([
-        admin.from("delegation_projects").select("delegation_id, project_id").in("delegation_id", delegationIds),
-        admin.from("delegation_permissions").select("delegation_id, permission").in("delegation_id", delegationIds),
-      ]);
-      if (scopeError || permissionError) return { ok: false, reason: "lookup-failed" };
-      // Every delegation must name configured projects only (one with no
-      // project row reaches nothing, but is refused too) and no forbidden
-      // permission.
-      const outside = delegationIds.some((id) => {
-        const projects = (scopes ?? []).filter((row) => row.delegation_id === id);
-        return projects.length === 0 || projects.some((row) => !config.projectIds.has(row.project_id as string));
-      });
-      if (outside || (permissions ?? []).some((row) => FORBIDDEN_DEMO_PERMISSIONS.has(row.permission as string))) {
-        return { ok: false, reason: "delegation" };
-      }
-    }
+    // No demo account acts as an Admin of any kind: an active admin
+    // delegation (any scope, any permission) is refused outright.
+    if ((delegations ?? []).length > 0) return { ok: false, reason: "delegation" };
 
     if (slot) {
       // Only the slot's role, at least once in the slot's team (an account
@@ -233,8 +208,6 @@ export async function checkDemoAccount(
         return department?.department_name === slot.department;
       });
       if (!inTeam || roles.some((row) => row.role !== slot.role)) return { ok: false, reason: "wrong-role" };
-      if (slot.delegatedAdmin && delegationIds.length === 0) return { ok: false, reason: "missing-delegation" };
-      if (!slot.delegatedAdmin && delegationIds.length > 0) return { ok: false, reason: "wrong-role" };
     }
 
     return { ok: true, userId };

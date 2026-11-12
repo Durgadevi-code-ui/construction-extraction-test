@@ -83,10 +83,8 @@ export async function enterDemoWorkspace(_prevState: DemoLoginState, formData: F
   }
 
   logDemo(logRef(), slot.key, "session", "signed-in", { user: check.userId.slice(0, 8) });
-  // The presentation Admin opens Admin Setup (scoped to the presentation
-  // project); every other role goes to /workflow, which routes to its own
-  // dashboard (same as /login).
-  redirect(slot.delegatedAdmin ? "/admin/setup" : "/workflow");
+  // /workflow routes every role to its own dashboard (same as /login).
+  redirect("/workflow");
 }
 
 /** One structured server log line per demo attempt: the slot key, never
