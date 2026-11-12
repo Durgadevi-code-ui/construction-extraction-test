@@ -25,11 +25,14 @@ import { isDemoAccountEmail } from "./demoEmail";
  *     The browser sends a slot KEY from the closed list below — never an
  *     email, a password or a user id. No magic link, no session minted
  *     with the service-role key.
- *   - There is no demo Admin. The application has one Admin: the real
- *     ADMIN account, with the one Admin permission system — never a
- *     Contractor or a delegate standing in for an Admin. Choosing "Admin"
- *     on Demo Login leads to the normal email/password sign-in
- *     (/login?next=/admin/setup).
+ *   - The Admin door signs in as the dedicated presentation-Admin demo
+ *     account. That account uses the existing ADMIN role CONFINED to the
+ *     presentation project(s) via admin_scopes (a SCOPED admin — see
+ *     lib/authContext.ts getAdminScope and migration 25). It is NEVER a
+ *     GLOBAL admin: checkDemoAccount refuses any user_role='ADMIN' account
+ *     unless its admin_scopes are entirely within the configured demo
+ *     projects. Company management, project creation, delegation management
+ *     and ADMIN administration stay global-admin-only (isGlobalAdmin).
  *
  * Configuration (server-only; off unless all of it is present):
  *   DEMO_LOGIN_ENABLED=true
@@ -44,12 +47,17 @@ import { isDemoAccountEmail } from "./demoEmail";
  *
  * checkDemoAccount() — all must hold, or the session is refused:
  *   1. linked, Active app user with that same email;
- *   2. not an Admin;
- *   3. at least one Active project role, every one of them in a configured
- *      project — non-admin data access in this app is scoped by exactly
- *      these rows (lib/authContext.ts getUserContext);
- *   4. no Active admin delegation at all (no demo account is an Admin or
- *      a delegated Admin);
+ *   2. if user_role='ADMIN': a SCOPED admin only — its admin_scopes must be
+ *      non-empty and entirely within the configured demo projects (a GLOBAL
+ *      admin, with no scope, is refused). The ADMIN branch returns here and
+ *      skips the trade-role checks 3/4/6 (admin authority is admin_scopes,
+ *      not user_project_roles);
+ *   3. (non-admin) at least one Active project role, every one of them in a
+ *      configured project — non-admin data access in this app is scoped by
+ *      exactly these rows (lib/authContext.ts getUserContext);
+ *   4. (non-admin) every Active admin delegation is confined entirely to the
+ *      configured demo projects (a delegation reaching a real project, or
+ *      with no project, is refused);
  *   5. every configured project is presentation data: its Active members
  *      are demo (@example.com) accounts only, so a demo session (which can
  *      write) never reaches a project a real person works in;
@@ -192,6 +200,7 @@ export type DemoAccountCheck =
         | "delegation-outside-demo"
         | "wrong-role"
         | "project-not-isolated"
+        | "admin-scope-outside-demo"
         | "lookup-failed";
     };
 
@@ -219,8 +228,31 @@ export async function checkDemoAccount(
     if (!profile) return { ok: false, reason: "not-linked" };
     if (normalizeEmail(profile.user_mail) !== email) return { ok: false, reason: "email-mismatch" };
     if (profile.status !== "Active") return { ok: false, reason: "inactive" };
-    if (profile.user_role === "ADMIN") return { ok: false, reason: "admin" };
     const userId = profile.user_id as string;
+
+    // ADMIN demo sessions: allowed ONLY for a SCOPED admin whose admin_scopes
+    // are entirely within the configured (isolated) demo project(s) — never a
+    // GLOBAL admin (no scope rows), which would be a public global admin over
+    // all real data. This is what gives the Demo Login Admin door the real
+    // ADMIN role confined to the presentation project. Fails closed: no scope,
+    // a scope reaching any non-demo project, or a lookup failure all refuse.
+    // Admin authority comes from admin_scopes, not user_project_roles, so the
+    // trade-role checks below are skipped for an ADMIN account.
+    if (profile.user_role === "ADMIN") {
+      const { data: scopeRows, error: scopeError } = await admin
+        .from("admin_scopes")
+        .select("project_id")
+        .eq("user_id", userId);
+      const scopeIds = scopeError ? [] : (scopeRows ?? []).map((r) => r.project_id as string).filter(Boolean);
+      if (scopeIds.length === 0) return { ok: false, reason: "admin" };
+      if (scopeIds.some((pid) => !config.projectIds.has(pid))) {
+        return { ok: false, reason: "admin-scope-outside-demo" };
+      }
+      const adminIsolated = await demoProjectsIsolated(admin, config);
+      if (adminIsolated === null) return { ok: false, reason: "lookup-failed" };
+      if (!adminIsolated) return { ok: false, reason: "project-not-isolated" };
+      return { ok: true, userId };
+    }
 
     const [{ data: roles, error: rolesError }, { data: delegations, error: delegationError }, isolated] = await Promise.all([
       admin.from("user_project_roles").select("project_id, role, departments(department_name)").eq("user_id", userId).eq("status", "Active"),

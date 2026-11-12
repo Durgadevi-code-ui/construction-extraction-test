@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getUserContext, isAdminUser, CONTRACTOR_ROLES } from "./authContext";
+import { getUserContext, getAdminScope, CONTRACTOR_ROLES } from "./authContext";
 import { getActiveDelegationsForUser } from "./delegation";
 import { listDepartments, listProjects, listWorkItems } from "./admin";
 import { getWorkItemCurrentStatus, parseWorkItemTasks, type WorkItemTask } from "./workflow";
@@ -192,8 +192,20 @@ async function resolveDashboardScope(
   projectIds: Set<string> | "ALL";
   departmentIds: Set<string> | "ALL";
 }> {
-  if (await isAdminUser(supabase, userId)) {
+  const adminScope = await getAdminScope(supabase, userId);
+  if (adminScope === "ALL") {
     return { isAdmin: true, includeFinancials: true, projectIds: "ALL", departmentIds: "ALL" };
+  }
+  if (adminScope !== null) {
+    // Scoped admin: the full admin dashboard view, but confined to the
+    // project(s) in its scope and those projects' departments only — never a
+    // real client project.
+    const { data: deptRows } = await supabase
+      .from("departments")
+      .select("department_id")
+      .in("project_id", [...adminScope]);
+    const departmentIds = new Set((deptRows ?? []).map((d) => d.department_id as string));
+    return { isAdmin: true, includeFinancials: true, projectIds: new Set(adminScope), departmentIds };
   }
 
   const ctx = await getUserContext(supabase, userId);

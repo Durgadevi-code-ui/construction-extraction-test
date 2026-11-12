@@ -4,7 +4,7 @@ import { getSupabaseClient } from "@/lib/supabase";
 import { getSupabaseServiceRoleClient } from "@/lib/supabaseAdmin";
 import { getUserLinkContext, getDepartmentProjectId, linkUserToAuthAccount } from "@/lib/admin";
 import { assertAdminOrDelegated } from "@/lib/delegation";
-import { isAdminUser } from "@/lib/authContext";
+import { isGlobalAdmin } from "@/lib/authContext";
 import { getCurrentUser } from "@/lib/session";
 import { demoWriteRefusal } from "@/lib/demoWriteGuard";
 
@@ -47,16 +47,16 @@ export async function POST(request: NextRequest) {
     }
 
     const target = await getUserLinkContext(supabase, targetUserId);
-    const actorIsRealAdmin = await isAdminUser(supabase, actorUserId);
+    const actorIsGlobalAdmin = await isGlobalAdmin(supabase, actorUserId);
 
-    if (target.role === "ADMIN" && !actorIsRealAdmin) {
+    if (target.role === "ADMIN" && !actorIsGlobalAdmin) {
       return NextResponse.json(
         { error: "Only an existing Admin may link another Admin's login." },
         { status: 403 }
       );
     }
 
-    if (!actorIsRealAdmin) {
+    if (!actorIsGlobalAdmin) {
       const projectId = await getDepartmentProjectId(supabase, target.departmentId);
       await assertAdminOrDelegated(supabase, {
         actorUserId,

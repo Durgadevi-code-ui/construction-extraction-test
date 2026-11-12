@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getUserContext, isAdminUser, CONTRACTOR_ROLES } from "./authContext";
+import { getUserContext, isGlobalAdmin, getAdminScope, CONTRACTOR_ROLES } from "./authContext";
 import { listDepartments } from "./admin";
 import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
 import { humanizeRole } from "./format";
@@ -30,6 +30,18 @@ import {
  */
 export type { DelegationPermission, Delegation };
 export { DELEGATION_PERMISSIONS };
+
+/** The project-scopeable admin capabilities a SCOPED admin receives within its
+ * scope — the ones that drive the Admin Setup tabs it should see (Projects,
+ * Departments, Work Items, Users). Company management and Delegation management
+ * are deliberately absent: those are global-admin-only, enforced at their
+ * routes (assertAdminRole / isGlobalAdmin). */
+const SCOPED_ADMIN_PERMISSIONS: DelegationPermission[] = [
+  "PROJECT_MANAGEMENT",
+  "DEPARTMENT_MANAGEMENT",
+  "WORK_ITEM_MANAGEMENT",
+  "USER_MANAGEMENT",
+];
 
 function isCurrentlyActive(row: { status: string; starts_at: string; ends_at: string }): boolean {
   if (row.status !== "Active") return false;
@@ -62,7 +74,7 @@ export async function createDelegation(
     reason?: string | null;
   }
 ): Promise<void> {
-  if (!(await isAdminUser(supabase, params.adminUserId))) {
+  if (!(await isGlobalAdmin(supabase, params.adminUserId))) {
     throw new Error(`User ${params.adminUserId} is not authorized to create a delegation.`);
   }
 
@@ -255,7 +267,7 @@ export async function listDelegations(
   supabase: SupabaseClient,
   adminUserId: string
 ): Promise<Delegation[]> {
-  if (!(await isAdminUser(supabase, adminUserId))) {
+  if (!(await isGlobalAdmin(supabase, adminUserId))) {
     throw new Error(`User ${adminUserId} is not authorized to list delegations.`);
   }
 
@@ -285,7 +297,7 @@ export async function revokeDelegation(
   supabase: SupabaseClient,
   params: { adminUserId: string; delegationId: string }
 ): Promise<void> {
-  if (!(await isAdminUser(supabase, params.adminUserId))) {
+  if (!(await isGlobalAdmin(supabase, params.adminUserId))) {
     throw new Error(`User ${params.adminUserId} is not authorized to revoke delegations.`);
   }
 
@@ -426,8 +438,8 @@ export async function assertAdminRole(
   supabase: SupabaseClient,
   actorUserId: string
 ): Promise<void> {
-  if (!(await isAdminUser(supabase, actorUserId))) {
-    throw new Error(`User ${actorUserId} is not authorized for this action (Admin required).`);
+  if (!(await isGlobalAdmin(supabase, actorUserId))) {
+    throw new Error(`User ${actorUserId} is not authorized for this action (global Admin required).`);
   }
 }
 
@@ -447,7 +459,16 @@ export async function assertAdminOrDelegated(
     departmentId?: string | null;
   }
 ): Promise<void> {
-  if (await isAdminUser(supabase, params.actorUserId)) return;
+  // An ADMIN (global or scoped). A global admin may act on any project; a
+  // scoped admin only within its project scope — and nowhere else (fails
+  // closed). A non-admin falls through to the delegation path, unchanged.
+  const adminScope = await getAdminScope(supabase, params.actorUserId);
+  if (adminScope !== null) {
+    if (adminScope === "ALL" || adminScope.has(params.projectId)) return;
+    throw new Error(
+      `Scoped Admin ${params.actorUserId} is not authorized for project ${params.projectId}.`
+    );
+  }
 
   const ctx = await getUserContext(supabase, params.actorUserId);
   if (CONTRACTOR_ROLES.includes(ctx.role)) {
@@ -464,7 +485,15 @@ export async function assertAdminOrDelegated(
 }
 
 export type AdminSetupAccess = {
+  /** A GLOBAL admin (user_role=ADMIN, no admin_scopes rows) — unchanged
+   * existing behavior: every company/project, all permissions. */
   isRealAdmin: boolean;
+  /** A SCOPED admin (user_role=ADMIN confined to admin_scopes projects —
+   * e.g. the Demo Login Admin over the presentation project): the existing
+   * ADMIN role, but only within `projectIds`, and WITHOUT the global/
+   * credential operations (company management, project creation, delegation
+   * management, ADMIN administration), which stay global-admin-only. */
+  isScopedAdmin: boolean;
   /** Whether this caller may reach Admin Setup at all — true for a
    * real Admin, or a Contractor holding at least one currently-active
    * delegation for an administrative permission (see
@@ -499,13 +528,35 @@ export async function resolveAdminSetupAccess(
   supabase: SupabaseClient,
   userId: string
 ): Promise<AdminSetupAccess> {
-  if (await isAdminUser(supabase, userId)) {
+  const adminScope = await getAdminScope(supabase, userId);
+  if (adminScope === "ALL") {
+    // Global admin — unchanged.
     return {
       isRealAdmin: true,
+      isScopedAdmin: false,
       canEnter: true,
       projectIds: "ALL",
       departmentIds: "ALL",
       permissions: new Set(DELEGATION_PERMISSIONS),
+    };
+  }
+  if (adminScope !== null) {
+    // Scoped admin: the ADMIN role confined to its project(s). Gets every
+    // project-scopeable admin capability (drives the Projects/Departments/
+    // Work Items/Users tabs); Companies and Delegations tabs are adminOnly
+    // and never shown, and those operations are refused server-side
+    // (assertAdminRole / isGlobalAdmin).
+    const allDepartments = await listDepartments(supabase);
+    const departmentIds = new Set(
+      allDepartments.filter((d) => adminScope.has(d.projectId)).map((d) => d.departmentId)
+    );
+    return {
+      isRealAdmin: false,
+      isScopedAdmin: true,
+      canEnter: true,
+      projectIds: new Set(adminScope),
+      departmentIds,
+      permissions: new Set(SCOPED_ADMIN_PERMISSIONS),
     };
   }
 
@@ -540,6 +591,7 @@ export async function resolveAdminSetupAccess(
 
   return {
     isRealAdmin: false,
+    isScopedAdmin: false,
     canEnter: projectIds.size > 0,
     projectIds,
     departmentIds,

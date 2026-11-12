@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getUserContext, isAdminUser } from "./authContext";
+import { getUserContext, getAdminScope } from "./authContext";
 import { formatUserDisplayName } from "./format";
 import { isDemoAccountEmail } from "./demoEmail";
 
@@ -62,11 +62,17 @@ async function resolveSenderContext(
   userId: string,
   requestedProjectId?: string | null
 ): Promise<{ projectId: string; role: string }> {
-  if (await isAdminUser(supabase, userId)) {
+  const adminScope = await getAdminScope(supabase, userId);
+  if (adminScope !== null) {
     if (!requestedProjectId) {
       throw new Error("Select a project to view its communication.");
     }
-    return { projectId: requestedProjectId, role: "ADMIN" };
+    // A global admin may view any project's communication; a scoped admin
+    // only a project within its scope (never a real client project).
+    if (adminScope === "ALL" || adminScope.has(requestedProjectId)) {
+      return { projectId: requestedProjectId, role: "ADMIN" };
+    }
+    throw new Error(`Admin ${userId} is not authorized for project ${requestedProjectId}.`);
   }
 
   // The page's current project (a user with roles on several projects)

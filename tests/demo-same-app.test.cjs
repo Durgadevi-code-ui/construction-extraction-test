@@ -124,6 +124,7 @@ const ADMIN = "30000000-0000-4000-8000-000000000009";
 const DELEGATE = "30000000-0000-4000-8000-000000000002"; // a real Contractor holding an Admin-granted delegation
 const CONTRACTOR = "30000000-0000-4000-8000-000000000001"; // a Contractor without one (e.g. a demo Contractor)
 const WORKER = "30000000-0000-4000-8000-000000000003";
+const SCOPED_ADMIN = "30000000-0000-4000-8000-00000000000a"; // user_role=ADMIN, confined via admin_scopes to P1 (the Demo Login Admin)
 const PERMS = ["WORK_ITEM_MANAGEMENT", "PROJECT_MANAGEMENT", "DEPARTMENT_MANAGEMENT"];
 
 function fixture() {
@@ -148,10 +149,14 @@ function fixture() {
     work_items: [],
     users: [
       user(ADMIN, "admin@abc.test", "ADMIN"),
+      user(SCOPED_ADMIN, "demo.admin@example.com", "ADMIN"),
       user(DELEGATE, "contractor@abc.test", "SUPERVISOR"),
       user(CONTRACTOR, "demo.contractor.electrical@example.com", "SUPERVISOR"),
       user(WORKER, "demo.worker.electrical@example.com", "WORKER"),
     ],
+    // SCOPED_ADMIN is an ADMIN confined to P1 only (the Demo Login Admin).
+    // The global ADMIN account has NO admin_scopes rows -> stays global.
+    admin_scopes: [{ user_id: SCOPED_ADMIN, project_id: P1 }],
     user_project_roles: [role(DELEGATE, "SUPERVISOR", P1, D_ELEC), role(CONTRACTOR, "SUPERVISOR", P1, D_ELEC), role(WORKER, "WORKER", P1, D_ELEC)],
     admin_delegations: [{
       delegation_id: "d-real", admin_user_id: ADMIN, delegate_user_id: DELEGATE, status: "Active",
@@ -175,6 +180,8 @@ const DEMO_WORKER_SESSION = { authUserId: "a3", userId: WORKER, email: "demo.wor
 // reaches the inert read-only guard (off by default), never the permission
 // checks, which is exactly why a demo Admin gets full delegated CRUD.
 const DEMO_ADMIN_SESSION = { authUserId: "a2d", userId: DELEGATE, email: "demo.admin@example.com", isDemo: true };
+// The project-scoped ADMIN (Demo Login Admin): the existing ADMIN role, confined by admin_scopes to P1.
+const SCOPED_ADMIN_SESSION = { authUserId: "aSA", userId: SCOPED_ADMIN, email: "demo.admin@example.com", isDemo: true };
 
 const req = (method, url, body) =>
   new NextRequest(`http://localhost${url}`, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -302,6 +309,71 @@ test("Demo Admin (delegated, within the presentation project): departments & wor
   const outside = await as(DEMO_ADMIN_SESSION, () => projectsRoute.PATCH(req("PATCH", "/api/admin/projects", { projectId: P2, projectName: "x" })));
   assert.equal(outside.status, 403);
   assert.equal(outside.db.writes.length, 0);
+});
+
+test("Scoped ADMIN (Demo Login Admin): the existing ADMIN role confined to its project — resolves to ADMIN, in-scope ops save, cross-project/company/delegation/project-creation/ADMIN-creation denied", async () => {
+  // Resolves to the ADMIN role (not SUPERVISOR), scoped to P1 only.
+  db = fixture();
+  const access = await resolveAdminSetupAccess(db, SCOPED_ADMIN);
+  assert.equal(access.isRealAdmin, false, "not a GLOBAL admin");
+  assert.equal(access.isScopedAdmin, true, "is a SCOPED admin (the ADMIN role, confined)");
+  assert.deepEqual([...access.projectIds], [P1], "scope is P1 only");
+  for (const p of ["PROJECT_MANAGEMENT", "DEPARTMENT_MANAGEMENT", "WORK_ITEM_MANAGEMENT", "USER_MANAGEMENT"]) {
+    assert.ok(access.permissions.has(p), `scoped admin has ${p} within scope`);
+  }
+
+  // IN-SCOPE (P1): the existing Admin operations all SAVE.
+  let r = await as(SCOPED_ADMIN_SESSION, () => projectsRoute.PATCH(req("PATCH", "/api/admin/projects", { projectId: P1, projectName: "P1 (edited by scoped admin)" })));
+  ok(r);
+  assert.equal(r.db.tables.projects.find((p) => p.project_id === P1).project_name, "P1 (edited by scoped admin)");
+  r = await as(SCOPED_ADMIN_SESSION, () => departmentsRoute.POST(req("POST", "/api/admin/departments", { projectId: P1, departmentCode: "HVAC", departmentName: "HVAC Department" })));
+  ok(r);
+  assert.ok(r.db.tables.departments.some((d) => d.project_id === P1 && d.department_name === "HVAC Department"));
+  r = await as(SCOPED_ADMIN_SESSION, () => workItemsRoute.POST(req("POST", "/api/admin/work-items", { departmentId: D_ELEC, lineItemNo: "501", descriptionOfWork: "Panel board" })));
+  ok(r);
+  assert.ok(r.db.tables.work_items.some((w) => w.department_id === D_ELEC && w.line_item_no === "501"));
+  // Operational user management within scope is AUTHORIZED (the full
+  // create-with-login flow needs Supabase Auth and is covered in
+  // tests/security-routes; here we assert the authorization passes).
+  assert.ok(access.permissions.has("USER_MANAGEMENT"), "scoped admin holds USER_MANAGEMENT within scope");
+
+  // OUT OF SCOPE (P2, a different company): every operation is DENIED, nothing written.
+  for (const call of [
+    () => projectsRoute.PATCH(req("PATCH", "/api/admin/projects", { projectId: P2, projectName: "hijacked" })),
+    () => departmentsRoute.POST(req("POST", "/api/admin/departments", { projectId: P2, departmentCode: "X", departmentName: "X" })),
+    () => workItemsRoute.POST(req("POST", "/api/admin/work-items", { departmentId: D_OTHER, lineItemNo: "9", descriptionOfWork: "x" })),
+    () => usersRoute.POST(req("POST", "/api/admin/users", { email: "x@y.z", role: "WORKER", projectId: P2, departmentId: D_OTHER, password: "pw-abcdefgh" })),
+  ]) {
+    const refused = await as(SCOPED_ADMIN_SESSION, call);
+    assert.equal(refused.status, 403, `out-of-scope must be 403: ${JSON.stringify(refused.body)}`);
+    assert.doesNotMatch(refused.body.error ?? "", /read-only/, "a genuine scope check, not a demo rule");
+    assert.equal(refused.db.writes.length, 0, "nothing written outside scope");
+  }
+
+  // GLOBAL / credential operations: DENIED even inside scope.
+  for (const call of [
+    () => companiesRoute.POST(req("POST", "/api/admin/companies", { name: "Co", code: "CO" })),
+    () => projectsRoute.POST(req("POST", "/api/admin/projects", { companyId: COMPANY, projectCode: "NEW", projectName: "New" })),
+    () => delegationsRoute.POST(req("POST", "/api/admin/delegations", { delegateUserId: CONTRACTOR, projectIds: [P1], permissions: ["WORK_ITEM_MANAGEMENT"], startsAt: "2026-01-01T00:00:00Z", endsAt: "2099-01-01T00:00:00Z" })),
+    // Creating/promoting an ADMIN is global-admin-only — a scoped admin cannot escalate.
+    () => usersRoute.POST(req("POST", "/api/admin/users", { email: "new.admin@abc.test", role: "ADMIN", projectId: P1, departmentId: D_ELEC, password: "pw-abcdefgh" })),
+  ]) {
+    const refused = await as(SCOPED_ADMIN_SESSION, call);
+    assert.equal(refused.status, 403, `global op must be 403: ${JSON.stringify(refused.body)}`);
+    assert.equal(refused.db.writes.length, 0, "no global/credential write by a scoped admin");
+  }
+});
+
+test("Global ADMIN is unaffected by scoping: with no admin_scopes rows it keeps full global access", async () => {
+  db = fixture();
+  const access = await resolveAdminSetupAccess(db, ADMIN);
+  assert.equal(access.isRealAdmin, true, "global admin unchanged");
+  assert.equal(access.isScopedAdmin, false);
+  assert.equal(access.projectIds, "ALL");
+  // And a global admin can still create a company (a scoped admin cannot — asserted above).
+  const r = await as(ADMIN_SESSION, () => companiesRoute.POST(req("POST", "/api/admin/companies", { name: "New Co", code: "NEWCO" })));
+  ok(r);
+  assert.ok(r.db.writes.some((w) => w.table === "companies" && w.op === "insert"));
 });
 
 test("a demo Worker's own operation saves, like any Worker's", async () => {

@@ -54,6 +54,10 @@ type Props = {
    * grants — irrelevant when isRealAdmin (a real Admin can always do
    * everything). Empty for a real Admin. */
   delegatedPermissions: DelegationPermission[];
+  /** A SCOPED admin (the existing ADMIN role confined to a project scope —
+   * e.g. the Demo Login Admin): labelled "Admin" and shown the project-scopeable
+   * tabs, but Companies/Delegations and the dev tool stay global-admin-only. */
+  isScopedAdmin?: boolean;
   companies: Company[];
   projects: Project[];
   departments: Department[];
@@ -131,6 +135,7 @@ export default function AdminSetupPanel({
   adminUserId,
   userEmail,
   isRealAdmin,
+  isScopedAdmin = false,
   delegatedPermissions,
   companies,
   projects,
@@ -175,10 +180,10 @@ export default function AdminSetupPanel({
       activeTab={activeTab}
       onTabChange={(key) => setTab(key as Tab)}
       heading={TAB_HEADING[activeTab]}
-      subheading={isRealAdmin ? undefined : "Viewing under a temporary administrative delegation."}
+      subheading={isRealAdmin || isScopedAdmin ? undefined : "Viewing under a temporary administrative delegation."}
       userId={adminUserId}
       userEmail={userEmail}
-      roleLabel={isRealAdmin ? "Admin" : "Delegated Admin"}
+      roleLabel={isRealAdmin || isScopedAdmin ? "Admin" : "Delegated Admin"}
       actions={
         // Relocated from the removed top nav bar (see
         // components/workflow/TopNav.tsx) — same two links, same

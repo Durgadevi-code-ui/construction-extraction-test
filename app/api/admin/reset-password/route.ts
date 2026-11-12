@@ -4,7 +4,7 @@ import { getSupabaseClient } from "@/lib/supabase";
 import { createPasswordCheckClient, getSupabaseServiceRoleClient } from "@/lib/supabaseAdmin";
 import { getDepartmentProjectId, getUserLinkContext } from "@/lib/admin";
 import { assertAdminOrDelegated } from "@/lib/delegation";
-import { isAdminUser } from "@/lib/authContext";
+import { isGlobalAdmin } from "@/lib/authContext";
 import { getCurrentUser } from "@/lib/session";
 import { demoWriteRefusal } from "@/lib/demoWriteGuard";
 import { passwordProblem, setPasswordVerified } from "@/lib/authAccounts";
@@ -55,12 +55,12 @@ export async function POST(request: NextRequest) {
     }
 
     const target = await getUserLinkContext(supabase, targetUserId);
-    const actorIsRealAdmin = await isAdminUser(supabase, currentUser.userId);
+    const actorIsGlobalAdmin = await isGlobalAdmin(supabase, currentUser.userId);
 
-    if (target.role === "ADMIN" && !actorIsRealAdmin) {
+    if (target.role === "ADMIN" && !actorIsGlobalAdmin) {
       return NextResponse.json({ error: "Only an existing Admin may reset an Admin's password." }, { status: 403 });
     }
-    if (!actorIsRealAdmin) {
+    if (!actorIsGlobalAdmin) {
       const projectId = await getDepartmentProjectId(supabase, target.departmentId);
       await assertAdminOrDelegated(supabase, {
         actorUserId: currentUser.userId,

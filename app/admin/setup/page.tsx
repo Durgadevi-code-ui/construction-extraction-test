@@ -161,6 +161,7 @@ export default async function AdminSetupPage() {
         adminUserId={userId}
         userEmail={currentUser.email}
         isRealAdmin={access.isRealAdmin}
+        isScopedAdmin={access.isScopedAdmin}
         delegatedPermissions={Array.from(access.permissions)}
         companies={visibleCompanies}
         projects={visibleProjects}

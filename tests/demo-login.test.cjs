@@ -72,6 +72,7 @@ function seed() {
       { delegation_id: "d-demo", permission: "WORK_ITEM_MANAGEMENT" },
       { delegation_id: "d-demo", permission: "PROJECT_MANAGEMENT" },
     ],
+    admin_scopes: [],
   };
   logins = {
     [WORKER]: { id: "a-w", password: "pw-worker-1" },
@@ -223,6 +224,39 @@ test("presentation Admin: a demo account whose admin delegation is confined to t
   seed();
   db.users.find((u) => u.user_id === "u-adm").user_role = "ADMIN";
   assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), adm), { ok: false, reason: "admin" }, "a global ADMIN is never a demo session");
+});
+
+test("scoped-admin demo session: user_role=ADMIN is allowed ONLY when its admin_scopes are entirely within the demo project(s); a global ADMIN or a scope reaching a real project is refused", async () => {
+  const adm = { authUserId: "a-adm", email: FORMER_ADMIN };
+  const makeAdmin = (scopeProjects) => {
+    seed();
+    db.users.find((u) => u.user_id === "u-adm").user_role = "ADMIN";
+    for (const p of scopeProjects) db.admin_scopes.push({ user_id: "u-adm", project_id: p });
+  };
+
+  // Scoped admin confined to the demo project(s) -> ALLOWED (the Demo Admin door).
+  makeAdmin([DEMO_PROJECT]);
+  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), adm), { ok: true, userId: "u-adm" }, "scoped admin within the demo project is allowed");
+  makeAdmin([DEMO_PROJECT, SECOND_PROJECT]);
+  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), adm), { ok: true, userId: "u-adm" }, "scope across both demo projects is allowed");
+
+  // Global ADMIN (no admin_scopes) -> REFUSED (never a public global admin).
+  makeAdmin([]);
+  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), adm), { ok: false, reason: "admin" }, "a global ADMIN is refused");
+
+  // Scope reaching a real project -> REFUSED outright.
+  makeAdmin([DEMO_PROJECT, REAL_PROJECT]);
+  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), adm), { ok: false, reason: "admin-scope-outside-demo" }, "a scope reaching a real project is refused");
+
+  // A real member in a configured project still refuses a scoped admin.
+  makeAdmin([DEMO_PROJECT]);
+  db.user_project_roles.push({ user_id: "u-real", project_id: DEMO_PROJECT, department_id: "dep-el", role: "WORKER", status: "Active" });
+  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), adm), { ok: false, reason: "project-not-isolated" }, "a non-isolated project refuses even a scoped admin");
+
+  // Re-checked on every request.
+  makeAdmin([DEMO_PROJECT]);
+  const { result } = await quiet(() => demoSessionAllowed(fakeAdmin(), { authUserId: "a-adm", authEmail: FORMER_ADMIN, appEmail: FORMER_ADMIN }, config()));
+  assert.equal(result, true, "a scoped-admin demo session passes the per-request check");
 });
 
 test("demo check: every way an account could reach real data is refused", async () => {
@@ -816,7 +850,9 @@ test("Admin door: full delegated Admin Setup over the isolated presentation proj
   assert.doesNotMatch(page, /ReadOnlyProvider/, "no forced read-only wrapper for the Admin door");
   assert.match(page, /resolveAdminSetupAccess\(supabase, userId\)/, "access resolved via the delegation system, the same for everyone");
   const delegationSrc = fs.readFileSync(path.join(ROOT, "lib/delegation.ts"), "utf8");
-  assert.match(delegationSrc, /export async function resolveAdminSetupAccess[\s\S]*?if \(await isAdminUser\(supabase, userId\)\)/, "real Admin path unchanged");
+  assert.match(delegationSrc, /export async function resolveAdminSetupAccess[\s\S]*?const adminScope = await getAdminScope\(supabase, userId\)/, "access resolved via admin scope (global vs scoped)");
+  assert.match(delegationSrc, /adminScope === "ALL"[\s\S]*?isRealAdmin: true/, "a GLOBAL admin keeps the existing full access");
+  assert.match(delegationSrc, /adminScope !== null[\s\S]*?isScopedAdmin: true/, "a SCOPED admin gets the ADMIN role confined to its projects");
 
   // The confinement guard: every active delegation must stay inside the demo projects.
   const demoAccess = fs.readFileSync(path.join(ROOT, "lib/demoAccess.ts"), "utf8");

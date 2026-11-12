@@ -137,6 +137,84 @@ export async function isAdminUser(supabase: SupabaseClient, userId: string): Pro
   return !!data;
 }
 
+/**
+ * An ADMIN account's project authority (see
+ * supabase/migrations/00000000000025_admin_scopes.sql):
+ *   - "ALL"      -> a GLOBAL admin (no admin_scopes rows): the existing,
+ *                  unchanged behavior — authority over every project/company.
+ *   - Set<id>    -> a SCOPED admin: authority ONLY within those project ids.
+ *                  Global/credential operations are still refused (see
+ *                  isGlobalAdmin and the admin routes).
+ *   - null       -> not an ADMIN.
+ *
+ * isAdminUser() above is deliberately left unchanged (it still answers "is the
+ * role ADMIN", used for routing/labels and the many workflow checks that key
+ * on it) — authorization that must respect scope uses the helpers below, never
+ * isAdminUser alone. This is the one function that reads admin_scopes.
+ */
+export type AdminScope = "ALL" | Set<string>;
+
+function isMissingAdminScopesTable(err: { code?: string; message?: string } | null): boolean {
+  const s = `${err?.code ?? ""} ${err?.message ?? ""}`.toLowerCase();
+  return (
+    s.includes("42p01") ||
+    s.includes("pgrst205") ||
+    s.includes("does not exist") ||
+    s.includes("could not find the table") ||
+    s.includes("schema cache")
+  );
+}
+
+export async function getAdminScope(supabase: SupabaseClient, userId: string): Promise<AdminScope | null> {
+  const { data: adminRow, error: adminError } = await supabase
+    .from("users")
+    .select("user_id")
+    .eq("user_id", userId)
+    .eq("user_role", "ADMIN")
+    .eq("status", "Active")
+    .maybeSingle();
+  if (adminError) throw new Error(`Failed to verify admin user: ${adminError.message}`);
+  if (!adminRow) return null; // not an admin
+
+  const { data: scopes, error: scopeError } = await supabase
+    .from("admin_scopes")
+    .select("project_id")
+    .eq("user_id", userId);
+  if (scopeError) {
+    // Table not created yet (migration not applied) -> no scoped admins can
+    // exist, so every ADMIN is a legacy GLOBAL admin (existing behavior).
+    // Any OTHER error fails closed: an empty scope grants no project authority
+    // and is not a global admin, so a transient lookup failure can never widen
+    // a scoped admin into a global one.
+    return isMissingAdminScopesTable(scopeError) ? "ALL" : new Set<string>();
+  }
+  const ids = (scopes ?? []).map((r) => r.project_id as string).filter(Boolean);
+  return ids.length === 0 ? "ALL" : new Set(ids);
+}
+
+/** True only for a GLOBAL admin (ADMIN with no admin_scopes rows). Every
+ * global/credential operation (company management, project creation,
+ * delegation management, ADMIN creation/promotion) gates on THIS, never on
+ * isAdminUser, so a scoped admin is denied them and fails closed. */
+export async function isGlobalAdmin(supabase: SupabaseClient, userId: string): Promise<boolean> {
+  return (await getAdminScope(supabase, userId)) === "ALL";
+}
+
+/** Whether an ADMIN may act on / see a specific project: global -> always;
+ * scoped -> only if the project is in its scope; non-admin -> false. A
+ * fail-closed drop-in for `isAdminUser` at every project-scoped admin check:
+ * a global admin behaves exactly as before, a scoped admin is confined, and a
+ * non-admin falls through to the existing role logic unchanged. */
+export async function adminCanAccessProject(
+  supabase: SupabaseClient,
+  userId: string,
+  projectId: string
+): Promise<boolean> {
+  const scope = await getAdminScope(supabase, userId);
+  if (scope === null) return false;
+  return scope === "ALL" || scope.has(projectId);
+}
+
 /** SUPERVISOR and MANAGER are the same Contractor-level role for
  * authorization purposes everywhere in this app. */
 export const CONTRACTOR_ROLES = ["SUPERVISOR", "MANAGER"];

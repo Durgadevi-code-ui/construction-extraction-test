@@ -2,7 +2,7 @@ import "server-only";
 import * as XLSX from "xlsx";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { readWorkbookGuarded } from "./safeWorkbookRead";
-import { getUserContext, isAdminUser, CONTRACTOR_ROLES } from "./authContext";
+import { getUserContext, adminCanAccessProject, CONTRACTOR_ROLES } from "./authContext";
 import { getActiveDelegationsForUser } from "./delegation";
 import { listDepartments, normalizeLineItemNo } from "./admin";
 import { getWorkItemCurrentStatus, parseWorkItemTasks, type ProgressData } from "./workflow";
@@ -104,7 +104,10 @@ async function resolveExcelExportScope(
   const departmentIds = new Set<string>();
   const amountDepartmentIds = new Set<string>();
 
-  if (await isAdminUser(supabase, userId)) {
+  if (await adminCanAccessProject(supabase, userId, projectId)) {
+    // Global admin, or a scoped admin whose scope includes THIS project:
+    // the full project export. A scoped admin asked for a project outside
+    // its scope falls through to the role path below and is denied.
     projectDepartmentIds.forEach((id) => {
       departmentIds.add(id);
       amountDepartmentIds.add(id);

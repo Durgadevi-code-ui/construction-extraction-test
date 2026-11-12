@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getUserContext, assertRole, isAdminUser, resolveActorRole, CONTRACTOR_ROLES } from "./authContext";
+import { getUserContext, assertRole, adminCanAccessProject, resolveActorRole, CONTRACTOR_ROLES } from "./authContext";
 import { hasDelegatedPermission } from "./delegation";
 import { updateWorkItemValues } from "./admin";
 import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
@@ -1534,7 +1534,7 @@ async function assertCanReviewProgress(
   callerUserId: string,
   scope: { projectId: string; departmentId: string }
 ): Promise<void> {
-  if (await isAdminUser(supabase, callerUserId)) return;
+  if (await adminCanAccessProject(supabase, callerUserId, scope.projectId)) return;
 
   // Resolve the caller's role row for the submission's OWN project/
   // department (a Contractor may hold roles on several projects); still
@@ -2026,7 +2026,7 @@ async function assertCanManageAssignments(
   // getUserContext for the caller first would throw for exactly that
   // account before this function ever got a chance to recognize it as
   // Admin (see isAdminUser's doc in lib/authContext.ts).
-  if (await isAdminUser(supabase, callerUserId)) return;
+  if (await adminCanAccessProject(supabase, callerUserId, workItem.project_id)) return;
 
   // The caller's role row for the work item's own project/department.
   const callerCtx = await getUserContext(supabase, callerUserId, {
@@ -2168,7 +2168,7 @@ export async function updatePlannedQuantity(
 
   // isAdminUser first, not getUserContext — see assertCanManageAssignments
   // above for why (a bootstrap-created Admin has no user_project_roles row).
-  if (!(await isAdminUser(supabase, params.actorUserId))) {
+  if (!(await adminCanAccessProject(supabase, params.actorUserId, workItem.project_id))) {
     const ctx = await getUserContext(supabase, params.actorUserId, {
       projectId: workItem.project_id,
       departmentId: workItem.department_id,
@@ -2220,7 +2220,7 @@ async function assertCanManageWorkItemTasks(
   actorUserId: string,
   workItem: WorkItemRecord
 ): Promise<void> {
-  if (await isAdminUser(supabase, actorUserId)) return;
+  if (await adminCanAccessProject(supabase, actorUserId, workItem.project_id)) return;
 
   const ctx = await getUserContext(supabase, actorUserId, {
     projectId: workItem.project_id,

@@ -10,7 +10,7 @@ import {
 } from "@/lib/admin";
 import { getSupabaseServiceRoleClient } from "@/lib/supabaseAdmin";
 import { assertAdminOrDelegated } from "@/lib/delegation";
-import { isAdminUser } from "@/lib/authContext";
+import { isGlobalAdmin } from "@/lib/authContext";
 import { getCurrentUser } from "@/lib/session";
 import { demoWriteRefusal } from "@/lib/demoWriteGuard";
 import { APPROVED_ROLES, emailProblem, normalizeEmail } from "@/lib/authAccounts";
@@ -77,16 +77,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const actorIsRealAdmin = await isAdminUser(supabase, actorUserId);
+    const actorIsGlobalAdmin = await isGlobalAdmin(supabase, actorUserId);
 
-    if (role === "ADMIN" && !actorIsRealAdmin) {
+    if (role === "ADMIN" && !actorIsGlobalAdmin) {
       return NextResponse.json(
         { error: "Only an existing Admin may create or promote another Admin account." },
         { status: 403 }
       );
     }
 
-    if (!actorIsRealAdmin) {
+    if (!actorIsGlobalAdmin) {
       await assertAdminOrDelegated(supabase, {
         actorUserId,
         permission: "USER_MANAGEMENT",
@@ -159,17 +159,17 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "userProjectRoleId is required." }, { status: 400 });
     }
 
-    const actorIsRealAdmin = await isAdminUser(supabase, actorUserId);
+    const actorIsGlobalAdmin = await isGlobalAdmin(supabase, actorUserId);
     const target = await getUserProjectRoleScope(supabase, userProjectRoleId);
 
-    if (target.role === "ADMIN" && !actorIsRealAdmin) {
+    if (target.role === "ADMIN" && !actorIsGlobalAdmin) {
       return NextResponse.json(
         { error: "Only an existing Admin may remove another Admin's assignment." },
         { status: 403 }
       );
     }
 
-    if (!actorIsRealAdmin) {
+    if (!actorIsGlobalAdmin) {
       await assertAdminOrDelegated(supabase, {
         actorUserId,
         permission: "USER_MANAGEMENT",
