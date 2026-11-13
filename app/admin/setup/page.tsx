@@ -155,11 +155,23 @@ export default async function AdminSetupPage() {
       ? users
       : users.filter((u) => u.projectRoles.some((r) => inDepartmentScope(r.departmentId)));
 
+  // The caller's own real name (public.users first/last name) for the
+  // header profile chip, so a Demo Login Admin shows its real person name
+  // instead of the email-derived "Demo Admin". Found in the already-loaded
+  // full users list (pre-scope-filter, so the admin themselves is always
+  // present); falls back to the email guess in the chip when absent.
+  const self = users.find((u) => u.userId === userId);
+  const userDisplayName =
+    self && (self.firstName || self.lastName)
+      ? `${self.firstName ?? ""} ${self.lastName ?? ""}`.trim()
+      : undefined;
+
   return (
     <main className="flex-1 flex flex-col">
       <AdminSetupPanel
         adminUserId={userId}
         userEmail={currentUser.email}
+        userDisplayName={userDisplayName}
         isRealAdmin={access.isRealAdmin}
         isScopedAdmin={access.isScopedAdmin}
         delegatedPermissions={Array.from(access.permissions)}

@@ -41,6 +41,9 @@ type Props = {
   /** The signed-in caller's email — purely for the header's profile
    * chip (see DashboardShell). */
   userEmail?: string;
+  /** The caller's real display name (public.users first/last name),
+   * preferred over the email-derived guess in the profile chip. */
+  userDisplayName?: string;
   /** False for a Contractor reached here only via an active
    * administrative delegation (see lib/delegation.ts
    * resolveAdminSetupAccess) — every tab below reads this to hide
@@ -134,6 +137,7 @@ const UOM_DATALIST_ID = "uom-suggestions";
 export default function AdminSetupPanel({
   adminUserId,
   userEmail,
+  userDisplayName,
   isRealAdmin,
   isScopedAdmin = false,
   delegatedPermissions,
@@ -183,6 +187,7 @@ export default function AdminSetupPanel({
       subheading={isRealAdmin || isScopedAdmin ? undefined : "Viewing under a temporary administrative delegation."}
       userId={adminUserId}
       userEmail={userEmail}
+      displayName={userDisplayName}
       roleLabel={isRealAdmin || isScopedAdmin ? "Admin" : "Delegated Admin"}
       actions={
         // Relocated from the removed top nav bar (see

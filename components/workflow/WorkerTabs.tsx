@@ -354,6 +354,7 @@ export default function WorkerTabs({
       projectName={projectName}
       userId={workerId}
       userEmail={userEmail}
+      displayName={profile.displayName}
       roleLabel="Worker"
       profileTabKey="profile"
       showNotificationToasts

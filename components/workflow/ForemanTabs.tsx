@@ -257,6 +257,7 @@ export default function ForemanTabs({
       projectName={projectName}
       userId={foremanUserId}
       userEmail={userEmail}
+      displayName={profile.displayName}
       roleLabel="Subcontractor"
       profileTabKey="profile"
       showNotificationToasts
