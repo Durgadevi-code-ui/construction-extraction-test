@@ -259,6 +259,42 @@ test("scoped-admin demo session: user_role=ADMIN is allowed ONLY when its admin_
   assert.equal(result, true, "a scoped-admin demo session passes the per-request check");
 });
 
+test("unconfined mode (DEMO_LOGIN_CONFINE_TO_PROJECTS=false): a demo account is treated like any account — roles in real projects are allowed, isolation is not required; a GLOBAL admin is STILL refused; the default stays confined", async () => {
+  const unconfined = { DEMO_LOGIN_CONFINE_TO_PROJECTS: "false" };
+  const adm = { authUserId: "a-adm", email: FORMER_ADMIN };
+
+  // A demo worker assigned to a REAL project is allowed (no role-outside-demo).
+  seed();
+  db.user_project_roles.push({ user_id: "u-w", project_id: REAL_PROJECT, department_id: "dep-real", role: "WORKER", status: "Active" });
+  assert.equal((await checkDemoAccount(fakeAdmin(), config(unconfined), worker)).ok, true, "role in a real project is allowed when unconfined");
+
+  // A real member inside a configured project no longer blocks (no project-not-isolated).
+  seed();
+  db.user_project_roles.push({ user_id: "u-real", project_id: DEMO_PROJECT, department_id: "dep-el", role: "WORKER", status: "Active" });
+  assert.equal((await checkDemoAccount(fakeAdmin(), config(unconfined), worker)).ok, true, "a real member in the project doesn't block when unconfined");
+
+  // A SCOPED admin scoped to a REAL project is allowed when unconfined.
+  seed();
+  db.users.find((u) => u.user_id === "u-adm").user_role = "ADMIN";
+  db.admin_scopes.push({ user_id: "u-adm", project_id: REAL_PROJECT });
+  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(unconfined), adm), { ok: true, userId: "u-adm" }, "scoped admin over a real project is allowed when unconfined");
+
+  // A GLOBAL admin (no scope) is STILL refused regardless of the flag (the floor).
+  seed();
+  db.users.find((u) => u.user_id === "u-adm").user_role = "ADMIN";
+  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(unconfined), adm), { ok: false, reason: "admin" }, "a GLOBAL admin is never a demo session, even unconfined");
+
+  // An unprovisioned account (no active role) is still refused.
+  seed();
+  db.user_project_roles = db.user_project_roles.filter((r) => r.user_id !== "u-w");
+  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(unconfined), worker), { ok: false, reason: "no-demo-role" }, "no active role is still refused");
+
+  // DEFAULT stays confined: the same real-project role is refused.
+  seed();
+  db.user_project_roles.push({ user_id: "u-w", project_id: REAL_PROJECT, department_id: "dep-real", role: "WORKER", status: "Active" });
+  assert.deepEqual(await checkDemoAccount(fakeAdmin(), config(), worker), { ok: false, reason: "role-outside-demo" }, "confinement is still the default");
+});
+
 test("demo check: every way an account could reach real data is refused", async () => {
   const cases = [
     ["not-demo-email", () => {}, { authUserId: "a-real", email: "real.user@abc.test" }],

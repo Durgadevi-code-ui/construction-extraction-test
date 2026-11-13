@@ -110,6 +110,22 @@ export type DemoLoginConfig = {
    * when no presentation-Admin account is configured. Server-only: holds a
    * password. */
   adminAccount?: { email: string; password: string };
+  /** Whether a demo session is CONFINED to the configured demo project(s).
+   * Default TRUE (DEMO_LOGIN_CONFINE_TO_PROJECTS unset or any value other
+   * than "false") — the existing, unchanged behavior: a demo account may
+   * only hold roles / admin scope within DEMO_PROJECT_IDS, and those
+   * projects must contain demo (@example.com) members only, so the public
+   * passwordless door never reaches real client data.
+   *
+   * Set DEMO_LOGIN_CONFINE_TO_PROJECTS=false to lift that confinement, so a
+   * demo account is treated like any other account — it sees exactly the
+   * projects it is ASSIGNED to (user_project_roles), by the same rules as
+   * Normal Login. A GLOBAL admin is STILL refused for a demo session
+   * regardless of this flag (the Admin door uses a scoped admin). This flag
+   * is the single, explicit switch that opens Demo Login onto the existing
+   * application's real projects; it is OFF by default and changes nothing
+   * until deliberately enabled alongside the real-project assignments. */
+  confineToProjects: boolean;
 };
 
 function list(value: string | undefined): string[] {
@@ -149,6 +165,8 @@ export function demoLoginConfig(env: Record<string, string | undefined> = proces
     projectIds,
     accounts,
     adminAccount,
+    // Default TRUE (confined) — only an explicit "false" lifts the confinement.
+    confineToProjects: env.DEMO_LOGIN_CONFINE_TO_PROJECTS !== "false",
   };
 }
 
@@ -244,69 +262,72 @@ export async function checkDemoAccount(
         .select("project_id")
         .eq("user_id", userId);
       const scopeIds = scopeError ? [] : (scopeRows ?? []).map((r) => r.project_id as string).filter(Boolean);
+      // A GLOBAL admin (no scope) is refused for a demo session REGARDLESS of
+      // the confinement flag — a public passwordless global admin is never
+      // allowed; the Admin door is always a SCOPED admin.
       if (scopeIds.length === 0) return { ok: false, reason: "admin" };
-      if (scopeIds.some((pid) => !config.projectIds.has(pid))) {
-        return { ok: false, reason: "admin-scope-outside-demo" };
+      if (config.confineToProjects) {
+        if (scopeIds.some((pid) => !config.projectIds.has(pid))) {
+          return { ok: false, reason: "admin-scope-outside-demo" };
+        }
+        const adminIsolated = await demoProjectsIsolated(admin, config);
+        if (adminIsolated === null) return { ok: false, reason: "lookup-failed" };
+        if (!adminIsolated) return { ok: false, reason: "project-not-isolated" };
       }
-      const adminIsolated = await demoProjectsIsolated(admin, config);
-      if (adminIsolated === null) return { ok: false, reason: "lookup-failed" };
-      if (!adminIsolated) return { ok: false, reason: "project-not-isolated" };
       return { ok: true, userId };
     }
 
     const [{ data: roles, error: rolesError }, { data: delegations, error: delegationError }, isolated] = await Promise.all([
       admin.from("user_project_roles").select("project_id, role, departments(department_name)").eq("user_id", userId).eq("status", "Active"),
       admin.from("admin_delegations").select("delegation_id").eq("delegate_user_id", userId).eq("status", "Active"),
-      demoProjectsIsolated(admin, config),
+      config.confineToProjects ? demoProjectsIsolated(admin, config) : Promise.resolve(true),
     ]);
     if (rolesError) return { ok: false, reason: "lookup-failed" };
+    // Always require at least one active role (an unprovisioned account is
+    // never a valid session) — independent of the confinement flag.
     if (!roles || roles.length === 0) return { ok: false, reason: "no-demo-role" };
-    if (roles.some((row) => !config.projectIds.has(row.project_id as string))) {
-      return { ok: false, reason: "role-outside-demo" };
-    }
 
-    if (isolated === null) return { ok: false, reason: "lookup-failed" };
-    if (!isolated) return { ok: false, reason: "project-not-isolated" };
-
-    if (delegationError) return { ok: false, reason: "lookup-failed" };
-    // A demo session may hold an admin delegation ONLY if every one of its
-    // active delegations is confined entirely to the configured (isolated)
-    // presentation project(s): it must name at least one project, and every
-    // project it names must be in config.projectIds. A delegation that
-    // reaches any other project — or that names no project at all — is not a
-    // safe presentation delegation, so the whole session is refused (fails
-    // closed). This is exactly what lets the dedicated presentation-Admin
-    // account (an admin delegation scoped to the presentation project) sign
-    // in with full, scoped Admin Setup, while still refusing any demo
-    // account whose delegation could touch real client data. Every ACTIVE
-    // delegation is checked, not one. Checked again on every request
-    // (demoSessionAllowed); a Revoked delegation is excluded by the status
-    // filter above, and expiry is honored independently at each route
-    // (hasDelegatedPermission.isCurrentlyActive). No demo account is ever a
-    // GLOBAL admin — users.user_role === 'ADMIN' is already refused above.
-    const activeDelegations = delegations ?? [];
-    if (activeDelegations.length > 0) {
-      const { data: delegationProjects, error: delegationProjectsError } = await admin
-        .from("delegation_projects")
-        .select("delegation_id, project_id")
-        .in(
-          "delegation_id",
-          activeDelegations.map((d) => d.delegation_id as string)
-        );
-      if (delegationProjectsError) return { ok: false, reason: "lookup-failed" };
-      const projectsByDelegation = new Map<string, string[]>();
-      for (const row of delegationProjects ?? []) {
-        const existing = projectsByDelegation.get(row.delegation_id as string) ?? [];
-        existing.push(row.project_id as string);
-        projectsByDelegation.set(row.delegation_id as string, existing);
+    // Project confinement (default). When DEMO_LOGIN_CONFINE_TO_PROJECTS=false,
+    // a demo account is treated like any other account: it sees exactly the
+    // projects it is assigned to, with no demo-project restriction and no
+    // isolation requirement — so Demo Login enters the existing application
+    // and data by the same rules as Normal Login.
+    if (config.confineToProjects) {
+      if (roles.some((row) => !config.projectIds.has(row.project_id as string))) {
+        return { ok: false, reason: "role-outside-demo" };
       }
-      for (const delegation of activeDelegations) {
-        const delegationProjectIds = projectsByDelegation.get(delegation.delegation_id as string) ?? [];
-        if (
-          delegationProjectIds.length === 0 ||
-          delegationProjectIds.some((projectId) => !config.projectIds.has(projectId))
-        ) {
-          return { ok: false, reason: "delegation-outside-demo" };
+      if (isolated === null) return { ok: false, reason: "lookup-failed" };
+      if (!isolated) return { ok: false, reason: "project-not-isolated" };
+      if (delegationError) return { ok: false, reason: "lookup-failed" };
+      // A demo session may hold an admin delegation ONLY if every one of its
+      // active delegations is confined entirely to the configured demo
+      // project(s): at least one project, all within config.projectIds (fails
+      // closed otherwise). No demo account is ever a GLOBAL admin (refused
+      // above). Re-checked on every request (demoSessionAllowed).
+      const activeDelegations = delegations ?? [];
+      if (activeDelegations.length > 0) {
+        const { data: delegationProjects, error: delegationProjectsError } = await admin
+          .from("delegation_projects")
+          .select("delegation_id, project_id")
+          .in(
+            "delegation_id",
+            activeDelegations.map((d) => d.delegation_id as string)
+          );
+        if (delegationProjectsError) return { ok: false, reason: "lookup-failed" };
+        const projectsByDelegation = new Map<string, string[]>();
+        for (const row of delegationProjects ?? []) {
+          const existing = projectsByDelegation.get(row.delegation_id as string) ?? [];
+          existing.push(row.project_id as string);
+          projectsByDelegation.set(row.delegation_id as string, existing);
+        }
+        for (const delegation of activeDelegations) {
+          const delegationProjectIds = projectsByDelegation.get(delegation.delegation_id as string) ?? [];
+          if (
+            delegationProjectIds.length === 0 ||
+            delegationProjectIds.some((projectId) => !config.projectIds.has(projectId))
+          ) {
+            return { ok: false, reason: "delegation-outside-demo" };
+          }
         }
       }
     }
