@@ -34,16 +34,12 @@ import EmptyState from "@/components/ui/EmptyState";
 import Link from "next/link";
 import DashboardShell, { type ShellTab } from "@/components/workflow/DashboardShell";
 import ChatPanel from "@/components/workflow/ChatPanel";
-import { READ_ONLY_MESSAGE, ReadOnlyFieldset, WriteButton, useReadOnly } from "@/components/ui/ReadOnly";
 
 type Props = {
   adminUserId: string;
   /** The signed-in caller's email — purely for the header's profile
    * chip (see DashboardShell). */
   userEmail?: string;
-  /** The caller's real display name (public.users first/last name),
-   * preferred over the email-derived guess in the profile chip. */
-  userDisplayName?: string;
   /** False for a Contractor reached here only via an active
    * administrative delegation (see lib/delegation.ts
    * resolveAdminSetupAccess) — every tab below reads this to hide
@@ -57,10 +53,6 @@ type Props = {
    * grants — irrelevant when isRealAdmin (a real Admin can always do
    * everything). Empty for a real Admin. */
   delegatedPermissions: DelegationPermission[];
-  /** A SCOPED admin (the existing ADMIN role confined to a project scope —
-   * e.g. the Demo Login Admin): labelled "Admin" and shown the project-scopeable
-   * tabs, but Companies/Delegations and the dev tool stay global-admin-only. */
-  isScopedAdmin?: boolean;
   companies: Company[];
   projects: Project[];
   departments: Department[];
@@ -137,9 +129,7 @@ const UOM_DATALIST_ID = "uom-suggestions";
 export default function AdminSetupPanel({
   adminUserId,
   userEmail,
-  userDisplayName,
   isRealAdmin,
-  isScopedAdmin = false,
   delegatedPermissions,
   companies,
   projects,
@@ -184,11 +174,10 @@ export default function AdminSetupPanel({
       activeTab={activeTab}
       onTabChange={(key) => setTab(key as Tab)}
       heading={TAB_HEADING[activeTab]}
-      subheading={isRealAdmin || isScopedAdmin ? undefined : "Viewing under a temporary administrative delegation."}
+      subheading={isRealAdmin ? undefined : "Viewing under a temporary administrative delegation."}
       userId={adminUserId}
       userEmail={userEmail}
-      displayName={userDisplayName}
-      roleLabel={isRealAdmin || isScopedAdmin ? "Admin" : "Delegated Admin"}
+      roleLabel={isRealAdmin ? "Admin" : "Delegated Admin"}
       actions={
         // Relocated from the removed top nav bar (see
         // components/workflow/TopNav.tsx) — same two links, same
@@ -313,19 +302,12 @@ function SystemOverviewStats({
 
 function useSubmit(path: string, method: "POST" | "PATCH" | "DELETE" = "POST") {
   const router = useRouter();
-  const readOnly = useReadOnly();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   /** The response body on success (truthy — callers can keep `if (ok)`),
    * false on failure. */
   async function submit(body: Record<string, unknown>): Promise<Record<string, unknown> | false> {
-    // DEMO_LOGIN_READ_ONLY on (lib/demoEmail.ts): the controls are
-    // disabled; this is the backstop. Off by default: never true.
-    if (readOnly) {
-      setError(READ_ONLY_MESSAGE);
-      return false;
-    }
     setSubmitting(true);
     setError(null);
     try {
@@ -367,7 +349,6 @@ function CompaniesTab({ adminUserId, companies }: { adminUserId: string; compani
 
   return (
     <div className="space-y-4">
-      <ReadOnlyFieldset>
       <form onSubmit={handleSubmit} className="bg-white rounded-lg border border-line p-4 space-y-3">
         <h2 className="font-semibold text-foreground text-sm">New Company</h2>
         <Field label="Company Name" value={name} onChange={setName} required />
@@ -378,7 +359,6 @@ function CompaniesTab({ adminUserId, companies }: { adminUserId: string; compani
           <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
         )}
       </form>
-      </ReadOnlyFieldset>
 
       <ListSection title="Existing Companies" empty={companies.length === 0}>
         {companies.map((c) => (
@@ -429,7 +409,7 @@ function ProjectsTab({
       <div className="space-y-4">
         <p className="text-xs text-warning bg-warning-soft border border-warning-border rounded-lg p-2.5">
           Creating a new project is Admin-only. You can edit the details of your delegated
-          project(s) below, including Excel import and download.
+          project(s) below.
         </p>
         <ListSection title="Delegated Projects" empty={projects.length === 0}>
           {projects.map((p) => (
@@ -446,7 +426,6 @@ function ProjectsTab({
 
   return (
     <div className="space-y-4">
-      <ReadOnlyFieldset>
       <form onSubmit={handleSubmit} className="bg-white rounded-lg border border-line p-4 space-y-3">
         <h2 className="font-semibold text-foreground text-sm">New Project</h2>
         <SelectField
@@ -463,7 +442,6 @@ function ProjectsTab({
             <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
           )}
       </form>
-      </ReadOnlyFieldset>
 
       <ListSection title="Existing Projects" empty={projects.length === 0}>
         {projects.map((p) => (
@@ -517,9 +495,9 @@ function ProjectRow({ adminUserId, project }: { adminUserId: string; project: Pr
         </div>
         <div className="flex gap-2 shrink-0">
           {!editing && (
-            <WriteButton variant="secondary" size="sm" onClick={() => setEditing(true)}>
+            <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
               Edit
-            </WriteButton>
+            </Button>
           )}
         </div>
       </div>
@@ -612,7 +590,6 @@ function DepartmentsTab({
 
   return (
     <div className="space-y-4">
-      <ReadOnlyFieldset>
       <form onSubmit={handleSubmit} className="bg-white rounded-lg border border-line p-4 space-y-3">
         <h2 className="font-semibold text-foreground text-sm">New Department</h2>
         {!isRealAdmin && (
@@ -646,7 +623,6 @@ function DepartmentsTab({
             <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
           )}
       </form>
-      </ReadOnlyFieldset>
 
       <ListSection title={isRealAdmin ? "Existing Departments" : "Delegated Departments"} empty={departments.length === 0}>
         {departments.map((d) => (
@@ -685,9 +661,9 @@ function DepartmentRow({ adminUserId, department }: { adminUserId: string; depar
           <StatusBadge status={department.status} />
         </div>
         {!editing && (
-          <WriteButton variant="secondary" size="sm" onClick={() => setEditing(true)} className="shrink-0">
+          <Button variant="secondary" size="sm" onClick={() => setEditing(true)} className="shrink-0">
             Edit
-          </WriteButton>
+          </Button>
         )}
       </div>
 
@@ -773,7 +749,6 @@ function WorkItemsTab({
         ))}
       </datalist>
 
-      <ReadOnlyFieldset>
       <form onSubmit={handleSubmit} className="bg-white rounded-lg border border-line p-4 space-y-3">
         <h2 className="font-semibold text-foreground text-sm">New Work Item</h2>
         <SelectField
@@ -826,7 +801,6 @@ function WorkItemsTab({
             <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
           )}
       </form>
-      </ReadOnlyFieldset>
 
       {/* Project → Department → Work Items: the same work items as before,
           grouped by the department (and that department's project) each
@@ -960,10 +934,10 @@ function WorkItemRow({
         </div>
         {!editing && (
           <div className="flex shrink-0 gap-2">
-            <WriteButton variant="secondary" size="sm" onClick={() => setEditing(true)}>
+            <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
               Edit
-            </WriteButton>
-            <WriteButton
+            </Button>
+            <Button
               variant="secondary"
               size="sm"
               disabled={statusSubmit.submitting}
@@ -973,7 +947,7 @@ function WorkItemRow({
               }}
             >
               {statusSubmit.submitting ? "Saving…" : isActive ? "Deactivate" : "Activate"}
-            </WriteButton>
+            </Button>
           </div>
         )}
       </div>
@@ -1136,7 +1110,6 @@ function UsersTab({
 
   return (
     <div className="space-y-4">
-      <ReadOnlyFieldset>
       <form onSubmit={handleSubmit} className="bg-white rounded-lg border border-line p-4 space-y-3">
         <h2 className="font-semibold text-foreground text-sm">New User</h2>
         {!isRealAdmin && (
@@ -1199,7 +1172,6 @@ function UsersTab({
             <p className="rounded-lg border border-error-border bg-error-soft px-3 py-2 text-sm text-error">{error}</p>
           )}
       </form>
-      </ReadOnlyFieldset>
 
       <ListSection title={isRealAdmin ? "Existing Users" : "Users in Delegated Scope"} empty={users.length === 0}>
         {users.map((u) => (
@@ -1223,7 +1195,6 @@ function UsersTab({
                * boundary as removing an assignment above — hidden here
                * to match the server-side guard in
                * app/api/admin/link-auth/route.ts. */}
-              <ReadOnlyFieldset className="contents">
               {!u.isLinked && (isRealAdmin || u.role !== "ADMIN") && (
                 <LinkLoginButton adminUserId={adminUserId} targetUserId={u.userId} email={u.email} />
               )}
@@ -1231,7 +1202,6 @@ function UsersTab({
               {u.isLinked && u.userId !== adminUserId && (isRealAdmin || u.role !== "ADMIN") && (
                 <ResetPasswordButton targetUserId={u.userId} email={u.email} />
               )}
-              </ReadOnlyFieldset>
             </div>
             {u.projectRoles.length === 0 ? (
               <p className="text-foreground-muted mt-1">No active project/department role assignment yet.</p>
@@ -1283,9 +1253,9 @@ function RemoveAssignmentButton({
 
   return (
     <div className="flex items-center gap-2 shrink-0">
-      <WriteButton variant="danger" size="sm" onClick={handleRemove} disabled={submitting}>
+      <Button variant="danger" size="sm" onClick={handleRemove} disabled={submitting}>
         {submitting ? "Removing…" : "Remove"}
-      </WriteButton>
+      </Button>
       {error && <span className="text-xs text-error">{error}</span>}
     </div>
   );
@@ -1359,7 +1329,6 @@ function LinkLoginButton({
   }
 
   return (
-    <ReadOnlyFieldset>
     <form onSubmit={handleSubmit} className="flex items-center gap-1.5 shrink-0">
       <Input
         type="text"
@@ -1377,7 +1346,6 @@ function LinkLoginButton({
       </Button>
       {error && <span className="text-xs text-error">{error}</span>}
     </form>
-    </ReadOnlyFieldset>
   );
 }
 
@@ -1433,7 +1401,6 @@ function ResetPasswordButton({ targetUserId, email }: { targetUserId: string; em
   }
 
   return (
-    <ReadOnlyFieldset>
     <form onSubmit={handleSubmit} className="flex items-center gap-1.5 shrink-0">
       <Input
         type="text"
@@ -1451,7 +1418,6 @@ function ResetPasswordButton({ targetUserId, email }: { targetUserId: string; em
       </Button>
       {error && <span className="text-xs text-error">{error}</span>}
     </form>
-    </ReadOnlyFieldset>
   );
 }
 
@@ -1605,9 +1571,9 @@ function SelectField({
 
 function SubmitButton({ submitting, label }: { submitting: boolean; label: string }) {
   return (
-    <WriteButton type="submit" disabled={submitting}>
+    <Button type="submit" disabled={submitting}>
       {submitting ? "Saving…" : label}
-    </WriteButton>
+    </Button>
   );
 }
 

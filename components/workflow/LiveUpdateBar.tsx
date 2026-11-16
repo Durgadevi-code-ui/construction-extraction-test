@@ -3,7 +3,6 @@
 import { useRef, useState } from "react";
 import { Camera } from "lucide-react";
 import CameraCapture from "@/components/CameraCapture";
-import { READ_ONLY_MESSAGE, ReadOnlyNote, useReadOnly } from "@/components/ui/ReadOnly";
 
 type Props = {
   /** The work item the worker just submitted progress for — the photo is
@@ -32,7 +31,6 @@ export default function LiveUpdateBar({ workItemId, onDone }: Props) {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [status, setStatus] = useState<"ask" | "uploading" | "sent" | "error">("ask");
   const [message, setMessage] = useState<string | null>(null);
-  const readOnly = useReadOnly();
 
   async function upload(file: File) {
     setStatus("uploading");
@@ -93,8 +91,7 @@ export default function LiveUpdateBar({ workItemId, onDone }: Props) {
             <button
               type="button"
               onClick={() => setCameraOpen(true)}
-              disabled={readOnly || status === "uploading"}
-              title={readOnly ? READ_ONLY_MESSAGE : undefined}
+              disabled={status === "uploading"}
               className="inline-flex items-center gap-1.5 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors duration-150 hover:bg-brand-hover disabled:opacity-50"
             >
               <Camera className="h-4 w-4" strokeWidth={2} />
@@ -112,12 +109,11 @@ export default function LiveUpdateBar({ workItemId, onDone }: Props) {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            disabled={readOnly || status === "uploading"}
+            disabled={status === "uploading"}
             className="text-xs text-foreground-muted hover:text-foreground-secondary hover:underline disabled:opacity-50"
           >
             Camera not working? Choose a photo instead
           </button>
-          {readOnly && <ReadOnlyNote>Photo uploads are turned off in the read-only demo.</ReadOnlyNote>}
           {status === "error" && message && <p className="text-xs text-error">{message}</p>}
         </>
       )}

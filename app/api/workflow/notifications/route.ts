@@ -2,7 +2,6 @@ import { NextResponse, type NextRequest } from "next/server";
 import { jsonError } from "@/lib/apiErrors";
 import { getSupabaseClient } from "@/lib/supabase";
 import { getCurrentUser } from "@/lib/session";
-import { demoWriteRefusal } from "@/lib/demoWriteGuard";
 import { resolveActorRole } from "@/lib/authContext";
 import {
   getUnreadNotificationCount,
@@ -52,8 +51,6 @@ export async function POST(request: NextRequest) {
   if (!currentUser) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  const demoReadOnly = demoWriteRefusal(currentUser);
-  if (demoReadOnly) return demoReadOnly;
 
   const supabase = getSupabaseClient();
 

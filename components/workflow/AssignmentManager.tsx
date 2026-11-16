@@ -13,7 +13,6 @@ import Input from "@/components/ui/Input";
 import { ClipboardList, Search, X } from "lucide-react";
 
 import { errorMessage, readApiJson } from "@/lib/apiClient";
-import { READ_ONLY_MESSAGE, ReadOnlyFieldset, useReadOnly } from "@/components/ui/ReadOnly";
 export type AssignmentWorkerOption = {
   userId: string;
   email: string;
@@ -103,7 +102,6 @@ export default function AssignmentManager({
   headerAction,
 }: Props) {
   const router = useRouter();
-  const readOnly = useReadOnly();
   const [error, setError] = useState<string | null>(null);
   // Which work item's Manage panel is open (one at a time).
   const [openId, setOpenId] = useState<string | null>(null);
@@ -266,8 +264,7 @@ export default function AssignmentManager({
           variant="secondary"
           size="sm"
           onClick={() => setActive(row.workItemId, true)}
-          disabled={readOnly || busyKey === `status:${row.workItemId}`}
-          title={readOnly ? READ_ONLY_MESSAGE : undefined}
+          disabled={busyKey === `status:${row.workItemId}`}
         >
           {busyKey === `status:${row.workItemId}` ? "Activating…" : "Activate"}
         </Button>
@@ -293,8 +290,6 @@ export default function AssignmentManager({
       : available;
     return (
       <div className="space-y-3 border-t border-line-soft bg-surface-soft px-4 py-3">
-        <ReadOnlyFieldset notice="Assigning workers and changing work items is turned off in the read-only demo.">
-        <div className="space-y-3">
         <div>
           <p className="text-xs font-medium text-foreground-secondary mb-1.5">Assigned workers ({assigned.length})</p>
           {assigned.length === 0 ? (
@@ -376,8 +371,6 @@ export default function AssignmentManager({
             </div>
           )}
         </div>
-        </div>
-        </ReadOnlyFieldset>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line-soft pt-3">
           <span className="flex items-center gap-2">
@@ -394,8 +387,7 @@ export default function AssignmentManager({
               variant="secondary"
               size="sm"
               onClick={() => setActive(w.workItemId, false)}
-              disabled={readOnly || busyKey === `status:${w.workItemId}`}
-              title={readOnly ? READ_ONLY_MESSAGE : undefined}
+              disabled={busyKey === `status:${w.workItemId}`}
             >
               {busyKey === `status:${w.workItemId}` ? "Deactivating…" : "Deactivate work item"}
             </Button>

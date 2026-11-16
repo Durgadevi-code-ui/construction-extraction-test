@@ -15,7 +15,6 @@ import {
 } from "@/lib/workflow";
 import { CONTRACTOR_ROLES } from "@/lib/authContext";
 import { getCurrentUser } from "@/lib/session";
-import { demoWriteRefusal } from "@/lib/demoWriteGuard";
 import { MAX_COMMENT_LENGTH, MAX_DESCRIPTION_LENGTH, tooLongError } from "@/lib/inputLimits";
 
 export const runtime = "nodejs";
@@ -74,8 +73,6 @@ export async function POST(request: NextRequest) {
   if (!currentUser) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  const demoReadOnly = demoWriteRefusal(currentUser);
-  if (demoReadOnly) return demoReadOnly;
 
   const supabase = getSupabaseClient();
   const supervisorUserId = currentUser.userId;

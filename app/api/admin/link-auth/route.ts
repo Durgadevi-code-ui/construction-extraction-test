@@ -4,9 +4,8 @@ import { getSupabaseClient } from "@/lib/supabase";
 import { getSupabaseServiceRoleClient } from "@/lib/supabaseAdmin";
 import { getUserLinkContext, getDepartmentProjectId, linkUserToAuthAccount } from "@/lib/admin";
 import { assertAdminOrDelegated } from "@/lib/delegation";
-import { isGlobalAdmin } from "@/lib/authContext";
+import { isAdminUser } from "@/lib/authContext";
 import { getCurrentUser } from "@/lib/session";
-import { demoWriteRefusal } from "@/lib/demoWriteGuard";
 
 export const runtime = "nodejs";
 
@@ -25,8 +24,6 @@ export async function POST(request: NextRequest) {
   if (!currentUser) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  const demoReadOnly = demoWriteRefusal(currentUser);
-  if (demoReadOnly) return demoReadOnly;
 
   const supabase = getSupabaseClient();
   const actorUserId = currentUser.userId;
@@ -47,16 +44,16 @@ export async function POST(request: NextRequest) {
     }
 
     const target = await getUserLinkContext(supabase, targetUserId);
-    const actorIsGlobalAdmin = await isGlobalAdmin(supabase, actorUserId);
+    const actorIsRealAdmin = await isAdminUser(supabase, actorUserId);
 
-    if (target.role === "ADMIN" && !actorIsGlobalAdmin) {
+    if (target.role === "ADMIN" && !actorIsRealAdmin) {
       return NextResponse.json(
         { error: "Only an existing Admin may link another Admin's login." },
         { status: 403 }
       );
     }
 
-    if (!actorIsGlobalAdmin) {
+    if (!actorIsRealAdmin) {
       const projectId = await getDepartmentProjectId(supabase, target.departmentId);
       await assertAdminOrDelegated(supabase, {
         actorUserId,

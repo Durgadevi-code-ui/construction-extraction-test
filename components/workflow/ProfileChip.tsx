@@ -24,14 +24,11 @@ function displayNameFromEmail(email: string): string {
     .join(" ");
 }
 
-function initialsFromName(name: string): string {
+function initialsFromEmail(email: string): string {
+  const name = displayNameFromEmail(email);
   const parts = name.split(" ").filter(Boolean);
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
   return name.slice(0, 2).toUpperCase();
-}
-
-function initialsFromEmail(email: string): string {
-  return initialsFromName(displayNameFromEmail(email));
 }
 
 /**
@@ -39,39 +36,27 @@ function initialsFromEmail(email: string): string {
  * DashboardShell) — avatar initials + display name + role label, one per
  * page for every role. With `onClick` it opens that role's Profile tab
  * (`active` while it's open); without, it's display-only (e.g. Admin,
- * which has no Profile tab).
- *
- * `name` is the account's real display name (public.users first/last
- * name), already resolved server-side — it's preferred when present so
- * every account, including a Demo Login one, shows its real person name
- * (e.g. "Alex Rivera"). Only when no stored name exists do we fall back
- * to a cosmetic best-effort guess from the verified session email; the
- * email guess is never an identity source and would otherwise surface the
- * account's local-part (e.g. "Demo Worker" from demo.worker.electrical@…).
+ * which has no Profile tab). The name is a cosmetic best-effort guess
+ * from the already-verified session email, never a new identity source.
  */
 export default function ProfileChip({
   email,
-  name,
   roleLabel,
   onClick,
   active = false,
 }: {
   email: string;
-  name?: string;
   roleLabel: string;
   onClick?: () => void;
   active?: boolean;
 }) {
-  const trimmed = name?.trim();
-  const displayName = trimmed || displayNameFromEmail(email);
-  const initials = trimmed ? initialsFromName(trimmed) : initialsFromEmail(email);
   const content = (
     <>
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-brand text-xs font-semibold">
-        {initials}
+        {initialsFromEmail(email)}
       </span>
       <span className="hidden lg:block min-w-0 text-left text-xs leading-tight">
-        <span className="block font-medium truncate">{displayName}</span>
+        <span className="block font-medium truncate">{displayNameFromEmail(email)}</span>
         <span className="block text-white/60 truncate">{roleLabel}</span>
       </span>
     </>
@@ -85,7 +70,7 @@ export default function ProfileChip({
       type="button"
       onClick={onClick}
       aria-current={active ? "page" : undefined}
-      aria-label={`Profile — ${displayName}, ${roleLabel}`}
+      aria-label={`Profile — ${displayNameFromEmail(email)}, ${roleLabel}`}
       className={`${className} ${active ? "" : "hover:bg-white/10 hover:text-white"}`}
     >
       {content}

@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getUserContext, assertRole, adminCanAccessProject, resolveActorRole, CONTRACTOR_ROLES } from "./authContext";
+import { getUserContext, assertRole, isAdminUser, resolveActorRole, CONTRACTOR_ROLES } from "./authContext";
 import { hasDelegatedPermission } from "./delegation";
 import { updateWorkItemValues } from "./admin";
 import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
@@ -166,21 +166,12 @@ async function getPrimaryAssignedWorkItem(
     : undefined;
 
   if (!workItem) {
-    throw new NoAssignedWorkItemError(workerId, departmentId);
+    throw new Error(
+      `No work item is assigned to worker ${workerId} in department ${departmentId}`
+    );
   }
 
   return workItem;
-}
-
-/** A Worker with no Active assignment in their department — an expected,
- * empty state (e.g. a newly added Worker), not a server failure: the
- * worker API answers it with `{ workItem: null }` instead of a 500, the
- * same "No work items assigned yet" the Worker Dashboard already shows. */
-export class NoAssignedWorkItemError extends Error {
-  constructor(workerId: string, departmentId: string) {
-    super(`No work item is assigned to worker ${workerId} in department ${departmentId}`);
-    this.name = "NoAssignedWorkItemError";
-  }
 }
 
 /** One selectable task/activity under a work item — stored as data in
@@ -1534,7 +1525,7 @@ async function assertCanReviewProgress(
   callerUserId: string,
   scope: { projectId: string; departmentId: string }
 ): Promise<void> {
-  if (await adminCanAccessProject(supabase, callerUserId, scope.projectId)) return;
+  if (await isAdminUser(supabase, callerUserId)) return;
 
   // Resolve the caller's role row for the submission's OWN project/
   // department (a Contractor may hold roles on several projects); still
@@ -2026,7 +2017,7 @@ async function assertCanManageAssignments(
   // getUserContext for the caller first would throw for exactly that
   // account before this function ever got a chance to recognize it as
   // Admin (see isAdminUser's doc in lib/authContext.ts).
-  if (await adminCanAccessProject(supabase, callerUserId, workItem.project_id)) return;
+  if (await isAdminUser(supabase, callerUserId)) return;
 
   // The caller's role row for the work item's own project/department.
   const callerCtx = await getUserContext(supabase, callerUserId, {
@@ -2168,7 +2159,7 @@ export async function updatePlannedQuantity(
 
   // isAdminUser first, not getUserContext — see assertCanManageAssignments
   // above for why (a bootstrap-created Admin has no user_project_roles row).
-  if (!(await adminCanAccessProject(supabase, params.actorUserId, workItem.project_id))) {
+  if (!(await isAdminUser(supabase, params.actorUserId))) {
     const ctx = await getUserContext(supabase, params.actorUserId, {
       projectId: workItem.project_id,
       departmentId: workItem.department_id,
@@ -2220,7 +2211,7 @@ async function assertCanManageWorkItemTasks(
   actorUserId: string,
   workItem: WorkItemRecord
 ): Promise<void> {
-  if (await adminCanAccessProject(supabase, actorUserId, workItem.project_id)) return;
+  if (await isAdminUser(supabase, actorUserId)) return;
 
   const ctx = await getUserContext(supabase, actorUserId, {
     projectId: workItem.project_id,

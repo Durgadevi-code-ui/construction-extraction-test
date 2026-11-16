@@ -2,8 +2,6 @@ import "server-only";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "./supabaseServer";
 import { getSupabaseServiceRoleClient } from "./supabaseAdmin";
-import { demoSessionAllowed } from "./demoAccess";
-import { isDemoAccountEmail, isDemoReadOnlyMode } from "./demoEmail";
 
 /**
  * Server-verified identity for the current request — the "DAL" Next.js
@@ -40,9 +38,6 @@ export type CurrentUser = {
    * this, not authUserId. */
   userId: string;
   email: string;
-  /** A shared Demo Login account (reserved @example.com domain, same rule
-   * as proxy.ts): read-only everywhere — see lib/demoWriteGuard.ts. */
-  isDemo: boolean;
 };
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
@@ -58,8 +53,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   // Looked up with the service-role client, keyed on the id getUser()
   // just verified — so this keeps working once public.users has no
   // anon/authenticated policy (00000000000022).
-  const admin = getSupabaseServiceRoleClient();
-  const { data: profile, error: profileError } = await admin
+  const { data: profile, error: profileError } = await getSupabaseServiceRoleClient()
     .from("users")
     .select("user_id, user_mail")
     .eq("auth_user_id", authUser.id)
@@ -67,41 +61,11 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 
   if (profileError || !profile) return null;
 
-  // A configured demo account (app/demo-login) is re-checked as isolated
-  // on every request; any other account is unaffected (lib/demoAccess.ts).
-  const allowed = await demoSessionAllowed(admin, {
-    authUserId: authUser.id,
-    authEmail: authUser.email ?? "",
-    appEmail: profile.user_mail as string,
-  });
-  if (!allowed) return null;
-
   return {
     authUserId: authUser.id,
     userId: profile.user_id as string,
     email: profile.user_mail as string,
-    isDemo: isDemoAccountEmail(authUser.email) || isDemoAccountEmail(profile.user_mail),
   };
-}
-
-/**
- * Whether this request's session is a demo account AND the
- * DEMO_LOGIN_READ_ONLY emergency switch is on — for the UI only (read-only
- * banner and disabled controls, app/workflow/layout.tsx and
- * app/admin/setup/layout.tsx). False by default, so demo sessions get the
- * exact same screens as everyone else. Reads the verified token claims, no
- * database query; authorization never depends on it (that is
- * getCurrentUser + lib/demoWriteGuard.ts + proxy.ts).
- */
-export async function isDemoSession(): Promise<boolean> {
-  if (!isDemoReadOnlyMode()) return false;
-  try {
-    const supabase = await createSupabaseServerClient();
-    const { data } = await supabase.auth.getClaims();
-    return isDemoAccountEmail(data?.claims?.email);
-  } catch {
-    return false;
-  }
 }
 
 /**

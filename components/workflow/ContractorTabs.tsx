@@ -255,7 +255,6 @@ export default function ContractorTabs({
       projectName={projectName}
       userId={userId}
       userEmail={userEmail}
-      displayName={profile.displayName}
       roleLabel="Contractor"
       profileTabKey="profile"
       showNotificationToasts

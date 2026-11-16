@@ -84,6 +84,14 @@ export default async function LoginPage({
           )}
 
           <LoginForm next={next} />
+
+          {/* Separate Demo Login page (original role/user picker). */}
+          <p className="text-center text-sm text-foreground-secondary">
+            Just exploring?{" "}
+            <a href="/demo-login" className="text-brand font-medium hover:underline">
+              Demo Login
+            </a>
+          </p>
         </div>
       </div>
     </main>

@@ -9,7 +9,6 @@ import Input from "@/components/ui/Input";
 import useScrollActiveIntoView from "@/components/workflow/useScrollActiveIntoView";
 import { timeOfDayGreeting } from "@/lib/format";
 import { logout } from "@/app/login/actions";
-import { ReadOnlyBanner } from "@/components/ui/ReadOnly";
 
 export type ShellTab = {
   key: string;
@@ -40,10 +39,6 @@ type Props = {
    * for the sidebar Profile control (see ProfileChip). Omit either and no
    * Profile control renders. */
   userEmail?: string;
-  /** The caller's real display name (public.users first/last name),
-   * resolved server-side. Preferred over the email-derived guess in the
-   * Profile control so every account shows its real person name. */
-  displayName?: string;
   roleLabel?: string;
   /** Key of the caller's Profile tab, if it has one. That tab is not
    * listed in the nav; the Profile control above Sign out opens it
@@ -90,7 +85,6 @@ export default function DashboardShell({
   showGreeting = true,
   userId,
   userEmail,
-  displayName,
   roleLabel,
   profileTabKey,
   showNotificationToasts = false,
@@ -201,7 +195,6 @@ export default function DashboardShell({
             <div className="shrink-0 min-w-0 lg:flex-none">
               <ProfileChip
                 email={userEmail}
-                name={displayName}
                 roleLabel={roleLabel}
                 onClick={profileTabKey ? () => onTabChange(profileTabKey) : undefined}
                 active={!!profileTabKey && activeTab === profileTabKey}
@@ -273,7 +266,6 @@ export default function DashboardShell({
           )}
         </div>
 
-        <ReadOnlyBanner />
         {children}
       </div>
     </div>

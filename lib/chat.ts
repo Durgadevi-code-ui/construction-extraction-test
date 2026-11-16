@@ -1,8 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getUserContext, getAdminScope } from "./authContext";
+import { getUserContext, isAdminUser } from "./authContext";
 import { formatUserDisplayName } from "./format";
-import { isDemoAccountEmail } from "./demoEmail";
 
 /**
  * Project Communication / Chat — a simple project-scoped message
@@ -62,17 +61,11 @@ async function resolveSenderContext(
   userId: string,
   requestedProjectId?: string | null
 ): Promise<{ projectId: string; role: string }> {
-  const adminScope = await getAdminScope(supabase, userId);
-  if (adminScope !== null) {
+  if (await isAdminUser(supabase, userId)) {
     if (!requestedProjectId) {
       throw new Error("Select a project to view its communication.");
     }
-    // A global admin may view any project's communication; a scoped admin
-    // only a project within its scope (never a real client project).
-    if (adminScope === "ALL" || adminScope.has(requestedProjectId)) {
-      return { projectId: requestedProjectId, role: "ADMIN" };
-    }
-    throw new Error(`Admin ${userId} is not authorized for project ${requestedProjectId}.`);
+    return { projectId: requestedProjectId, role: "ADMIN" };
   }
 
   // The page's current project (a user with roles on several projects)
@@ -192,22 +185,8 @@ export async function sendChatMessage(
 export async function listProjectContacts(
   supabase: SupabaseClient,
   userId: string,
-  requestedProjectId?: string | null,
-  options: { demoSession?: boolean } = {}
-): Promise<ChatContact[]> {
-  const contacts = await listAllProjectContacts(supabase, userId, requestedProjectId);
-  // A Demo Login session (shared, public) only ever reaches other demo
-  // accounts: never the real Admin(s), never a real person. Everyone else
-  // gets the list unchanged.
-  const visible = options.demoSession ? contacts.filter((c) => c.role !== "ADMIN" && c.isDemo) : contacts;
-  return visible.map(({ userId: id, name, role }) => ({ userId: id, name, role }));
-}
-
-async function listAllProjectContacts(
-  supabase: SupabaseClient,
-  userId: string,
   requestedProjectId?: string | null
-): Promise<(ChatContact & { isDemo: boolean })[]> {
+): Promise<ChatContact[]> {
   const { projectId } = await resolveSenderContext(supabase, userId, requestedProjectId);
 
   const { data: memberRows, error: memberError } = await supabase
@@ -236,7 +215,7 @@ async function listAllProjectContacts(
   // project role) or more than once in memberRows (more than one
   // Active role row) — contacts are per-person, first occurrence wins.
   const seen = new Set<string>();
-  const contacts: (ChatContact & { isDemo: boolean })[] = [];
+  const contacts: ChatContact[] = [];
 
   for (const row of memberRows ?? []) {
     const uid = row.user_id as string;
@@ -251,7 +230,6 @@ async function listAllProjectContacts(
         email: (userRow?.user_mail as string | null) ?? "",
       }),
       role: row.role as string,
-      isDemo: isDemoAccountEmail(userRow?.user_mail),
     });
   }
 
@@ -267,7 +245,6 @@ async function listAllProjectContacts(
         email: (row.user_mail as string | null) ?? "",
       }),
       role: "ADMIN",
-      isDemo: isDemoAccountEmail(row.user_mail),
     });
   }
 
@@ -364,8 +341,7 @@ export async function sendDirectMessage(
   userId: string,
   recipientUserId: string,
   body: string,
-  requestedProjectId?: string | null,
-  options: { demoSession?: boolean } = {}
+  requestedProjectId?: string | null
 ): Promise<void> {
   const trimmed = body.trim();
   if (!trimmed) {
@@ -377,7 +353,7 @@ export async function sendDirectMessage(
 
   const { projectId, role } = await resolveSenderContext(supabase, userId, requestedProjectId);
 
-  const contacts = await listProjectContacts(supabase, userId, requestedProjectId, options);
+  const contacts = await listProjectContacts(supabase, userId, requestedProjectId);
   if (!contacts.some((c) => c.userId === recipientUserId)) {
     throw new Error("You can only message users in your own project.");
   }

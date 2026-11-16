@@ -14,7 +14,6 @@ import Button from "@/components/ui/Button";
 import Badge, { type BadgeVariant } from "@/components/ui/Badge";
 import Input from "@/components/ui/Input";
 import { Select } from "@/components/ui/Input";
-import { ReadOnlyNote, WriteButton, useReadOnly } from "@/components/ui/ReadOnly";
 
 export type ContractorOption = {
   userId: string;
@@ -163,7 +162,6 @@ export default function DelegationManager({
   departments,
 }: Props) {
   const router = useRouter();
-  const readOnly = useReadOnly();
   const [delegateUserId, setDelegateUserId] = useState(contractors[0]?.userId ?? "");
   const [projectIds, setProjectIds] = useState<string[]>([]);
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
@@ -287,9 +285,7 @@ export default function DelegationManager({
         Department/User administration is never delegable and always stays Admin-only.
       </div>
 
-      {readOnly ? (
-        <ReadOnlyNote>Creating and revoking delegations is turned off in the read-only demo. Existing delegations for the demo projects are listed below.</ReadOnlyNote>
-      ) : contractors.length === 0 ? (
+      {contractors.length === 0 ? (
         <EmptyPrereq message="No Contractor users exist yet — create one in the Users tab first." />
       ) : (
         <form
@@ -497,7 +493,7 @@ export default function DelegationManager({
                       <Badge variant={statusVariant}>{statusLabel}</Badge>
                     </div>
                     {d.status === "Active" && d.isCurrentlyActive && (
-                      <WriteButton
+                      <Button
                         variant="danger"
                         size="sm"
                         onClick={() => handleRevoke(d.delegationId)}
@@ -505,7 +501,7 @@ export default function DelegationManager({
                         className="shrink-0"
                       >
                         {busyId === d.delegationId ? "Revoking…" : "Revoke"}
-                      </WriteButton>
+                      </Button>
                     )}
                   </div>
                   <p className="text-foreground-secondary mt-1">

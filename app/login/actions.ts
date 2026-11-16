@@ -8,7 +8,6 @@ import { getSupabaseServiceRoleClient } from "@/lib/supabaseAdmin";
 import { RATE_LIMITS, checkRateLimit, clientIp, rateLimitMessage } from "@/lib/rateLimit";
 import { randomUUID } from "node:crypto";
 import { classifySignInError, normalizeEmail, passwordProblem, passwordResetOrigin } from "@/lib/authAccounts";
-import { isDemoAccountEmail } from "@/lib/demoEmail";
 
 export type AuthFormState = { error?: string; message?: string } | undefined;
 
@@ -186,17 +185,6 @@ function logRef(): string {
 
 export async function logout(): Promise<void> {
   const supabase = await createSupabaseServerClient();
-  // A Demo Login account is shared by every visitor who picked that role:
-  // a global sign-out would end all of their sessions, so a demo session
-  // ends only this browser's session and returns to Demo Login. Every
-  // other account signs out exactly as before.
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (isDemoAccountEmail(user?.email)) {
-    await supabase.auth.signOut({ scope: "local" });
-    redirect("/demo-login");
-  }
   await supabase.auth.signOut();
   redirect("/login");
 }
@@ -264,14 +252,6 @@ export async function updatePassword(
   }
 
   const supabase = await createSupabaseServerClient();
-  // Shared Demo Login accounts keep their server-configured password: a
-  // visitor changing it would lock that role for everyone else.
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (isDemoAccountEmail(user?.email)) {
-    return { error: "Demo accounts are shared, so their password can't be changed." };
-  }
   const { error } = await supabase.auth.updateUser({ password });
 
   if (error) {

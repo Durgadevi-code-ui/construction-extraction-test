@@ -6,7 +6,6 @@ import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import Badge from "@/components/ui/Badge";
 import { formatDateUS, formatPercent, formatTimeUS } from "@/lib/format";
-import { ReadOnlyFieldset } from "@/components/ui/ReadOnly";
 
 /** A Worker's latest task-level update (see lib/workflow.ts
  * WorkItemTaskProgress) — worker-reported, never approved progress. */
@@ -178,7 +177,6 @@ export default function WorkItemTaskManager({ workItemId, tasks, workItemLabel, 
                       </span>
                     )}
                   </span>
-                  <ReadOnlyFieldset className="contents">
                   <div className="flex flex-wrap gap-1 shrink-0">
                     {task.status === "Active" && (
                       <Button
@@ -219,7 +217,6 @@ export default function WorkItemTaskManager({ workItemId, tasks, workItemLabel, 
                       {task.status === "Active" ? "Deactivate" : "Reactivate"}
                     </Button>
                   </div>
-                  </ReadOnlyFieldset>
                 </>
               )}
             </div>
@@ -250,15 +247,13 @@ export default function WorkItemTaskManager({ workItemId, tasks, workItemLabel, 
               </Button>
             </div>
           ) : (
-            <ReadOnlyFieldset>
             <button
               type="button"
               onClick={() => setAdding(true)}
-              className="text-xs font-medium text-brand hover:underline pt-1 disabled:opacity-50 disabled:no-underline"
+              className="text-xs font-medium text-brand hover:underline pt-1"
             >
               + Add Task
             </button>
-            </ReadOnlyFieldset>
           )}
 
           {error && (

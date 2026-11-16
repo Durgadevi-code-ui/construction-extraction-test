@@ -12,3 +12,6 @@ tsconfig.tsbuildinfo
 # scripts refuse them here); this only guards against an accidental commit.
 *credentials*.json
 auth-check*.json
+
+# Local environment backups - never commit
+.env*.backup*

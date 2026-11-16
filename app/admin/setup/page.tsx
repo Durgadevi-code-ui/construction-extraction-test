@@ -27,18 +27,6 @@ export default async function AdminSetupPage() {
   // is the single source of truth for both "may this caller enter at all"
   // and "which projects/departments/permissions should every tab below be
   // filtered to" (see lib/delegation.ts).
-  //
-  // The Demo Login "Admin" door (lib/demoAccess.ts) reaches this page the
-  // same way any delegated Contractor does: the presentation-Admin demo
-  // account holds an admin delegation confined to the presentation
-  // project(s), so resolveAdminSetupAccess returns exactly that delegated
-  // scope/permissions here and every /api/admin/* route enforces it. There
-  // is no demo-specific branch, read-only mode, or hidden tab — the demo
-  // Admin gets the normal delegated-Admin experience, scoped to isolated
-  // presentation data, and the operations that are never delegable
-  // (project creation, company/delegation/user management, ADMIN
-  // administration) stay real-Admin-only by the same checks as for any
-  // delegate.
   const access = await resolveAdminSetupAccess(supabase, userId).catch(() => null);
 
   if (!access || !access.canEnter) {
@@ -109,11 +97,10 @@ export default async function AdminSetupPage() {
 
   // Every tab's data is filtered to the caller's resolved scope
   // server-side, before it ever reaches the client bundle — a delegated
-  // Contractor (including the Demo Login presentation Admin) is never even
-  // shown a project/department/user outside what they were granted, not
-  // just blocked from writing to it (same principle as the Dashboard's
-  // server-side filtering — see lib/dashboard.ts). Real Admin sees
-  // everything, unchanged.
+  // Contractor is never even shown a project/department/user outside
+  // what they were granted, not just blocked from writing to it (same
+  // principle as the Dashboard's server-side filtering — see
+  // lib/dashboard.ts). Real Admin sees everything, unchanged.
   const inProjectScope = (projectId: string) =>
     access.isRealAdmin || access.projectIds === "ALL" || access.projectIds.has(projectId);
   const inDepartmentScope = (departmentId: string) =>
@@ -132,7 +119,7 @@ export default async function AdminSetupPage() {
   // in their page payload just because the department happens to be in
   // scope, even though that tab is hidden from them (a hidden client
   // component prop still ships in the page's data, so "not shown" isn't
-  // "not sent").
+  // "not sent" — see the `contractors` fix above for the same reasoning).
   const visibleProjects = access.isRealAdmin ? projects : projects.filter((p) => inProjectScope(p.projectId));
   const visibleDepartments = access.isRealAdmin
     ? departments
@@ -155,36 +142,23 @@ export default async function AdminSetupPage() {
       ? users
       : users.filter((u) => u.projectRoles.some((r) => inDepartmentScope(r.departmentId)));
 
-  // The caller's own real name (public.users first/last name) for the
-  // header profile chip, so a Demo Login Admin shows its real person name
-  // instead of the email-derived "Demo Admin". Found in the already-loaded
-  // full users list (pre-scope-filter, so the admin themselves is always
-  // present); falls back to the email guess in the chip when absent.
-  const self = users.find((u) => u.userId === userId);
-  const userDisplayName =
-    self && (self.firstName || self.lastName)
-      ? `${self.firstName ?? ""} ${self.lastName ?? ""}`.trim()
-      : undefined;
-
   return (
     <main className="flex-1 flex flex-col">
       <AdminSetupPanel
-        adminUserId={userId}
-        userEmail={currentUser.email}
-        userDisplayName={userDisplayName}
-        isRealAdmin={access.isRealAdmin}
-        isScopedAdmin={access.isScopedAdmin}
-        delegatedPermissions={Array.from(access.permissions)}
-        companies={visibleCompanies}
-        projects={visibleProjects}
-        departments={visibleDepartments}
-        workItems={visibleWorkItems}
-        workItemDependencies={visibleWorkItemDependencies}
-        users={visibleUsers}
-        delegations={delegations}
-        contractors={contractors}
-        standardDepartments={standardDepartments}
-      />
+          adminUserId={userId}
+          userEmail={currentUser.email}
+          isRealAdmin={access.isRealAdmin}
+          delegatedPermissions={Array.from(access.permissions)}
+          companies={visibleCompanies}
+          projects={visibleProjects}
+          departments={visibleDepartments}
+          workItems={visibleWorkItems}
+          workItemDependencies={visibleWorkItemDependencies}
+          users={visibleUsers}
+          delegations={delegations}
+          contractors={contractors}
+          standardDepartments={standardDepartments}
+        />
     </main>
   );
 }

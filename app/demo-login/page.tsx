@@ -1,27 +1,29 @@
-import Link from "next/link";
-import DemoLoginForm from "@/components/auth/DemoLoginForm";
+import DemoLoginPanel from "@/components/auth/DemoLoginPanel";
 import LoginBlueprintVisual from "@/components/auth/LoginBlueprintVisual";
-import { availableDemoRoles } from "@/lib/demoAccess";
+import { getAvailableDemoRoles } from "@/lib/demoAuth";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Separate Demo Login — role-based one-click entry for demonstrations and
- * testing. Its own route and action (app/demo-login/actions.ts); the
- * regular /login page, its form and its action are untouched. Same
- * single-surface layout as app/login/page.tsx.
+ * Demo Login on its own page. Regular email/password sign-in lives at
+ * /login; this page only moves the ORIGINAL Demo Login picker onto its
+ * own route (per the requested UI separation) — it reuses the original
+ * role/user selection component (components/auth/DemoLoginPanel) and the
+ * original server action (app/login/demoActions.ts demoLogin) with no
+ * change to their account/role/permission behavior. Off (empty) unless
+ * DEMO_MODE is enabled server-side (see lib/demoAuth.ts).
  */
-export default function DemoLoginPage() {
-  const roles = availableDemoRoles();
-  const enabled = roles.length > 0;
+export default async function DemoLoginPage() {
+  const demoRoles = getAvailableDemoRoles();
 
   return (
     <main className="flex-1 min-h-0 overflow-hidden flex flex-col lg:flex-row">
+      {/* Left — same Living Blueprint visual as /login, for one consistent surface. */}
       <div className="relative overflow-hidden shrink-0 h-[30vh] lg:h-auto lg:w-[58%] px-6 py-5 sm:px-10 lg:py-0 lg:flex lg:items-center">
         <LoginBlueprintVisual />
         <div className="relative z-10 mx-auto max-w-md lg:mx-0">
           <div className="flex items-center gap-3 mb-2 lg:mb-8">
-            {/* eslint-disable-next-line @next/next/no-img-element -- small static brand mark, same asset used elsewhere in this app */}
+            {/* eslint-disable-next-line @next/next/no-img-element -- small static brand mark, same asset used on /login */}
             <img
               src="/agentic-atoms-logo.png"
               alt="Agentic Atoms"
@@ -33,43 +35,41 @@ export default function DemoLoginPage() {
             </div>
           </div>
           <h1 className="hidden lg:block text-white text-3xl font-extrabold tracking-tight leading-tight mb-4">
-            Explore the platform as any project role.
+            Explore every role in one click.
           </h1>
           <p className="hidden lg:block text-white/75 text-sm leading-relaxed max-w-sm">
-            Each role opens the existing project with that role&apos;s own permissions, through its
-            own demo account.
+            Enter the same workspace as a predefined Admin, Contractor, Subcontractor, or Worker —
+            no password needed.
           </p>
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-hidden flex items-center justify-center bg-background px-4 py-3 sm:py-6">
+      {/* Right — original Demo Login picker + link back to regular sign in. */}
+      <div className="flex-1 min-h-0 overflow-auto flex items-center justify-center bg-background px-4 py-3 sm:py-6">
         <div className="w-full max-w-sm space-y-3 sm:space-y-4">
           <div>
-            <span className="inline-block rounded-full border border-brand-border bg-brand-soft px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-brand">
-              Demo
-            </span>
-            <h2 className="mt-2 text-xl sm:text-2xl font-extrabold text-foreground tracking-tight">Demo Login</h2>
+            <h2 className="text-xl sm:text-2xl font-extrabold text-foreground tracking-tight">
+              Demo Login
+            </h2>
             <p className="text-sm text-foreground-secondary mt-1">
-              For demonstrations and testing only. Choose a role and team, then sign in; no email or
-              password is needed. Every role enters the same application and existing projects with
-              exactly its own permissions.
+              Choose a role and demo user to enter the workspace.
             </p>
           </div>
 
-          {enabled ? (
-            <DemoLoginForm roles={roles} />
+          {demoRoles.length > 0 ? (
+            <DemoLoginPanel roles={demoRoles} />
           ) : (
-            <div className="space-y-3">
-              <p className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-foreground-secondary">
-                Demo login is not enabled in this environment.
-              </p>
-              <p className="text-center text-xs text-foreground-secondary">
-                <Link href="/login" className="text-brand hover:underline">
-                  Go to the regular sign-in page
-                </Link>
-              </p>
-            </div>
+            <p className="text-sm text-foreground-secondary bg-surface border border-line rounded-lg p-3">
+              Demo Login isn&apos;t enabled in this environment.
+            </p>
           )}
+
+          <p className="text-center text-sm text-foreground-secondary">
+            Have an account?{" "}
+            <a href="/login" className="text-brand font-medium hover:underline">
+              Regular Sign In
+            </a>
+          </p>
         </div>
       </div>
     </main>
