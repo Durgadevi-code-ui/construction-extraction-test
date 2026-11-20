@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Mic, Square } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { LoaderCircle, Mic, Square } from "lucide-react";
 import ValidationPanel, { type RelevanceCheckResult } from "./ValidationPanel";
 import type { ConfirmedWorkItem } from "./TextInput";
 
@@ -79,6 +79,20 @@ export default function VoiceUpload({
   const inputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  // One /api/voice request at a time: each call saves an
+  // extraction_submissions row, so a second click (or an automatic start
+  // racing a manual one) must never send the same recording twice.
+  const inFlightRef = useRef(false);
+  // The recorder's onstop callback is created when recording STARTS; it
+  // calls the latest handleTranscribe through this ref so the automatic
+  // transcription uses the current work item/task props, not the ones
+  // from when the recording began.
+  const transcribeRef = useRef<(audio: File) => void>(() => {});
+  useEffect(() => {
+    transcribeRef.current = (audio: File) => {
+      if (!locked) void handleTranscribe(undefined, undefined, audio);
+    };
+  });
 
   async function startRecording() {
     setError("");
@@ -86,11 +100,29 @@ export default function VoiceUpload({
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
       chunksRef.current = [];
-      recorder.ondataavailable = (e) => chunksRef.current.push(e.data);
-      recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        setFile(new File([blob], "recording.webm", { type: "audio/webm" }));
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.onerror = () => {
         stream.getTracks().forEach((t) => t.stop());
+        setRecording(false);
+        setError("Recording failed — please try recording again.");
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        if (blob.size === 0) {
+          // Nothing was captured — don't send an empty file to /api/voice.
+          setFile(null);
+          setError("The recording was empty — please record your update again.");
+          return;
+        }
+        const recorded = new File([blob], "recording.webm", { type: "audio/webm" });
+        setFile(recorded);
+        // The recording is finalized (all data flushed, mic released):
+        // start the existing transcription automatically — no separate
+        // "Convert to Text" click needed.
+        transcribeRef.current(recorded);
       };
       recorder.start();
       mediaRecorderRef.current = recorder;
@@ -105,13 +137,28 @@ export default function VoiceUpload({
     setRecording(false);
   }
 
-  async function handleTranscribe(confirmedWorkItemId?: string, taskConflictDecision?: "keep" | "switch") {
-    if (!file) {
+  async function handleTranscribe(
+    confirmedWorkItemId?: string,
+    taskConflictDecision?: "keep" | "switch",
+    /** The just-finished recording (automatic start) — passed directly
+     * because the `file` state set in the same callback isn't visible yet. */
+    audio?: File
+  ) {
+    const audioFile = audio ?? file;
+    if (!audioFile) {
       setError("Record or choose an audio file first.");
       return;
     }
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setStatus("PROCESSING");
     setError("");
+    // A new transcription replaces any earlier transcript on screen.
+    setRawText("");
+    setNormalizedText("");
+    setReason("");
+    setConfidence(null);
+    setRelevance(undefined);
     setUserValidation(null);
     setSubmissionId(null);
     setReviewToken(null);
@@ -120,7 +167,7 @@ export default function VoiceUpload({
     setTaskConflict(null);
     try {
       const formData = new FormData();
-      formData.append("audio", file);
+      formData.append("audio", audioFile);
       if (workItemDescription) formData.append("workItemDescription", workItemDescription);
       if (workItemId) formData.append("workItemId", workItemId);
       formData.append("workItemExplicitlySelected", String(workItemExplicitlySelected));
@@ -159,8 +206,10 @@ export default function VoiceUpload({
         onResult("INVALID");
       }
     } catch {
-      setError("Transcription request failed.");
+      setError("Transcription request failed — check your connection and retry.");
       setStatus("IDLE");
+    } finally {
+      inFlightRef.current = false;
     }
   }
 
@@ -198,7 +247,9 @@ export default function VoiceUpload({
       <div className="flex items-center gap-2">
         <button
           onClick={recording ? stopRecording : startRecording}
-          disabled={locked}
+          // No new recording while the previous one is still being
+          // transcribed (its result would overwrite the new one's).
+          disabled={locked || (!recording && status === "PROCESSING")}
           className={
             primary
               ? `inline-flex items-center gap-2 px-5 py-3 rounded-lg text-sm font-semibold text-white transition-colors duration-150 disabled:opacity-50 ${
@@ -224,15 +275,27 @@ export default function VoiceUpload({
           </>
         )}
       </div>
-      {file && <p className="text-xs text-foreground-secondary">Ready: {file.name}</p>}
-      <button
-        onClick={() => handleTranscribe()}
-        disabled={locked || status === "PROCESSING"}
-        className="px-4 py-2 bg-brand hover:bg-brand-hover text-white rounded-lg text-sm font-semibold transition-colors duration-150 disabled:opacity-50"
-      >
-        {status === "PROCESSING" ? "Transcribing…" : "Convert to Text"}
-      </button>
-      {error && <p className="text-error text-sm">{error}</p>}
+      {file && status !== "PROCESSING" && <p className="text-xs text-foreground-secondary">Ready: {file.name}</p>}
+      {status === "PROCESSING" && (
+        <p role="status" aria-live="polite" className="flex items-center gap-2 text-sm font-medium text-foreground-secondary">
+          <LoaderCircle className="h-4 w-4 animate-spin text-brand" strokeWidth={2} aria-hidden />
+          Converting your recording to text…
+        </p>
+      )}
+      {/* A recording is transcribed automatically when it stops. The
+          button stays for a chosen audio file (callers without
+          recordOnly) and, in the record-only Worker flow, appears only
+          as Retry after a failed transcription. */}
+      {(!recordOnly || (file && error && status === "IDLE")) && (
+        <button
+          onClick={() => handleTranscribe()}
+          disabled={locked || status === "PROCESSING" || recording}
+          className="px-4 py-2 bg-brand hover:bg-brand-hover text-white rounded-lg text-sm font-semibold transition-colors duration-150 disabled:opacity-50"
+        >
+          {status === "PROCESSING" ? "Transcribing…" : recordOnly ? "Retry transcription" : "Convert to Text"}
+        </button>
+      )}
+      {error && <p role="alert" className="text-error text-sm">{error}</p>}
       {candidates && (
         <fieldset className="text-sm space-y-2 rounded-lg border border-line bg-surface-soft p-3">
           <legend className="px-1 text-sm font-medium text-foreground">

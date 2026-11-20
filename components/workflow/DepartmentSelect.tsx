@@ -1,6 +1,6 @@
 "use client";
 
-import { Select } from "@/components/ui/Input";
+import { Select, TOOLBAR_CONTROL_SIZE, TOOLBAR_CONTROL_WIDTH } from "@/components/ui/Input";
 
 /**
  * Compact header "Department:" dropdown — sits right after the Project
@@ -31,7 +31,8 @@ export default function DepartmentSelect({
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
         aria-label="Department"
-        className="!w-48 max-w-full !py-1.5 text-xs truncate"
+        title={value ? options.find((o) => o.departmentId === value)?.departmentName : allLabel}
+        className={`${TOOLBAR_CONTROL_WIDTH} ${TOOLBAR_CONTROL_SIZE} max-w-full truncate`}
       >
         {allLabel !== undefined && <option value="">{allLabel}</option>}
         {options.map((o) => (

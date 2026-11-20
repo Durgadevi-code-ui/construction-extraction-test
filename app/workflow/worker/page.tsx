@@ -155,6 +155,7 @@ export default async function WorkerPage({
           approvedWork={approvedWork}
           projectSwitcher={projectSwitcher}
           activeProjectId={ctx.projectId}
+          activeDepartmentId={ctx.departmentId}
           taskContextEnabled={false}
         />
       </main>
@@ -332,6 +333,7 @@ export default async function WorkerPage({
         approvedWork={approvedWork}
         projectSwitcher={projectSwitcher}
         activeProjectId={ctx.projectId}
+        activeDepartmentId={ctx.departmentId}
         taskContextEnabled={taskContextEnabled}
       />
     </main>

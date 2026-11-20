@@ -139,6 +139,7 @@ export default function WorkItemList({
   focusedWorkItemId = null,
   sort,
   onSort,
+  selection,
 }: {
   rows: WorkItemListRow[];
   /** Row a notification points at — highlighted and marked data-focused
@@ -153,6 +154,13 @@ export default function WorkItemList({
    * owns the order (it sorts `rows`); this only renders the headings. */
   sort?: { key: WorkItemSortKey; dir: "asc" | "desc" };
   onSort?: (key: WorkItemSortKey) => void;
+  /** Optional row checkboxes (the Worker's My Assigned Work batch). The
+   * caller owns the selected set, so it survives search, sort and
+   * re-renders; omitted, the list renders exactly as before. */
+  selection?: {
+    selectedIds: ReadonlySet<string>;
+    onToggle: (workItemId: string) => void;
+  };
 }) {
   // Which work item's Live Updates panel is open (one at a time).
   const [liveUpdatesFor, setLiveUpdatesFor] = useState<string | null>(null);
@@ -182,15 +190,28 @@ export default function WorkItemList({
         {rows.map((row) => {
           const detail = renderDetail?.(row) ?? null;
           const liveOpen = liveUpdatesFor === row.workItemId;
+          const isSelected = !!selection?.selectedIds.has(row.workItemId);
           return (
             <Fragment key={row.workItemId}>
               <div
                 data-focused={row.workItemId === focusedWorkItemId ? "true" : undefined}
                 className={`scroll-mt-4 grid grid-cols-1 xl:col-span-full xl:grid-cols-subgrid items-center gap-y-2 px-4 py-3 transition-colors duration-150 hover:bg-surface-hover ${
                   row.dimmed ? "bg-surface-soft/60 text-foreground-muted" : ""
-                } ${row.workItemId === focusedWorkItemId ? "bg-warning-soft/40 ring-2 ring-inset ring-warning-border" : ""}`}
+                } ${row.workItemId === focusedWorkItemId ? "bg-warning-soft/40 ring-2 ring-inset ring-warning-border" : ""} ${
+                  isSelected ? "bg-brand-soft/60 ring-2 ring-inset ring-brand-border" : ""
+                }`}
+                data-selected={selection ? (isSelected ? "true" : "false") : undefined}
               >
                 <div className="min-w-0">
+                  {selection && (
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => selection.onToggle(row.workItemId)}
+                      aria-label={`Select ${row.code}`}
+                      className="mr-2 h-4 w-4 align-middle accent-brand"
+                    />
+                  )}
                   <span className="font-medium text-foreground-secondary">{row.code}</span>{" "}
                   {row.tag && (
                     <span className="mr-1 inline-flex rounded-full bg-brand-soft px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-brand">

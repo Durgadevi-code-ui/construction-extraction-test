@@ -2,7 +2,7 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Select } from "@/components/ui/Input";
+import { Select, TOOLBAR_CONTROL_SIZE, TOOLBAR_CONTROL_WIDTH } from "@/components/ui/Input";
 
 export type ProjectOption = {
   projectId: string;
@@ -97,7 +97,7 @@ export default function ProjectSelect({
         title={current ? labelOf(current) : undefined}
         // Fixed width, so the header controls don't shift with the
         // selected project's name length (long names truncate).
-        className="!w-56 max-w-full !py-1.5 text-xs truncate"
+        className={`${TOOLBAR_CONTROL_WIDTH} ${TOOLBAR_CONTROL_SIZE} max-w-full truncate`}
       >
         {options.map((o) => (
           <option key={keyOf(o)} value={keyOf(o)}>

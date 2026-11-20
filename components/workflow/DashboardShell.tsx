@@ -5,7 +5,7 @@ import { LogOut, Search } from "lucide-react";
 import NotificationBell from "@/components/workflow/NotificationBell";
 import ProfileChip from "@/components/workflow/ProfileChip";
 import ThemeToggle from "@/components/workflow/ThemeToggle";
-import Input from "@/components/ui/Input";
+import Input, { TOOLBAR_CONTROL_SIZE, TOOLBAR_CONTROL_WIDTH } from "@/components/ui/Input";
 import useScrollActiveIntoView from "@/components/workflow/useScrollActiveIntoView";
 import { timeOfDayGreeting } from "@/lib/format";
 import { logout } from "@/app/login/actions";
@@ -121,7 +121,11 @@ export default function DashboardShell({
     // desktop sidebar exactly. On a phone (below sm) only the brand/controls
     // row stays in that top bar; the nav strip becomes a bottom bar.
     <div className="flex flex-col lg:flex-row bg-background min-h-screen">
-      <aside className="sticky top-0 z-40 lg:static lg:z-auto lg:w-60 shrink-0 bg-gradient-to-b from-navy-deep via-navy to-brand text-white flex flex-row flex-wrap items-center lg:flex-col lg:flex-nowrap lg:items-stretch pt-[env(safe-area-inset-top)] lg:pt-0">
+      {/* From lg the sidebar is pinned to the viewport (sticky, full
+          screen height, its own nav scrolling if ever taller), so only
+          the main content on the right moves when a long page such as
+          History is scrolled. */}
+      <aside className="sticky top-0 z-40 lg:z-auto lg:self-start lg:h-screen lg:w-60 shrink-0 bg-gradient-to-b from-navy-deep via-navy to-brand text-white flex flex-row flex-wrap items-center lg:flex-col lg:flex-nowrap lg:items-stretch pt-[env(safe-area-inset-top)] lg:pt-0">
         <div className="flex-1 min-w-0 lg:flex-initial pl-4 pr-1 py-2 lg:px-5 lg:py-5 lg:border-b border-white/10 flex items-center gap-2.5">
           {logoAvailable && (
             // eslint-disable-next-line @next/next/no-img-element -- small static brand mark, matches TopNav's own use of the same asset
@@ -156,7 +160,7 @@ export default function DashboardShell({
             label (the content keeps room for it with bottom padding). */}
         <nav
           ref={navRef}
-          className="basis-full order-last lg:order-none lg:flex-1 px-3 pb-2 lg:py-4 space-y-1 overflow-x-auto lg:overflow-visible max-sm:flex max-sm:fixed max-sm:inset-x-0 max-sm:bottom-0 max-sm:z-40 max-sm:px-1 max-sm:pt-1 max-sm:pb-[calc(0.25rem+env(safe-area-inset-bottom))] max-sm:bg-navy-deep max-sm:border-t max-sm:border-white/10"
+          className="basis-full order-last lg:order-none lg:flex-1 lg:min-h-0 px-3 pb-2 lg:py-4 space-y-1 overflow-x-auto lg:overflow-x-visible lg:overflow-y-auto max-sm:flex max-sm:fixed max-sm:inset-x-0 max-sm:bottom-0 max-sm:z-40 max-sm:px-1 max-sm:pt-1 max-sm:pb-[calc(0.25rem+env(safe-area-inset-bottom))] max-sm:bg-navy-deep max-sm:border-t max-sm:border-white/10"
         >
           <div className="flex lg:flex-col gap-1 max-sm:contents">
             {navTabs.map(({ key, label, icon: Icon, badge, badgeClassName }) => (
@@ -243,10 +247,10 @@ export default function DashboardShell({
           {(actions || search) && (
             // empty:hidden — a Project control that renders nothing (single
             // project) must not leave an empty toolbar adding a gap.
-            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-3 min-w-0 max-w-full xl:max-w-[65%] xl:shrink-0 empty:hidden">
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-3 min-w-0 max-w-full xl:max-w-[70%] xl:shrink-0 empty:hidden">
               {actions}
               {search && (
-                <div className="relative w-full sm:w-80 max-w-full">
+                <div className={`relative ${TOOLBAR_CONTROL_WIDTH} max-w-full`}>
                   <Search
                     className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground-muted"
                     strokeWidth={2}
@@ -258,7 +262,8 @@ export default function DashboardShell({
                     onChange={(e) => search.onChange(e.target.value)}
                     placeholder={search.placeholder}
                     aria-label={search.label}
-                    className="pl-9 !py-1.5 bg-white"
+                    title={search.placeholder}
+                    className={`pl-9 ${TOOLBAR_CONTROL_SIZE} bg-white`}
                   />
                 </div>
               )}

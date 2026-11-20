@@ -118,6 +118,7 @@ export default function DashboardPanel({
   taskManagementDepartmentIds,
   headerAction,
   departmentId: departmentIdProp,
+  departmentIds: departmentIdsProp,
   showFilters = true,
 }: {
   userId: string;
@@ -188,6 +189,10 @@ export default function DashboardPanel({
    * when given it drives this panel's data exactly like the panel's own
    * Department filter would ("" = all in scope). */
   departmentId?: string;
+  /** Several departments chosen by the page (the Contractor's header
+   * multi-select) — takes precedence over `departmentId`; empty = all in
+   * scope. Each id is re-checked against the caller's scope server-side. */
+  departmentIds?: string[];
   /** Render the Filters card (default). Off where the page provides its
    * own controls or none are needed. */
   showFilters?: boolean;
@@ -216,7 +221,14 @@ export default function DashboardPanel({
   const [ownDepartmentId, setDepartmentId] = useState(
     initialData.scopeDepartments.length === 1 ? initialData.scopeDepartments[0].departmentId : ""
   );
-  const departmentId = departmentIdProp ?? ownDepartmentId;
+  // With a page multi-select, a single pick still reads as that one
+  // department everywhere below; several picks read as "" (more than one).
+  const departmentId = departmentIdsProp
+    ? departmentIdsProp.length === 1
+      ? departmentIdsProp[0]
+      : ""
+    : (departmentIdProp ?? ownDepartmentId);
+  const departmentIdsKey = departmentIdsProp ? departmentIdsProp.join(",") : "";
   const [status, setStatus] = useState<StatusFilter>("ALL");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -236,7 +248,9 @@ export default function DashboardPanel({
       try {
         const params = new URLSearchParams({ userId });
         if (projectId) params.set("projectId", projectId);
-        if (departmentId) params.set("departmentId", departmentId);
+        if (departmentIdsKey) {
+          for (const id of departmentIdsKey.split(",")) params.append("departmentId", id);
+        } else if (departmentId) params.set("departmentId", departmentId);
         if (status !== "ALL") params.set("status", status);
         if (from) params.set("from", from);
         if (to) params.set("to", to);
@@ -256,7 +270,7 @@ export default function DashboardPanel({
     return () => {
       ignore = true;
     };
-  }, [userId, projectId, departmentId, status, from, to, attempt]);
+  }, [userId, projectId, departmentId, departmentIdsKey, status, from, to, attempt]);
 
   useEffect(() => {
     onDepartmentChange?.(departmentId);

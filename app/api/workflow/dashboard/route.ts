@@ -35,6 +35,9 @@ export async function GET(request: NextRequest) {
 
   const projectId = request.nextUrl.searchParams.get("projectId");
   const departmentId = request.nextUrl.searchParams.get("departmentId");
+  // Repeated ?departmentId= (Contractor multi-select) — re-verified
+  // against the caller's scope in getDashboardData like a single one.
+  const departmentIds = request.nextUrl.searchParams.getAll("departmentId").filter(Boolean);
   const from = request.nextUrl.searchParams.get("from");
   const to = request.nextUrl.searchParams.get("to");
   const statusParam = request.nextUrl.searchParams.get("status");
@@ -46,6 +49,7 @@ export async function GET(request: NextRequest) {
     const data = await getDashboardData(supabase, userId, {
       projectId,
       departmentId,
+      departmentIds,
       from,
       to,
       status,

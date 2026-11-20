@@ -89,9 +89,9 @@ type Props = {
 };
 
 // Same tab set as the Contractor (see ContractorTabs), role data differs.
-// Updates (photos) are not their own destination: they live only on Work
-// Items, one "View Updates" per work item (see WorkItemList) — not on
-// Reviews. Profile is opened from the Profile control above Sign out.
+// Updates (photos) are not their own destination: each Work Items row,
+// History row and Reviews card has its own "View Updates" for that work
+// item. Profile is opened from the Profile control above Sign out.
 const TABS = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "reviews", label: "Reviews", icon: ClipboardCheck },
@@ -213,11 +213,11 @@ export default function ForemanTabs({
   const [query, setQuery] = useState("");
   const search =
     tab === "reviews"
-      ? { value: query, onChange: setQuery, placeholder: "Search reviews by work item or worker", label: "Search reviews" }
+      ? { value: query, onChange: setQuery, placeholder: "Search work item or worker", label: "Search reviews" }
       : tab === "workItems"
-        ? { value: query, onChange: setQuery, placeholder: "Search by code, name, task or worker", label: "Search work items" }
+        ? { value: query, onChange: setQuery, placeholder: "Search item, task or worker", label: "Search work items" }
         : tab === "history"
-          ? { value: query, onChange: setQuery, placeholder: "Search history by worker, work item or status", label: "Search history" }
+          ? { value: query, onChange: setQuery, placeholder: "Search worker, item or status", label: "Search history" }
           : tab === "communication"
             ? { value: query, onChange: setQuery, placeholder: "Search people or roles", label: "Search conversations" }
             : undefined;

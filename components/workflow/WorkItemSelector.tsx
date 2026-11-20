@@ -48,6 +48,13 @@ type Props = {
    * no entries hides it. */
   projects?: { projectId: string; projectName: string }[];
   activeProjectId?: string;
+  /** The page's current (server-resolved) department — kept in the URL
+   * so choosing/clearing a work item never moves a worker holding two
+   * departments in one project to the other department. */
+  activeDepartmentId?: string;
+  /** Show the Task select (default). The Worker Dashboard turns it off —
+   * it only picks which assigned work item the dashboard shows. */
+  showTask?: boolean;
   /** The worker's current task pick and the work item it was made for. */
   taskSelection?: { workItemId: string; taskId: string };
   onTaskChange?: (workItemId: string, taskId: string) => void;
@@ -85,6 +92,8 @@ export default function WorkItemSelector({
   suggestionNote,
   projects = [],
   activeProjectId,
+  activeDepartmentId,
+  showTask = true,
   taskSelection,
   onTaskChange,
   pending = null,
@@ -92,11 +101,12 @@ export default function WorkItemSelector({
   query = "",
 }: Props) {
   function go(
-    params: { projectId?: string; workItemId?: string },
+    params: { projectId?: string; departmentId?: string; workItemId?: string },
     kind: "project" | "workItem"
   ) {
     const query = new URLSearchParams();
     if (params.projectId) query.set("projectId", params.projectId);
+    if (params.projectId && params.departmentId) query.set("departmentId", params.departmentId);
     if (params.workItemId) query.set("workItemId", params.workItemId);
     const qs = query.toString();
     onNavigate(qs ? `/workflow/worker?${qs}` : "/workflow/worker", {
@@ -140,13 +150,19 @@ export default function WorkItemSelector({
       )}
       {/* Work Item + Task side by side from md (stacked on phones) — keeps
           the Record & Validate step below it within a laptop screen. */}
-      <div className="grid gap-2 md:grid-cols-2 md:gap-3">
+      <div className={`grid gap-2 md:gap-3 ${showTask ? "md:grid-cols-2" : ""}`}>
         <div className="min-w-0">
           <label className="block font-medium text-foreground-secondary mb-1">Work Item</label>
           <Select
             value={displayItemId}
             disabled={projectPending}
-            onChange={(e) => go({ projectId: activeProjectId, workItemId: e.target.value }, "workItem")}
+            aria-label="Work Item"
+            onChange={(e) =>
+              go(
+                { projectId: activeProjectId, departmentId: activeDepartmentId, workItemId: e.target.value },
+                "workItem"
+              )
+            }
           >
             <option value="">All assigned — suggested item</option>
             {shownItems.map((item) => (
@@ -161,6 +177,7 @@ export default function WorkItemSelector({
             ))}
           </Select>
         </div>
+        {showTask && (
         <div className="min-w-0">
           <label className="block font-medium text-foreground-secondary mb-1">
             Task <span className="font-normal text-foreground-muted">(for the selected work item)</span>
@@ -185,6 +202,7 @@ export default function WorkItemSelector({
             ))}
           </Select>
         </div>
+        )}
       </div>
       {needle && (
         <p className="text-xs text-foreground-secondary">
@@ -193,7 +211,7 @@ export default function WorkItemSelector({
             : `${matchCount} of ${workItems.length} work items match “${query.trim()}”.`}
         </p>
       )}
-      {!noItem && !projectPending && tasks.length === 0 && (
+      {showTask && !noItem && !projectPending && tasks.length === 0 && (
         <p className="text-xs text-foreground-secondary">
           No task options configured for this work item.
         </p>

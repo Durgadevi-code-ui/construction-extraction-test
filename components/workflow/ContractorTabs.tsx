@@ -9,6 +9,7 @@ import {
   History as HistoryIcon,
   MessageSquare,
   UserRound,
+  X,
 } from "lucide-react";
 import DashboardShell from "@/components/workflow/DashboardShell";
 import TabNav from "@/components/workflow/TabNav";
@@ -32,7 +33,7 @@ import SubmissionHistoryTable, { type SubmissionHistoryRow } from "@/components/
 import type { ReviewFocusState } from "@/lib/workflow";
 import ProfilePanel from "@/components/workflow/ProfilePanel";
 import ExcelDownloadButton from "@/components/workflow/ExcelDownloadButton";
-import DepartmentSelect from "@/components/workflow/DepartmentSelect";
+import DepartmentMultiSelect from "@/components/workflow/DepartmentMultiSelect";
 import type { DashboardData } from "@/lib/dashboard";
 
 type Props = {
@@ -71,9 +72,9 @@ type Props = {
 };
 
 // Same tab set as the Subcontractor (see ForemanTabs), role data differs.
-// Updates (photos) are not their own destination: they live only on Work
-// Items, one "View Updates" per work item (see WorkItemList) — not on
-// Reviews. The underlying LiveUpdateFeed is unchanged. Profile is opened
+// Updates (photos) are not their own destination: each Work Items row,
+// History row and Reviews card has its own "View Updates" for that work
+// item. The underlying LiveUpdateFeed is unchanged. Profile is opened
 // from the Profile control above Sign out (DashboardShell profileTabKey).
 const TABS = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -163,11 +164,11 @@ export default function ContractorTabs({
   const [query, setQuery] = useState("");
   const search =
     tab === "reviews"
-      ? { value: query, onChange: setQuery, placeholder: "Search reviews by work item or worker", label: "Search reviews" }
+      ? { value: query, onChange: setQuery, placeholder: "Search work item or worker", label: "Search reviews" }
       : tab === "workItems"
-        ? { value: query, onChange: setQuery, placeholder: "Search by code, name or department", label: "Search work items" }
+        ? { value: query, onChange: setQuery, placeholder: "Search item or department", label: "Search work items" }
         : tab === "history"
-          ? { value: query, onChange: setQuery, placeholder: "Search history by worker, work item or status", label: "Search history" }
+          ? { value: query, onChange: setQuery, placeholder: "Search worker, item or status", label: "Search history" }
           : tab === "communication"
             ? { value: query, onChange: setQuery, placeholder: "Search people or roles", label: "Search conversations" }
             : undefined;
@@ -175,14 +176,17 @@ export default function ContractorTabs({
     setQuery("");
     setTab(next);
   }
-  // Dashboard Department filter — the compact header dropdown next to
-  // Project (same DepartmentSelect as the Subcontractor Dashboard). Same
-  // options and default the dashboard panel's own filter used: the
-  // departments in scope for this project, "All" unless there's one.
-  const [dashboardDepartmentId, setDashboardDepartmentId] = useState(
-    dashboardData.scopeDepartments.length === 1 ? dashboardData.scopeDepartments[0].departmentId : ""
-  );
+  // Dashboard Department filter — the header multi-select next to
+  // Project (DepartmentMultiSelect). Options are the departments the
+  // server put in this Contractor's scope for this project: every
+  // department of a project where they hold their own Contractor role,
+  // plus delegated ones (lib/dashboard.ts resolveDashboardScope). Empty
+  // selection = All Departments; a single department is pre-selected.
   const dashboardDepartmentOptions = dashboardData.scopeDepartments.filter((d) => d.projectId === projectId);
+  const [dashboardDepartmentIds, setDashboardDepartmentIds] = useState<string[]>(
+    dashboardDepartmentOptions.length === 1 ? [dashboardDepartmentOptions[0].departmentId] : []
+  );
+  const dashboardDepartmentSet = new Set(dashboardDepartmentIds);
   // Departments where this Contractor may configure tasks — the server's
   // own rule (lib/workflow.ts assertCanManageWorkItemTasks): their own
   // Contractor department(s) in this project, or a delegation with Work
@@ -196,6 +200,31 @@ export default function ContractorTabs({
       ...delegatedScopes.filter((s) => s.canManageWorkItems).map((s) => s.departmentId),
     ]),
   ];
+  // Progress Tracking follows the Department filter. Its API resolves a
+  // department only among the caller's OWN Contractor role rows (lib/
+  // workflow.ts getExecutiveSummary → getUserContext), so it covers the
+  // filter's role departments in this project — one card per department
+  // for "All Departments" (each department's submissions are distinct,
+  // so nothing is counted twice). A delegated-only department has no
+  // Progress Tracking here (its reviews are in Delegated Admin).
+  const roleDepartmentIds = [
+    ...new Set([
+      departmentId,
+      ...projectOptions
+        .filter((o) => (o.path ?? "/workflow/supervisor") === "/workflow/supervisor" && o.projectId === projectId)
+        .map((o) => o.departmentId),
+    ]),
+  ];
+  const progressDepartmentIds =
+    dashboardDepartmentIds.length > 0
+      ? roleDepartmentIds.filter((id) => dashboardDepartmentSet.has(id))
+      : roleDepartmentIds;
+  // Selected departments without the Contractor's own role (visible to
+  // them, but Progress Tracking's API only serves their own departments).
+  const progressExcludedIds = dashboardDepartmentIds.filter((id) => !roleDepartmentIds.includes(id));
+  const departmentNameOf = (id: string) =>
+    dashboardData.scopeDepartments.find((d) => d.departmentId === id)?.departmentName ??
+    (id === departmentId ? departmentName : "Department");
   // KPI cards that lead somewhere real on this page.
   const kpiActions: KpiCardActions = {
     assigned: { onClick: () => changeTab("workItems"), label: "Open Work Items" },
@@ -205,24 +234,22 @@ export default function ContractorTabs({
     remaining: { onClick: () => changeTab("workItems"), label: "Open Work Items" },
   };
 
-  // Overall Health follows the dashboard's Department filter ("" = every
-  // department in this project's scope) — null until the panel reports
-  // it, meaning the page's current department.
-  const [healthDepartmentId, setHealthDepartmentId] = useState<string | null>(null);
-  const healthScope = healthDepartmentId ?? departmentId;
+  // Overall Health follows the dashboard's Department filter (none
+  // selected = every department in this project's scope).
+  const healthAll = dashboardDepartmentIds.length === 0;
+  const inHealthScope = (id: string) => healthAll || dashboardDepartmentSet.has(id);
   // The Dashboard KPI row's current values (reported by DashboardPanel,
   // so they follow its Department filter) — described in words on the
   // Summary tab. null until the panel first reports.
   const [dashboardKpis, setDashboardKpis] = useState<DashboardKpiValues | null>(null);
-  const summaryScopeLabel =
-    healthScope === ""
-      ? `${projectName} (all departments)`
-      : (dashboardData.scopeDepartments.find((d) => d.departmentId === healthScope)?.departmentName ?? departmentName);
+  const summaryScopeLabel = healthAll
+    ? `${projectName} (all departments)`
+    : dashboardDepartmentIds.map(departmentNameOf).join(", ");
   const healthRows = dashboardData.workItems.filter(
-    (w) => w.projectId === projectId && (!healthScope || w.departmentId === healthScope)
+    (w) => w.projectId === projectId && inHealthScope(w.departmentId)
   );
   const healthDepartments = dashboardData.departments.filter(
-    (d) => d.projectId === projectId && (!healthScope || d.departmentId === healthScope)
+    (d) => d.projectId === projectId && inHealthScope(d.departmentId)
   );
   // Earned vs scheduled over the same scope (existing department totals);
   // null when financials aren't available for any department in it.
@@ -268,10 +295,10 @@ export default function ContractorTabs({
             tab={tab}
           />
           {tab === "dashboard" && (
-            <DepartmentSelect
-              value={dashboardDepartmentId}
+            <DepartmentMultiSelect
+              value={dashboardDepartmentIds}
               options={dashboardDepartmentOptions}
-              onChange={setDashboardDepartmentId}
+              onChange={setDashboardDepartmentIds}
               allLabel="All Departments"
             />
           )}
@@ -286,6 +313,31 @@ export default function ContractorTabs({
             active={dashboardView}
             onChange={(key) => setDashboardView(key as DashboardView)}
           />
+          {/* Every selected department, each removable on its own. */}
+          {dashboardDepartmentIds.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 text-xs" aria-label="Selected departments">
+              <span className="text-foreground-secondary">Departments:</span>
+              {dashboardDepartmentIds.map((id) => (
+                <span
+                  key={id}
+                  className="inline-flex items-center gap-1 rounded-full border border-brand-border bg-brand-soft px-2 py-0.5 font-medium text-brand"
+                >
+                  {departmentNameOf(id)}
+                  <button
+                    type="button"
+                    aria-label={`Remove ${departmentNameOf(id)}`}
+                    onClick={() => setDashboardDepartmentIds((prev) => prev.filter((v) => v !== id))}
+                    className="rounded-full hover:bg-brand/10"
+                  >
+                    <X className="h-3 w-3" aria-hidden />
+                  </button>
+                </span>
+              ))}
+              <button type="button" onClick={() => setDashboardDepartmentIds([])} className="text-brand hover:underline">
+                Clear all
+              </button>
+            </div>
+          )}
           {/* Dashboard view: Filters (the existing DashboardPanel filters,
               which drive the KPI row) → the shared KPI row (each card opens
               its detail) → Delegated Admin. Kept mounted while another view
@@ -300,11 +352,10 @@ export default function ContractorTabs({
             showScope={false}
             pendingReviews={queue.length}
             lockProjectId={projectId}
-            onDepartmentChange={setHealthDepartmentId}
             onKpisChange={setDashboardKpis}
             kpiActions={kpiActions}
             departmentFilterOnly
-            departmentId={dashboardDepartmentId}
+            departmentIds={dashboardDepartmentIds}
             showFilters={false}
           />
           <DelegatedAdminPanel contractorUserId={userId} scopes={delegatedScopes} />
@@ -320,7 +371,13 @@ export default function ContractorTabs({
             workItems={healthRows}
             history={history}
             pendingItems={queue}
-            activityScope={healthScope === departmentId ? "same" : healthScope === "" ? "partial" : "none"}
+            activityScope={
+              dashboardDepartmentIds.length === 1 && dashboardDepartmentIds[0] === departmentId
+                ? "same"
+                : healthAll || dashboardDepartmentSet.has(departmentId)
+                  ? "partial"
+                  : "none"
+            }
             activityDepartmentName={departmentName}
             earnedAmount={healthEarned}
             scheduledAmount={healthScheduled}
@@ -330,14 +387,31 @@ export default function ContractorTabs({
             description={dashboardKpis ? <KpiSummaryText scopeLabel={summaryScopeLabel} {...dashboardKpis} /> : undefined}
           />
           )}
-          {dashboardView === "progress" && (
-          <ExecutiveSummaryCard
-            onReviewSubmissions={() => changeTab("reviews")}
-            showTotals={false}
-            projectId={projectId}
-            departmentId={departmentId}
-          />
+          {dashboardView === "progress" && progressExcludedIds.length > 0 && (
+            <p className="text-sm text-foreground-secondary bg-surface-soft border border-line rounded-lg p-3">
+              Progress Tracking covers the departments where you hold your own Contractor role.{" "}
+              {progressExcludedIds.map(departmentNameOf).join(", ")}{" "}
+              {progressExcludedIds.length === 1 ? "is" : "are"} included in the Dashboard and Summary views.
+            </p>
           )}
+          {dashboardView === "progress" &&
+            progressDepartmentIds.length > 0 && (
+              <div className="space-y-5">
+                {progressDepartmentIds.map((id) => (
+                  <section key={id} className="space-y-2">
+                    {progressDepartmentIds.length > 1 && (
+                      <h3 className="text-sm font-semibold text-foreground">{departmentNameOf(id)}</h3>
+                    )}
+                    <ExecutiveSummaryCard
+                      onReviewSubmissions={() => changeTab("reviews")}
+                      showTotals={false}
+                      projectId={projectId}
+                      departmentId={id}
+                    />
+                  </section>
+                ))}
+              </div>
+            )}
         </div>
       )}
 

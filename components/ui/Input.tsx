@@ -34,6 +34,13 @@ export function Select({
   );
 }
 
+/** Size shared by the page-header toolbar controls (DashboardShell's
+ * Search box, ProjectSelect, DepartmentSelect) so they line up with one
+ * height, font size and width: full width on a phone, a fixed width from
+ * sm (long values truncate; the full name is in the select's title). */
+export const TOOLBAR_CONTROL_SIZE = "!h-9 !py-0 text-sm";
+export const TOOLBAR_CONTROL_WIDTH = "w-full sm:!w-64";
+
 /** Shared field label. */
 export function Label({ htmlFor, children }: { htmlFor?: string; children: React.ReactNode }) {
   return (

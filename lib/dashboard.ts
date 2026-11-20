@@ -32,6 +32,11 @@ import { calculateEstimatedAmount, calculateOverallProgress } from "./calculatio
 export type DashboardFilters = {
   projectId?: string | null;
   departmentId?: string | null;
+  /** Several departments at once (Contractor multi-select). When given
+   * it is used instead of `departmentId`; ids outside the caller's scope
+   * are dropped, and if none remain it means "all in scope" — exactly
+   * like an out-of-scope single `departmentId` (never widens access). */
+  departmentIds?: string[] | null;
   /** ISO yyyy-mm-dd bounds for the work-item table's "activity in range"
    * reading — the KPI cards and month comparisons are always current/
    * previous calendar month, independent of this. */
@@ -213,6 +218,23 @@ async function resolveDashboardScope(
   const projectIds = new Set<string>(reviewerRows.map((row) => row.projectId));
   const departmentIds = new Set<string>(reviewerRows.map((row) => row.departmentId));
 
+  // A Contractor sees EVERY department of each project where they hold
+  // their own Active Contractor role (client requirement 2026-11-20) —
+  // department visibility widens only inside those projects; project
+  // access is unchanged. Subcontractor (FOREMAN) rows are not expanded,
+  // and a project reached only through delegation keeps exactly its
+  // delegated departments (below).
+  const contractorProjectIds = new Set(
+    reviewerRows.filter((row) => CONTRACTOR_ROLES.includes(row.role)).map((row) => row.projectId)
+  );
+  let allDepartmentsCache: Awaited<ReturnType<typeof listDepartments>> | null = null;
+  const allDepartmentsOnce = async () => (allDepartmentsCache ??= await listDepartments(supabase));
+  if (contractorProjectIds.size > 0) {
+    for (const d of await allDepartmentsOnce()) {
+      if (contractorProjectIds.has(d.projectId)) departmentIds.add(d.departmentId);
+    }
+  }
+
   // A delegated Contractor also sees the department(s)/project(s)
   // covered by their active delegation(s) — same expansion
   // app/workflow/supervisor/page.tsx already does for its own delegated
@@ -220,7 +242,7 @@ async function resolveDashboardScope(
   if (reviewerRows.some((row) => CONTRACTOR_ROLES.includes(row.role))) {
     const activeDelegations = await getActiveDelegationsForUser(supabase, userId).catch(() => []);
     if (activeDelegations.length > 0) {
-      const allDepartments = await listDepartments(supabase);
+      const allDepartments = await allDepartmentsOnce();
       for (const delegation of activeDelegations) {
         for (const project of delegation.projects) {
           projectIds.add(project.projectId);
@@ -271,10 +293,14 @@ export async function getDashboardData(
   // silently ignored (never trusted to widen access beyond `scope`).
   const filterProjectId =
     filters.projectId && accessibleProjectIds.has(filters.projectId) ? filters.projectId : null;
-  const filterDepartmentId =
-    filters.departmentId && accessibleDepartmentIds.has(filters.departmentId)
-      ? filters.departmentId
-      : null;
+  const requestedDepartmentIds =
+    filters.departmentIds && filters.departmentIds.length > 0
+      ? filters.departmentIds
+      : filters.departmentId
+        ? [filters.departmentId]
+        : [];
+  const filterDepartmentIds = new Set(requestedDepartmentIds.filter((id) => accessibleDepartmentIds.has(id)));
+  const departmentFiltered = filterDepartmentIds.size > 0;
 
   const departmentById = new Map(accessibleDepartments.map((d) => [d.departmentId, d]));
   const projectById = new Map(accessibleProjects.map((p) => [p.projectId, p]));
@@ -284,7 +310,7 @@ export async function getDashboardData(
     if (w.status !== "Active") return false;
     const department = departmentById.get(w.departmentId)!;
     if (filterProjectId && department.projectId !== filterProjectId) return false;
-    if (filterDepartmentId && w.departmentId !== filterDepartmentId) return false;
+    if (departmentFiltered && !filterDepartmentIds.has(w.departmentId)) return false;
     return true;
   });
 
@@ -376,7 +402,7 @@ export async function getDashboardData(
   // the department roll-up, so switching the status filter doesn't make
   // departments disappear from the chart.
   const departmentSummaries: DashboardDepartmentSummary[] = accessibleDepartments
-    .filter((d) => !filterDepartmentId || d.departmentId === filterDepartmentId)
+    .filter((d) => !departmentFiltered || filterDepartmentIds.has(d.departmentId))
     .filter((d) => !filterProjectId || d.projectId === filterProjectId)
     .map((d) => {
       const items = rows.filter((r) => r.departmentId === d.departmentId);
@@ -466,7 +492,10 @@ export async function getDashboardData(
     kpis: {
       totalProjects: accessibleProjects.length,
       completedProjects,
-      totalDepartments: accessibleDepartments.length,
+      // Departments within the current project/department filter (same
+      // set as `departments` below) — "All Departments" counts every
+      // department in the caller's scope, one department counts 1.
+      totalDepartments: departmentSummaries.length,
       totalWorkItems: rows.length,
       overallProgressPercent: calculateOverallProgress(rows.map((r) => r.progressPercentage)),
       totalEstimatedAmount:

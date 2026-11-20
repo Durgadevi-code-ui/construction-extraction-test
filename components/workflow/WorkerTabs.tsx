@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   LayoutDashboard,
@@ -10,6 +10,8 @@ import {
   UserRound,
   Search,
   PencilLine,
+  Check,
+  X,
 } from "lucide-react";
 import ChatPanel from "@/components/workflow/ChatPanel";
 import TabNav from "@/components/workflow/TabNav";
@@ -123,6 +125,9 @@ type Props = {
    * app/workflow/worker/page.tsx) — the one place Project is chosen. */
   projectSwitcher?: React.ReactNode;
   activeProjectId?: string;
+  /** The page's current (server-resolved) department — kept by the Work
+   * Item selectors when they change ?workItemId=. */
+  activeDepartmentId?: string;
   /** Admin on/off switch (per-project) for the Project/Work Item/Task
    * selection UI — see lib/admin.ts Project.taskContextEnabled's doc.
    * When false, WorkItemSelector is not rendered and the Work Items list
@@ -207,6 +212,7 @@ export default function WorkerTabs({
   history,
   projectSwitcher,
   activeProjectId,
+  activeDepartmentId,
   taskContextEnabled,
 }: Props) {
   const searchParams = useSearchParams();
@@ -289,6 +295,62 @@ export default function WorkerTabs({
   }
 
   const activeWorkItemId = current?.activeWorkItemId ?? "";
+
+  // My Assigned Work → Update Progress batch. A Worker ticks several of
+  // their own assigned work items and moves them into Update Progress
+  // together, then submits each one in turn through the unchanged form
+  // and API (/api/workflow/worker re-checks department, Active status and
+  // assignment for every submission). Only offered where the project's
+  // Admin switch already allows picking a work item (taskContextEnabled).
+  // Nothing here writes assignments or statuses. Ids no longer in this
+  // worker's assigned list (unassigned, other project) are dropped.
+  const canBatch = taskContextEnabled && workItems.length > 0;
+  const assignedIds = useMemo(() => new Set(workItems.map((w) => w.workItemId)), [workItems]);
+  const [selectedRaw, setSelectedRaw] = useState<string[]>([]);
+  const [batchRaw, setBatchRaw] = useState<string[]>([]);
+  const [batchDone, setBatchDone] = useState<string[]>([]);
+  const selectedIds = canBatch ? selectedRaw.filter((id) => assignedIds.has(id)) : [];
+  const selectedSet = new Set(selectedIds);
+  const batch = canBatch ? batchRaw.filter((id) => assignedIds.has(id)) : [];
+  const batchIndex = batch.indexOf(activeWorkItemId);
+  const inBatch = batchIndex >= 0 && !!current && !current.isAutoSuggested;
+  const codeOf = (id: string) => workItems.find((w) => w.workItemId === id)?.code ?? "";
+
+  function toggleSelected(id: string) {
+    setSelectedRaw((prev) => (prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id]));
+  }
+  function openWorkItem(workItemId: string) {
+    const params = new URLSearchParams();
+    if (activeProjectId) params.set("projectId", activeProjectId);
+    if (activeProjectId && activeDepartmentId) params.set("departmentId", activeDepartmentId);
+    params.set("workItemId", workItemId);
+    navigate(`/workflow/worker?${params.toString()}`, { kind: "workItem", workItemId });
+  }
+  function moveSelectedToUpdate() {
+    // Assigned-list order (line item order), each id once.
+    const ids = workItems.map((w) => w.workItemId).filter((id) => selectedSet.has(id));
+    if (ids.length === 0) return;
+    setBatchRaw(ids);
+    setBatchDone([]);
+    setSelectedRaw([]);
+    setQuery("");
+    setTab("update");
+    if (ids[0] !== activeWorkItemId || current?.isAutoSuggested) openWorkItem(ids[0]);
+  }
+  function clearBatch() {
+    setBatchRaw([]);
+    setBatchDone([]);
+  }
+  // Marks the batch item the worker just submitted (display only).
+  const handleStepChange = useCallback(
+    (step: UpdateStep) => {
+      setUpdateStep(step);
+      if (step === "done" && activeWorkItemId) {
+        setBatchDone((prev) => (prev.includes(activeWorkItemId) ? prev : [...prev, activeWorkItemId]));
+      }
+    },
+    [activeWorkItemId]
+  );
   const activeTasks =
     !current || current.isAutoSuggested
       ? []
@@ -368,7 +430,7 @@ export default function WorkerTabs({
       // Item picker.
       search={
         tab === "update" && current && taskContextEnabled && workItems.length > 0 && onCaptureStep
-          ? { value: query, onChange: setQuery, placeholder: "Search work items by code, name or task", label: "Search work items" }
+          ? { value: query, onChange: setQuery, placeholder: "Search code, name or task", label: "Search work items" }
           : tab === "dashboard"
             ? {
                 value: query,
@@ -380,7 +442,7 @@ export default function WorkerTabs({
                 label: "Search work items",
               }
             : tab === "history"
-              ? { value: query, onChange: setQuery, placeholder: "Search history by worker, work item or status", label: "Search history" }
+              ? { value: query, onChange: setQuery, placeholder: "Search worker, item or status", label: "Search history" }
               : tab === "communication"
                 ? { value: query, onChange: setQuery, placeholder: "Search people or roles", label: "Search conversations" }
                 : undefined
@@ -405,6 +467,29 @@ export default function WorkerTabs({
             // Latest Submission were duplicates of the UPDATE PROGRESS and
             // MY ASSIGNED WORK tabs and History, so they're not repeated here.
             <div className="space-y-4">
+              {/* Which assigned work item the dashboard shows — the same
+                  selector (and ?workItemId= mechanism, checked server-side
+                  against this worker's own assignments) as Update
+                  Progress, without the Task field. Only when the project's
+                  Admin task-context switch is on, exactly like Update
+                  Progress; off, the default work item stays as before. */}
+              {taskContextEnabled && workItems.length > 0 && (
+                <WorkItemSelector
+                  workItems={workItems}
+                  activeWorkItemId={current.activeWorkItemId}
+                  isAutoSuggested={current.isAutoSuggested}
+                  suggestionNote={current.suggestionNote}
+                  activeProjectId={activeProjectId}
+                  activeDepartmentId={activeDepartmentId}
+                  showTask={false}
+                  pending={pending}
+                  onNavigate={navigate}
+                />
+              )}
+              <div
+                aria-busy={pending !== null}
+                className={pending ? "opacity-50 pointer-events-none select-none" : undefined}
+              >
               <WorkerHeroCard
                 workItemCode={current.activeWorkItem.code}
                 workItemDescription={current.activeWorkItem.description}
@@ -416,6 +501,7 @@ export default function WorkerTabs({
                 progressPercentage={current.progressPercentage}
                 isCompleted={current.isCompleted}
               />
+              </div>
               {current.noEligibleWorkNote && (
                 <p className="text-sm text-foreground-secondary bg-surface-soft border border-line rounded-lg p-3">
                   {current.noEligibleWorkNote}
@@ -466,6 +552,35 @@ export default function WorkerTabs({
               )}
             </div>
 
+            {canBatch && (
+              <div
+                className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface-soft px-3 py-2 text-xs"
+                aria-label="Work item selection"
+              >
+                <span className="font-medium text-foreground tabular-nums">
+                  {selectedIds.length === 0
+                    ? "Select work items to update them together"
+                    : `${selectedIds.length} selected`}
+                  {selectedIds.length > 0 &&
+                    selectedIds.some((id) => !filteredWorkItems.some((w) => w.workItemId === id)) &&
+                    ` (${selectedIds.filter((id) => !filteredWorkItems.some((w) => w.workItemId === id)).length} hidden by search)`}
+                </span>
+                <span className="ml-auto flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={selectedIds.length === 0}
+                    onClick={() => setSelectedRaw([])}
+                  >
+                    Clear all
+                  </Button>
+                  <Button size="sm" disabled={selectedIds.length === 0 || pending !== null} onClick={moveSelectedToUpdate}>
+                    Move to Update Progress{selectedIds.length > 0 ? ` (${selectedIds.length})` : ""}
+                  </Button>
+                </span>
+              </div>
+            )}
+
             {!taskContextEnabled && workItems.length > 1 && (
               <p className="text-xs text-foreground-secondary bg-surface-soft border border-line rounded-lg px-3 py-2">
                 Work item selection is turned off for this project, so updates go to your current work
@@ -504,6 +619,7 @@ export default function WorkerTabs({
                         : undefined,
                   }))}
                   focusedWorkItemId={focusItemCode ? (workItems.find((w) => w.code === focusItemCode)?.workItemId ?? null) : null}
+                  selection={canBatch ? { selectedIds: selectedSet, onToggle: toggleSelected } : undefined}
                   // Actions: Tasks (the work item's tasks, with task-level
                   // updates where the Contractor/Subcontractor allowed them)
                   // plus the list's built-in View Updates. History is its own
@@ -560,6 +676,79 @@ export default function WorkerTabs({
           // not repeated here (the Dashboard tab shows current progress).
           // Full content width, same as the Dashboard tab.
           <div className="space-y-4">
+                {batch.length > 0 && (
+                  <div
+                    className="space-y-2 rounded-lg border border-brand-border bg-brand-soft/40 p-3 text-sm"
+                    aria-label="Batch update"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-foreground">
+                        {inBatch
+                          ? `Batch update: work item ${batchIndex + 1} of ${batch.length}`
+                          : `Batch update: ${batch.length} work item${batch.length === 1 ? "" : "s"}`}
+                      </span>
+                      <span className="text-xs text-foreground-secondary tabular-nums">
+                        {batch.filter((id) => batchDone.includes(id)).length} submitted
+                      </span>
+                      <span className="ml-auto flex flex-wrap gap-2">
+                        {inBatch && batchIndex > 0 && (
+                          <Button variant="secondary" size="sm" disabled={pending !== null} onClick={() => openWorkItem(batch[batchIndex - 1])}>
+                            Previous
+                          </Button>
+                        )}
+                        {inBatch && batchIndex < batch.length - 1 && (
+                          <Button size="sm" disabled={pending !== null} onClick={() => openWorkItem(batch[batchIndex + 1])}>
+                            Next work item
+                          </Button>
+                        )}
+                        {!inBatch && (
+                          <Button size="sm" disabled={pending !== null} onClick={() => openWorkItem(batch[0])}>
+                            Go to first in batch
+                          </Button>
+                        )}
+                        <Button variant="secondary" size="sm" onClick={clearBatch}>
+                          {inBatch && batchIndex === batch.length - 1 ? "Finish batch" : "Clear batch"}
+                        </Button>
+                      </span>
+                    </div>
+                    <ul className="flex flex-wrap gap-1.5" aria-label="Work items in this batch">
+                      {batch.map((id) => {
+                        const isCurrent = inBatch && id === activeWorkItemId;
+                        const done = batchDone.includes(id);
+                        return (
+                          <li
+                            key={id}
+                            aria-current={isCurrent ? "true" : undefined}
+                            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${
+                              isCurrent
+                                ? "border-brand bg-brand text-white"
+                                : "border-line bg-surface text-foreground-secondary"
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              disabled={pending !== null || isCurrent}
+                              onClick={() => openWorkItem(id)}
+                              className="inline-flex items-center gap-1"
+                              title={done ? "Submitted" : "Not submitted yet"}
+                            >
+                              {done && <Check className="h-3 w-3" strokeWidth={2.5} aria-label="submitted" />}
+                              {codeOf(id)}
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Remove ${codeOf(id)} from batch`}
+                              onClick={() => setBatchRaw((prev) => prev.filter((v) => v !== id))}
+                              className="rounded-full opacity-70 hover:opacity-100"
+                            >
+                              <X className="h-3 w-3" aria-hidden />
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )}
                 {taskContextEnabled && workItems.length > 0 && onCaptureStep && (
                   <WorkItemSelector
                     workItems={workItems}
@@ -567,6 +756,7 @@ export default function WorkerTabs({
                     isAutoSuggested={current.isAutoSuggested}
                     suggestionNote={current.suggestionNote}
                     activeProjectId={activeProjectId}
+                    activeDepartmentId={activeDepartmentId}
                     taskSelection={taskSel}
                     onTaskChange={(workItemId, taskId) => setTaskSel({ workItemId, taskId })}
                     pending={pending}
@@ -584,6 +774,9 @@ export default function WorkerTabs({
                   className={pending ? "opacity-50 pointer-events-none select-none" : undefined}
                 >
                   <DailyWorkUpdate
+                    // A fresh form for each batch work item (the form
+                    // otherwise keeps its step/text across work items).
+                    key={inBatch ? `batch-${current.activeWorkItem.id}` : "single"}
                     workerId={workerId}
                     workItemId={current.activeWorkItem.id}
                     workItemCode={current.activeWorkItem.code}
@@ -595,7 +788,7 @@ export default function WorkerTabs({
                     taskLabel={selectedTask?.label ?? null}
                     workItemExplicitlySelected={!current.isAutoSuggested}
                     approvedProgress={current.progressPercentage}
-                    onStepChange={setUpdateStep}
+                    onStepChange={handleStepChange}
                   />
                 </div>
           </div>

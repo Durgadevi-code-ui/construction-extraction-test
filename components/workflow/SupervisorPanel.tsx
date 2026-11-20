@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { ListChecks, CheckCircle2, Clock, AlertTriangle } from "lucide-react";
+import { ListChecks, CheckCircle2, Clock, AlertTriangle, Camera } from "lucide-react";
 import { formatMoney, formatPercent, formatQuantity, humanizeApprovalStatus } from "@/lib/format";
 import StatusFlow from "@/components/workflow/StatusFlow";
 import PlannedQuantityEditor from "@/components/workflow/PlannedQuantityEditor";
 import WorkItemTaskManager, { type ManagedTask } from "@/components/workflow/WorkItemTaskManager";
 import DashboardPanel from "@/components/workflow/DashboardPanel";
 import ReviewCardLayout from "@/components/workflow/ReviewCardLayout";
+import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
 import SortControl, { type SortDir, type SortState } from "@/components/workflow/SortControl";
 import { useCountUp } from "@/components/workflow/useCountUp";
 import { progressColorClass, progressSoftClass } from "@/lib/progressColor";
@@ -950,6 +951,9 @@ export default function SupervisorPanel({
     return () => clearTimeout(timer);
   }, [focusSubmissionId, focusWorkItemCode]);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Which review card's View Updates (the work item's photo evidence) is
+  // open — one at a time, same as History's per-row View Updates.
+  const [updatesFor, setUpdatesFor] = useState<string | null>(null);
   const [commentingId, setCommentingId] = useState<string | null>(null);
   const [progressDraft, setProgressDraft] = useState<number>(0);
   const [commentDraft, setCommentDraft] = useState<string>("");
@@ -1291,9 +1295,25 @@ export default function SupervisorPanel({
               Rollback
             </Button>
           )}
+          <Button
+            variant={updatesFor === validationId ? "primary" : "secondary"}
+            size="sm"
+            onClick={() => setUpdatesFor((prev) => (prev === validationId ? null : validationId))}
+            aria-expanded={updatesFor === validationId}
+          >
+            <Camera className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+            {updatesFor === validationId ? "Hide Updates" : "View Updates"}
+          </Button>
         </div>
-        {/* Live Updates for this work item live on Work Items (one entry
-            point per work item) — not repeated on the review card. */}
+        {/* View Updates: the existing photo feed (LiveUpdateFeed, scoped
+            server-side to this reviewer's project/department) for this
+            submission's work item — the same view as History's and Work
+            Items' View Updates. Read-only; no review action changes. */}
+        {updatesFor === validationId && (
+          <div className="rounded-lg bg-surface-soft p-3">
+            <LiveUpdateFeed mode="imageOnly" initialFilterCode={item.workItemCode} />
+          </div>
+        )}
       </Card>
       </div>
     );

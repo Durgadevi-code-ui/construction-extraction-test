@@ -2,7 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Camera } from "lucide-react";
 import ReviewCardLayout from "@/components/workflow/ReviewCardLayout";
+import LiveUpdateFeed from "@/components/workflow/LiveUpdateFeed";
 import StatusFlow from "@/components/workflow/StatusFlow";
 import { formatPercent } from "@/lib/format";
 import Card from "@/components/ui/Card";
@@ -118,6 +120,9 @@ export default function ForemanQueue({
   }, [focusSubmissionId, focusWorkItemCode]);
   const router = useRouter();
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Which review card's View Updates (the work item's photo evidence) is
+  // open — one at a time, same as History's per-row View Updates.
+  const [updatesFor, setUpdatesFor] = useState<string | null>(null);
   const [commentingId, setCommentingId] = useState<string | null>(null);
   const [progressDraft, setProgressDraft] = useState<number>(0);
   const [commentDraft, setCommentDraft] = useState<string>("");
@@ -423,9 +428,25 @@ export default function ForemanQueue({
               <Button size="sm" onClick={() => handleForward(item)} disabled={busyId === item.submissionId || bulkBusy}>
                 {busyId === item.submissionId ? "Forwarding…" : "Forward to Contractor"}
               </Button>
+              <Button
+                variant={updatesFor === item.submissionId ? "primary" : "secondary"}
+                size="sm"
+                onClick={() => setUpdatesFor((prev) => (prev === item.submissionId ? null : item.submissionId))}
+                aria-expanded={updatesFor === item.submissionId}
+              >
+                <Camera className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+                {updatesFor === item.submissionId ? "Hide Updates" : "View Updates"}
+              </Button>
             </div>
-            {/* Live Updates for this work item live on Work Items (one entry
-                point per work item) — not repeated on the review card. */}
+            {/* View Updates: the existing photo feed (LiveUpdateFeed, scoped
+                server-side to this reviewer's project/department) for this
+                submission's work item — the same view as History's and Work
+                Items' View Updates. Read-only; no review action changes. */}
+            {updatesFor === item.submissionId && (
+              <div className="rounded-lg bg-surface-soft p-3">
+                <LiveUpdateFeed mode="imageOnly" initialFilterCode={item.workItemCode} />
+              </div>
+            )}
           </Card>
           </div>
         );

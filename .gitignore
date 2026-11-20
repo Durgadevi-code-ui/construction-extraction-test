@@ -15,3 +15,5 @@ auth-check*.json
 
 # Local environment backups - never commit
 .env*.backup*
+.vercel
+.env*
